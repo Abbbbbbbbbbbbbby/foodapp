@@ -11,7 +11,7 @@ database_id = "REPLACE_AFTER_D1_CREATE"
 [[kv_namespaces]]
 binding = "SESSIONS"
 id = "REPLACE_AFTER_KV_CREATE"
-preview_id = "REPLACE_AFTER_KV_CREATE"
+preview_id = "REPLACE_AFTER_KV_PREVIEW_CREATE"
 
 [vars]
 ENVIRONMENT = "development"

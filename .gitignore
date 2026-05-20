@@ -3,3 +3,4 @@ node_modules/
 dist/
 migrations/migrated-data.sql
 .dev.vars
+.env
