@@ -1,0 +1,17 @@
+name = "foodapp-worker"
+main = "src/worker/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "foodapp"
+database_id = "REPLACE_AFTER_D1_CREATE"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "REPLACE_AFTER_KV_CREATE"
+preview_id = "REPLACE_AFTER_KV_CREATE"
+
+[vars]
+ENVIRONMENT = "development"
