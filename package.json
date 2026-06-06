@@ -7,6 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest run",
+    "test:scripts": "vitest run --config vitest.scripts.config.ts",
     "test:watch": "vitest",
     "migrate:local": "wrangler d1 migrations apply foodapp --local",
     "migrate:remote": "wrangler d1 migrations apply foodapp",

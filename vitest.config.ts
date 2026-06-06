@@ -11,7 +11,7 @@ export default defineWorkersConfig({
         },
       },
     },
-    include: ['tests/**/*.test.ts'],
-    exclude: ['scripts/**'],
+    setupFiles: ['./tests/worker/setup.ts'],
+    include: ['tests/worker/**/*.test.ts'],
   },
 });

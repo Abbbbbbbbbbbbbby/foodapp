@@ -6,12 +6,13 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "foodapp"
-database_id = "REPLACE_AFTER_D1_CREATE"
+database_id = "a8b50c88-0298-4700-b8fb-2a23cdb03d28"
+migrations_dir = "migrations"
 
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "REPLACE_AFTER_KV_CREATE"
-preview_id = "REPLACE_AFTER_KV_PREVIEW_CREATE"
+id = "c54be6c9268845068c3d554b1b14645b"
+preview_id = "d3f88eb19899468bbc53e4950ab55426"
 
 [vars]
 ENVIRONMENT = "development"

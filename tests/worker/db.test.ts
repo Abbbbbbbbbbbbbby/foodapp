@@ -1,0 +1,156 @@
+import { env } from 'cloudflare:test';
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  insertFamily,
+  getFamilyById,
+  searchFamilies,
+  getFamiliesForPickup,
+  insertVisit,
+  getVisitsByFamily,
+} from '../../src/worker/db';
+import type { Env } from '../../src/worker/schema';
+
+beforeEach(async () => {
+  const db = (env as unknown as Env).DB;
+  await db.exec(`
+    DELETE FROM visits; DELETE FROM proxies;
+    DELETE FROM families; DELETE FROM users; DELETE FROM otp_codes;
+  `);
+});
+
+describe('insertFamily + getFamilyById', () => {
+  it('inserts a family and retrieves it by id', async () => {
+    const db = (env as unknown as Env).DB;
+    const id = await insertFamily(db, {
+      name: 'Gonzalez Family',
+      phone: '4805551234',
+      address: null,
+      zip_code: '85001',
+      date_of_birth: null,
+      language: 'es',
+      ethnicity: null,
+      hispanic: 'yes',
+      ami_bracket: '<30%',
+      num_people: 4,
+      num_children_under_18: 2,
+      num_children_under_5: 1,
+      num_with_diabetes: null,
+      health_insurance: 'no',
+      snap_benefits: 'yes',
+      receives_texts: true,
+      want_text_updates: true,
+      id_confirmed: true,
+      bag_received: false,
+      first_visit_date: '2026-05-20',
+      created_by: null,
+    });
+    expect(id).toMatch(/^[0-9a-f]{32}$/);
+    const family = await getFamilyById(db, id);
+    expect(family).not.toBeNull();
+    expect(family!.name).toBe('Gonzalez Family');
+    expect(family!.phone).toBe('4805551234');
+    expect(family!.ami_bracket).toBe('<30%');
+  });
+});
+
+describe('searchFamilies', () => {
+  it('finds a family by exact phone', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, {
+      name: 'Garcia Family', phone: '6025550101',
+      address: null, zip_code: null, date_of_birth: null, language: null,
+      ethnicity: null, hispanic: null, ami_bracket: null, num_people: 3,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null,
+      want_text_updates: null, id_confirmed: null, bag_received: null,
+      first_visit_date: null, created_by: null,
+    });
+    const results = await searchFamilies(db, { phone: '6025550101' });
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe('Garcia Family');
+  });
+
+  it('finds a family by fuzzy name match', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, {
+      name: 'Gonzalez Family', phone: null,
+      address: null, zip_code: null, date_of_birth: null, language: null,
+      ethnicity: null, hispanic: null, ami_bracket: null, num_people: 2,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null,
+      want_text_updates: null, id_confirmed: null, bag_received: null,
+      first_visit_date: null, created_by: null,
+    });
+    const results = await searchFamilies(db, { name: 'Gonzales' });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].name).toBe('Gonzalez Family');
+  });
+
+  it('returns empty array when nothing matches', async () => {
+    const db = (env as unknown as Env).DB;
+    const results = await searchFamilies(db, { name: 'Zzyzx' });
+    expect(results).toHaveLength(0);
+  });
+});
+
+describe('getFamiliesForPickup', () => {
+  it('returns own family and proxy families for a phone number', async () => {
+    const db = (env as unknown as Env).DB;
+
+    const ownId = await insertFamily(db, {
+      name: 'Mendez Family', phone: '4805559999',
+      address: null, zip_code: null, date_of_birth: null, language: null,
+      ethnicity: null, hispanic: null, ami_bracket: null, num_people: 3,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null,
+      want_text_updates: null, id_confirmed: null, bag_received: null,
+      first_visit_date: null, created_by: null,
+    });
+
+    const proxyFamilyId = await insertFamily(db, {
+      name: 'Vargas Family', phone: '6025558888',
+      address: null, zip_code: null, date_of_birth: null, language: null,
+      ethnicity: null, hispanic: null, ami_bracket: null, num_people: 5,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null,
+      want_text_updates: null, id_confirmed: null, bag_received: null,
+      first_visit_date: null, created_by: null,
+    });
+
+    await db.prepare(
+      `INSERT INTO proxies (family_id, proxy_name, proxy_phone) VALUES (?, ?, ?)`
+    ).bind(proxyFamilyId, 'Rosa Mendez', '4805559999').run();
+
+    const { own, proxy } = await getFamiliesForPickup(db, '4805559999');
+    expect(own).not.toBeNull();
+    expect(own!.id).toBe(ownId);
+    expect(proxy).toHaveLength(1);
+    expect(proxy[0].id).toBe(proxyFamilyId);
+  });
+});
+
+describe('insertVisit + getVisitsByFamily', () => {
+  it('logs a visit and retrieves it', async () => {
+    const db = (env as unknown as Env).DB;
+    const familyId = await insertFamily(db, {
+      name: 'Test Family', phone: null,
+      address: null, zip_code: null, date_of_birth: null, language: null,
+      ethnicity: null, hispanic: null, ami_bracket: null, num_people: 2,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null,
+      want_text_updates: null, id_confirmed: null, bag_received: null,
+      first_visit_date: null, created_by: null,
+    });
+
+    await insertVisit(db, {
+      family_id: familyId,
+      visit_date: '2026-05-20',
+      picked_up_by_phone: null,
+      volunteer_id: null,
+    });
+
+    const visits = await getVisitsByFamily(db, familyId);
+    expect(visits).toHaveLength(1);
+    expect(visits[0].visit_date).toBe('2026-05-20');
+  });
+});
