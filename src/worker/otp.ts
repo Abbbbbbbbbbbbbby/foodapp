@@ -12,6 +12,10 @@ export async function createOtp(db: D1Database, phone: string): Promise<string> 
   const code = generateOtpCode();
   const id = crypto.randomUUID().replace(/-/g, '');
   const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000).toISOString();
+  // Invalidate any prior active codes so only the newest is usable
+  await db.prepare(
+    `UPDATE otp_codes SET used = 1 WHERE phone = ? AND used = 0`
+  ).bind(phone).run();
   await db.prepare(
     `INSERT INTO otp_codes (id, phone, code, expires_at) VALUES (?, ?, ?, ?)`
   ).bind(id, phone, code, expiresAt).run();
