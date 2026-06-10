@@ -71,7 +71,7 @@ export type NewFamily = Omit<Family, 'id' | 'created_at' | 'updated_at'>;
 export type NewVisit = Omit<Visit, 'id' | 'created_at'>;
 
 export type QuestionInputType =
-  | 'text' | 'phone' | 'number' | 'select'
+  | 'text' | 'phone' | 'number' | 'select' | 'multiselect'
   | 'yesno' | 'yesno_declined' | 'income';
 
 export interface QuestionSetting {
@@ -84,8 +84,8 @@ export interface QuestionSetting {
   input_type: QuestionInputType;
   options_en: string | null;
   options_es: string | null;
-  visible: boolean;
-  required: boolean;
+  visible: number;  // D1 INTEGER: 1 = shown, 0 = hidden
+  required: number; // D1 INTEGER: 1 = required, 0 = optional
   display_order: number;
   updated_at: string;
 }

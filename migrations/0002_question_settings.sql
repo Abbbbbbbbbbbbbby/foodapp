@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS question_settings (
   hint_en TEXT,
   hint_es TEXT,
   input_type TEXT NOT NULL CHECK (input_type IN (
-    'text', 'phone', 'number', 'select', 'yesno', 'yesno_declined', 'income'
+    'text', 'phone', 'number', 'select', 'multiselect', 'yesno', 'yesno_declined', 'income'
   )),
   options_en TEXT,
   options_es TEXT,
@@ -104,7 +104,7 @@ VALUES
    '¿Cuál es su raza o etnia?',
    'Select all that apply.',
    'Seleccione todas las que correspondan.',
-   'select',
+   'multiselect',
    '["American Indian or Alaska Native","Asian","Black or African American","Native Hawaiian or Other Pacific Islander","White","Multiracial","Other","Prefer not to say"]',
    '["Indígena americano o nativo de Alaska","Asiático","Negro o afroamericano","Nativo de Hawái u otro isleño del Pacífico","Blanco","Multirracial","Otro","Prefiero no decir"]',
    1, 0, 100),
@@ -136,7 +136,7 @@ VALUES
   ('qs14', 'ami_bracket',
    'What is your household income?',
    '¿Cuál es el ingreso de su hogar?',
-   'We use this to understand community needs. Your answer stays private.',
+   'We use this to understand community needs. Your answer stays private. (options_en/es = pay period choices for the income calculator widget)',
    'Usamos esto para entender las necesidades de la comunidad. Su respuesta es privada.',
    'income',
    '["weekly","biweekly","monthly","yearly"]',
@@ -166,7 +166,7 @@ VALUES
    NULL, NULL,
    'yesno',
    NULL, NULL,
-   1, 0, 170),
+   1, 1, 170),
 
   ('qs18', 'bag_received',
    'Bag received',
@@ -174,4 +174,17 @@ VALUES
    NULL, NULL,
    'yesno',
    NULL, NULL,
-   1, 0, 180);
+   1, 1, 180);
+
+INSERT OR IGNORE INTO question_settings
+  (id, field_name, label_en, label_es, hint_en, hint_es,
+   input_type, options_en, options_es, visible, required, display_order)
+VALUES
+  ('qs19', 'date_of_birth',
+   'Date of birth',
+   'Fecha de nacimiento',
+   'Format: MM/DD/YYYY',
+   'Formato: MM/DD/AAAA',
+   'text',
+   NULL, NULL,
+   0, 0, 35);
