@@ -2,19 +2,21 @@ import { env } from 'cloudflare:test';
 import { beforeAll } from 'vitest';
 import type { Env } from '../../src/worker/schema';
 
-// Vite ?raw import inlines the file content as a string at bundle time
-// @ts-expect-error - no TS declarations for ?raw imports
-import schema from '../../migrations/0001_initial.sql?raw';
+// @ts-expect-error - Vite ?raw import
+import schema1 from '../../migrations/0001_initial.sql?raw';
+// @ts-expect-error - Vite ?raw import
+import schema2 from '../../migrations/0002_question_settings.sql?raw';
 
-beforeAll(async () => {
-  const db = (env as unknown as Env).DB;
-  // D1 exec() in miniflare doesn't handle multi-statement SQL —
-  // split by semicolon and run each statement individually
-  const statements = (schema as string)
+function applySchema(sql: string): string[] {
+  return (sql as string)
     .split(';')
     .map(s => s.replace(/--[^\n]*/g, '').trim())
     .filter(s => s.length > 0);
-  for (const stmt of statements) {
+}
+
+beforeAll(async () => {
+  const db = (env as unknown as Env).DB;
+  for (const stmt of [...applySchema(schema1), ...applySchema(schema2)]) {
     await db.prepare(stmt).run();
   }
 });
