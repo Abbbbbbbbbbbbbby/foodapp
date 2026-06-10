@@ -69,3 +69,23 @@ export interface Env {
 
 export type NewFamily = Omit<Family, 'id' | 'created_at' | 'updated_at'>;
 export type NewVisit = Omit<Visit, 'id' | 'created_at'>;
+
+export type QuestionInputType =
+  | 'text' | 'phone' | 'number' | 'select'
+  | 'yesno' | 'yesno_declined' | 'income';
+
+export interface QuestionSetting {
+  id: string;
+  field_name: string;
+  label_en: string;
+  label_es: string;
+  hint_en: string | null;
+  hint_es: string | null;
+  input_type: QuestionInputType;
+  options_en: string | null;
+  options_es: string | null;
+  visible: boolean;
+  required: boolean;
+  display_order: number;
+  updated_at: string;
+}
