@@ -30,7 +30,8 @@ function toBase64url(buf: ArrayBuffer | Uint8Array): string {
 }
 
 function fromBase64url(str: string): string {
-  return atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+  const s = str.replace(/-/g, '+').replace(/_/g, '/');
+  return atob(s.padEnd(s.length + (4 - (s.length % 4)) % 4, '='));
 }
 
 export async function signJwt(
@@ -85,7 +86,11 @@ export async function getSession(
 ): Promise<SessionPayload | null> {
   const raw = await kv.get(`session:${sessionId}`);
   if (!raw) return null;
-  return JSON.parse(raw) as SessionPayload;
+  try {
+    return JSON.parse(raw) as SessionPayload;
+  } catch {
+    return null;
+  }
 }
 
 export async function destroySession(
