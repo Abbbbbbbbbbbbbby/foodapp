@@ -24,6 +24,7 @@ export async function getAuthContext(
 }
 
 export function requireRole(...roles: UserRole[]) {
+  if (roles.length === 0) throw new Error('requireRole: at least one role is required');
   return async (
     request: Request,
     env: Env

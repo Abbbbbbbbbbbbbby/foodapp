@@ -97,4 +97,8 @@ describe('requireRole', () => {
     expect(result instanceof Response).toBe(false);
     expect((result as { role: string }).role).toBe('staff');
   });
+
+  it('throws when called with no roles', () => {
+    expect(() => requireRole()).toThrow('requireRole: at least one role is required');
+  });
 });
