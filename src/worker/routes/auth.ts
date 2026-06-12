@@ -63,9 +63,16 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'Phone already registered. Please log in.' }, { status: 409 });
   }
   const id = crypto.randomUUID().replace(/-/g, '');
-  await env.DB.prepare(
-    `INSERT INTO users (id, name, phone, role, active, self_registered) VALUES (?, ?, ?, 'volunteer', 1, 1)`
-  ).bind(id, name, phone).run();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO users (id, name, phone, role, active, self_registered) VALUES (?, ?, ?, 'volunteer', 1, 1)`
+    ).bind(id, name, phone).run();
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
+      return Response.json({ error: 'Phone already registered. Please log in.' }, { status: 409 });
+    }
+    throw err;
+  }
   const code = await createOtp(env.DB, phone);
   if (env.ENVIRONMENT !== 'test') {
     await sendOtpSms(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN, env.TWILIO_PHONE_NUMBER, phone, code);
