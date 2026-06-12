@@ -1,4 +1,5 @@
 import type { Env } from './schema';
+import { handleAuthRoutes } from './routes/auth';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -12,6 +13,9 @@ export default {
       if (url.pathname === '/api/health' && request.method === 'GET') {
         return cors(Response.json({ ok: true, env: env.ENVIRONMENT }));
       }
+
+      const authResponse = await handleAuthRoutes(request, env, url.pathname);
+      if (authResponse) return cors(authResponse);
 
       return cors(Response.json({ error: 'Not found' }, { status: 404 }));
     } catch (err) {
