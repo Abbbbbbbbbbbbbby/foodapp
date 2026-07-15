@@ -1,4 +1,23 @@
-// Stub — real implementation in Task 4
+import { useNavigate } from 'react-router-dom';
+import { getUser } from '../store/auth';
+
 export default function HomePage() {
-  return <div className="home-page"><h1>Home</h1></div>;
+  const navigate = useNavigate();
+  const user = getUser()!;
+
+  return (
+    <div className="home-page">
+      <h1>Welcome, {user.name}</h1>
+      <div className="home-buttons">
+        <button className="btn-primary btn-large" onClick={() => navigate('/enter')}>
+          Enter Data / Ingresar datos
+        </button>
+        {(user.role === 'staff' || user.role === 'admin') && (
+          <button className="btn-secondary btn-large" disabled>
+            View Records / Ver registros (coming soon)
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
