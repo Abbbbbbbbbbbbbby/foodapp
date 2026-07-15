@@ -9,14 +9,26 @@
     "test": "vitest run",
     "test:scripts": "vitest run --config vitest.scripts.config.ts",
     "test:watch": "vitest",
+    "test:pwa": "vitest run --config vitest.pwa.config.ts",
     "migrate:local": "wrangler d1 migrations apply foodapp --local",
     "migrate:remote": "wrangler d1 migrations apply foodapp",
-    "migrate:bubble": "node scripts/migrate-bubble.js"
+    "migrate:bubble": "node scripts/migrate-bubble.js",
+    "pwa:dev": "vite --config src/pwa/vite.config.ts",
+    "pwa:build": "vite build --config src/pwa/vite.config.ts"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.5.0",
     "@cloudflare/workers-types": "^4.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
     "typescript": "^5.4.0",
+    "vite": "^5.4.0",
     "vitest": "^2.1.0",
     "wrangler": "^3.100.0"
   }

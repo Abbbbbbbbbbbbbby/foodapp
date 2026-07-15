@@ -1,0 +1,9 @@
+{
+  "name": "Food Line Check-In",
+  "short_name": "FoodLine",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "icons": []
+}
