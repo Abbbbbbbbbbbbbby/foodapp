@@ -102,7 +102,12 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
 async function handleUpdate(request: Request, env: Env, id: string): Promise<Response> {
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  const body = await request.json<Partial<NewFamily>>();
+  let body: Partial<NewFamily>;
+  try {
+    body = await request.json() as Partial<NewFamily>;
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   await updateFamily(env.DB, id, body);
   return Response.json({ ok: true });
 }

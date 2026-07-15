@@ -56,15 +56,22 @@ export async function getFamilyById(db: D1Database, id: string): Promise<Family 
   return db.prepare(`SELECT * FROM families WHERE id = ?`).bind(id).first<Family>();
 }
 
+const UPDATABLE_FAMILY_COLUMNS = new Set([
+  'name', 'phone', 'address', 'zip_code', 'date_of_birth', 'language', 'ethnicity',
+  'hispanic', 'ami_bracket', 'num_people', 'num_children_under_18', 'num_children_under_5',
+  'num_with_diabetes', 'health_insurance', 'snap_benefits', 'receives_texts',
+  'want_text_updates', 'id_confirmed', 'bag_received', 'first_visit_date',
+]);
+
 export async function updateFamily(
   db: D1Database,
   id: string,
   data: Partial<NewFamily>
 ): Promise<void> {
-  const fields = Object.keys(data)
-    .filter(k => k !== 'created_by')
-    .map(k => `${k} = ?`).join(', ');
-  const values = Object.values(data);
+  const entries = Object.entries(data).filter(([k]) => UPDATABLE_FAMILY_COLUMNS.has(k));
+  if (entries.length === 0) return;
+  const fields = entries.map(([k]) => `${k} = ?`).join(', ');
+  const values = entries.map(([, v]) => v);
   const now = new Date().toISOString();
   await db.prepare(
     `UPDATE families SET ${fields}, updated_at = ? WHERE id = ?`
