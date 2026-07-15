@@ -15,14 +15,11 @@ const YES_NO_DECLINED = [
 ];
 
 interface TextsStepProps {
-  receivesTexts: boolean | null;
-  onReceivesChange: (v: boolean | null) => void;
-  onWantUpdatesChange: (v: boolean | null) => void;
-  onComplete: () => void;
+  onComplete: (receivesTexts: boolean | null, wantUpdates: boolean | null) => void;
   onBack: () => void;
 }
 
-function TextsStep({ onReceivesChange, onWantUpdatesChange, onComplete, onBack }: TextsStepProps) {
+function TextsStep({ onComplete, onBack }: TextsStepProps) {
   const [subStep, setSubStep] = useState(0);
 
   if (subStep === 0) {
@@ -31,13 +28,13 @@ function TextsStep({ onReceivesChange, onWantUpdatesChange, onComplete, onBack }
         <p className="question-en">Do you currently receive text messages?</p>
         <p className="question-es">¿Actualmente recibe mensajes de texto?</p>
         <div className="option-list">
-          <button className="btn-option" onClick={() => { onReceivesChange(true); setSubStep(1); }}>
+          <button className="btn-option" onClick={() => setSubStep(1)}>
             Yes / Sí
           </button>
-          <button className="btn-option" onClick={() => { onReceivesChange(false); onWantUpdatesChange(null); onComplete(); }}>
+          <button className="btn-option" onClick={() => onComplete(false, null)}>
             No / No
           </button>
-          <button className="btn-option" onClick={() => { onReceivesChange(null); onWantUpdatesChange(null); onComplete(); }}>
+          <button className="btn-option" onClick={() => onComplete(null, null)}>
             Prefer not to say / Prefiero no responder
           </button>
         </div>
@@ -55,10 +52,10 @@ function TextsStep({ onReceivesChange, onWantUpdatesChange, onComplete, onBack }
         ¿Le gustaría recibir actualizaciones por mensaje de texto sobre eventos de distribución de alimentos?
       </p>
       <div className="option-list">
-        <button className="btn-option" onClick={() => { onWantUpdatesChange(true); onComplete(); }}>
+        <button className="btn-option" onClick={() => onComplete(true, true)}>
           Yes / Sí
         </button>
-        <button className="btn-option" onClick={() => { onWantUpdatesChange(false); onComplete(); }}>
+        <button className="btn-option" onClick={() => onComplete(true, false)}>
           No / No
         </button>
       </div>
@@ -224,10 +221,9 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 10 && (
         <TextsStep
-          receivesTexts={data.receives_texts ?? null}
-          onReceivesChange={v => set('receives_texts', v)}
-          onWantUpdatesChange={v => set('want_text_updates', v)}
-          onComplete={() => { if (!submitting) finish(data); }}
+          onComplete={(rt, wu) => {
+            if (!submitting) finish({ ...data, receives_texts: rt, want_text_updates: wu });
+          }}
           onBack={goBack}
         />
       )}
