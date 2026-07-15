@@ -1,5 +1,8 @@
 import type { Env } from './schema';
 import { handleAuthRoutes } from './routes/auth';
+import { handleFamilyRoutes } from './routes/families';
+import { handleVisitRoutes } from './routes/visits';
+import { handleQuestionRoutes } from './routes/questions';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -16,6 +19,15 @@ export default {
 
       const authResponse = await handleAuthRoutes(request, env, url.pathname);
       if (authResponse) return cors(authResponse);
+
+      const familyResponse = await handleFamilyRoutes(request, env, url.pathname);
+      if (familyResponse) return cors(familyResponse);
+
+      const visitResponse = await handleVisitRoutes(request, env, url.pathname);
+      if (visitResponse) return cors(visitResponse);
+
+      const questionResponse = await handleQuestionRoutes(request, env, url.pathname);
+      if (questionResponse) return cors(questionResponse);
 
       return cors(Response.json({ error: 'Not found' }, { status: 404 }));
     } catch (err) {
