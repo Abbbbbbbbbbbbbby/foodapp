@@ -1,0 +1,88 @@
+<h2>Which architecture fits best?</h2>
+<p class="subtitle">Three approaches for migrating the food line app to Cloudflare. All are mobile-first PWAs with offline support.</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#1a1a2e;padding:16px;font-family:monospace;font-size:12px;color:#a0c4ff;min-height:120px;display:flex;flex-direction:column;gap:6px;justify-content:center">
+      <div style="color:#7ee8a2;font-weight:bold">📱 PWA (Service Worker)</div>
+      <div style="color:#fff">⬇ ⬆ offline queue (IndexedDB)</div>
+      <div style="color:#ffd166">⚡ Cloudflare Workers (API)</div>
+      <div style="color:#ffd166">🗄  Cloudflare D1 (SQLite)</div>
+      <div style="color:#ccc;font-size:11px">Pages CDN → global edge delivery</div>
+    </div>
+    <div class="card-body">
+      <h3>A — Pages + Workers + D1 <span style="font-size:12px;background:#7ee8a2;color:#000;border-radius:4px;padding:2px 7px;margin-left:6px">Recommended</span></h3>
+      <p>A React PWA deployed to Cloudflare Pages. Service Worker caches the app shell and queues form submissions in IndexedDB when offline — syncs automatically when signal returns. Workers handle the API; D1 (SQLite at the edge) stores all family data. SMS OTP auth lives in a Worker.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Simplest stack, fewest moving parts</li>
+          <li>Offline-first built in via service worker</li>
+          <li>D1 is SQL — easy to migrate Bubble.io data</li>
+          <li>Pages CDN = fast load on any device</li>
+          <li>Low cost, scales to zero</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>D1 is still maturing (no row-level subscriptions)</li>
+          <li>Conflict resolution if two devices submit same family</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#1a1a2e;padding:16px;font-family:monospace;font-size:12px;color:#a0c4ff;min-height:120px;display:flex;flex-direction:column;gap:6px;justify-content:center">
+      <div style="color:#7ee8a2;font-weight:bold">📱 PWA (Service Worker)</div>
+      <div style="color:#fff">⬇ ⬆ offline queue (IndexedDB)</div>
+      <div style="color:#ffd166">⚡ Workers + 🔷 Durable Objects</div>
+      <div style="color:#ffd166">🗄  D1 + ⚡ KV (session cache)</div>
+      <div style="color:#ccc;font-size:11px">Stateful edge compute per session</div>
+    </div>
+    <div class="card-body">
+      <h3>B — Pages + Workers + Durable Objects + D1</h3>
+      <p>Same PWA frontend, but uses Durable Objects to model each car check-in as a stateful edge session — strong consistency on concurrent updates, and the multi-family-per-car flow maps naturally. KV handles fast phone-number lookups.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Strong consistency per check-in session</li>
+          <li>Car-flow state machine is clean</li>
+          <li>KV = instant phone lookup</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Significantly more complex to build and debug</li>
+          <li>Overkill — stations work independently</li>
+          <li>Higher cost at scale</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#1a1a2e;padding:16px;font-family:monospace;font-size:12px;color:#a0c4ff;min-height:120px;display:flex;flex-direction:column;gap:6px;justify-content:center">
+      <div style="color:#7ee8a2;font-weight:bold">📱 PWA (heavy client)</div>
+      <div style="color:#fff">🗄  SQLite in-browser (wa-sqlite)</div>
+      <div style="color:#ffd166">⚡ Workers (sync endpoint only)</div>
+      <div style="color:#ffd166">🗄  D1 (authoritative store)</div>
+      <div style="color:#ccc;font-size:11px">Full database lives on device</div>
+    </div>
+    <div class="card-body">
+      <h3>C — Local-First (wa-sqlite + Workers sync)</h3>
+      <p>A true local-first app: the entire family database is replicated to each device using wa-sqlite (SQLite compiled to WebAssembly). The app works completely offline; a Worker syncs changes to D1 when connectivity returns. Zero latency for all reads and writes.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>True zero-latency — no network for any operation</li>
+          <li>Works with zero signal indefinitely</li>
+          <li>Best possible UX for slow devices</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Syncing thousands of family records to each device</li>
+          <li>Conflict resolution is hard to get right</li>
+          <li>Much higher build complexity</li>
+          <li>wa-sqlite is newer, less battle-tested</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:24px">My recommendation is <strong>A</strong> — it directly fits your constraints (independent stations, mixed connectivity, full SQL migration), without the complexity of B or C. Click your preferred option, or let me know in the terminal.</p>

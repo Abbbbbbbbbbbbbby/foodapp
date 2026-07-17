@@ -1,0 +1,209 @@
+<h2>Design Spec — Food Line Check-In App</h2>
+<p class="subtitle">Review the full spec below. Reply in the terminal with any changes you'd like before we start the implementation plan.</p>
+
+<div style="max-width:800px;margin:0 auto;font-family:sans-serif;line-height:1.7">
+
+  <!-- Context -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #7ee8a2">
+    <h3 style="color:#7ee8a2;margin:0 0 8px">Context</h3>
+    <p style="color:#c0c0d0;margin:0">Replacing the Creighton Community Foundation's Bubble.io food distribution check-in app with a mobile-first PWA on Cloudflare. Same data, same logic — dramatically better UX for older volunteers, bilingual interactions, and spotty outdoor network conditions.</p>
+  </div>
+
+  <!-- Architecture -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #ffd166">
+    <h3 style="color:#ffd166;margin:0 0 12px">Architecture</h3>
+    <div style="background:#0f0f1a;border-radius:8px;padding:14px;font-family:monospace;font-size:13px;color:#a0c4ff;margin-bottom:12px;line-height:1.8">
+      Browser (PWA)<br>
+      &nbsp;&nbsp;├─ Service Worker (offline queue + app shell)<br>
+      &nbsp;&nbsp;└─ IndexedDB (pending submissions when offline)<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│ syncs when back online<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+      Cloudflare Workers (API)<br>
+      &nbsp;&nbsp;├─ D1 / SQLite (all family + visit data)<br>
+      &nbsp;&nbsp;├─ KV (session tokens)<br>
+      &nbsp;&nbsp;└─ Twilio (SMS OTP login)<br>
+      Cloudflare Pages (CDN — serves PWA globally)
+    </div>
+    <ul style="color:#c0c0d0;margin:0;padding-left:20px">
+      <li>Works offline — submissions queue locally, sync when signal returns</li>
+      <li>No data lost if volunteer loses signal mid-event</li>
+      <li>D1 SQL model maps directly to Bubble.io export — migration is a SQL import</li>
+      <li>Scales to zero between events (Workers + D1 bill per request)</li>
+    </ul>
+  </div>
+
+  <!-- Auth -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #a78bfa">
+    <h3 style="color:#a78bfa;margin:0 0 12px">Authentication: SMS OTP</h3>
+    <ol style="color:#c0c0d0;margin:0;padding-left:20px">
+      <li>Volunteer enters their phone number (no autofill)</li>
+      <li>Twilio sends a 6-digit code by text</li>
+      <li>Volunteer enters code → JWT issued, valid 12 hours</li>
+      <li>JWT cached in localStorage → app works offline once logged in</li>
+      <li>Admins create volunteer accounts in advance — volunteers cannot self-register</li>
+    </ol>
+  </div>
+
+  <!-- Pages -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #6a9fd8">
+    <h3 style="color:#6a9fd8;margin:0 0 12px">App Pages</h3>
+    <table style="width:100%;border-collapse:collapse;color:#c0c0d0;font-size:13px">
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">/login</td><td style="padding:6px 10px">All users — phone number + OTP</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">/</td><td style="padding:6px 10px">Home — two big buttons: Enter Data / View Data</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">/enter</td><td style="padding:6px 10px">Core check-in flow (volunteers)</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">/enter/proxy-forms</td><td style="padding:6px 10px">Add proxy authorization for a family</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">/view</td><td style="padding:6px 10px">Search family records (volunteers + admins)</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">/admin/accounts</td><td style="padding:6px 10px">Manage volunteer accounts (admin only)</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">/admin/export</td><td style="padding:6px 10px">CSV data export (admin only)</td></tr>
+      <tr><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">/account</td><td style="padding:6px 10px">Account settings (all users)</td></tr>
+    </table>
+  </div>
+
+  <!-- Check-in flow -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #ff6b6b">
+    <h3 style="color:#ff6b6b;margin:0 0 12px">Core Check-In Flow (/enter)</h3>
+
+    <div style="margin-bottom:14px">
+      <div style="color:#ffd166;font-weight:600;margin-bottom:6px">Step 0 — New or Returning?</div>
+      <p style="color:#c0c0d0;margin:0 0 4px;font-size:13px">Two large buttons. Read aloud: <em>"Are you returning, or is this your first time?" / "¿Está regresando, o es su primera vez?"</em></p>
+    </div>
+
+    <div style="background:#0f0f1a;border-radius:8px;padding:14px;margin-bottom:12px">
+      <div style="color:#7ee8a2;font-weight:600;margin-bottom:8px">RETURNING PATH (~15 seconds)</div>
+      <ol style="color:#c0c0d0;margin:0;padding-left:18px;font-size:13px;line-height:1.9">
+        <li><strong>Lookup:</strong> Phone (blank, no autofill) and/or name (fuzzy search, tolerates misspelling)</li>
+        <li><strong>Results:</strong> Ranked matches — name, partial phone, family size, last visit date. "Not found → Register as new" at bottom</li>
+        <li><strong>Select families:</strong> Own family shown first, then all proxy families. <em>None pre-checked</em> — volunteer taps each family being picked up today. Running count shown. Confirm disabled until ≥1 selected</li>
+        <li><strong>Log visit per family:</strong> Name + size + last visit shown. "No change" (marks visit) or "Update info" (mini-edit). After last family → Done</li>
+      </ol>
+    </div>
+
+    <div style="background:#0f0f1a;border-radius:8px;padding:14px">
+      <div style="color:#ffd166;font-weight:600;margin-bottom:8px">NEW FAMILY PATH — 11-step wizard (~2 min)</div>
+      <p style="color:#888;font-size:12px;margin:0 0 10px">Every step shows: English sentence (green, read aloud) + Spanish sentence (purple, read aloud). Large tap targets. Back/Skip always visible.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888;width:30px">1</td>
+          <td style="padding:5px 8px;color:#fff">"What is your full name?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Text input</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">2</td>
+          <td style="padding:5px 8px;color:#fff">"What is your phone number?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Phone + "No phone / Sin teléfono"</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">3</td>
+          <td style="padding:5px 8px;color:#fff">"What is your zip code?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Numeric input</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">4</td>
+          <td style="padding:5px 8px;color:#fff">"What language do you prefer?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">English / Español / Other</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">5</td>
+          <td style="padding:5px 8px;color:#fff">"How many people live in your household?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Tap: 1 / 2 / 3 / 4 / 5 / 6+</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">6</td>
+          <td style="padding:5px 8px;color:#fff">"How many children under 18?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Tap: 0–6+</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">7</td>
+          <td style="padding:5px 8px;color:#fff">"How many children under 5?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Tap: 0–5+</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">8</td>
+          <td style="padding:5px 8px;color:#fff">"What is your approximate monthly household income?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Tap: &lt;$500 / $500–$1k / $1k–$2k / $2k+ / Can't answer</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">9</td>
+          <td style="padding:5px 8px;color:#fff">"Does your family currently receive SNAP benefits?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Yes / No / Can't answer</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a">
+          <td style="padding:5px 8px;color:#888">10</td>
+          <td style="padding:5px 8px;color:#fff">"Does anyone in your family have health insurance?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Yes / No / Can't answer</td>
+        </tr>
+        <tr>
+          <td style="padding:5px 8px;color:#888">11</td>
+          <td style="padding:5px 8px;color:#fff">"May we send you text message updates?"</td>
+          <td style="padding:5px 8px;color:#a0a0c0">Yes / No</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Fuzzy search -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #7ee8a2">
+    <h3 style="color:#7ee8a2;margin:0 0 10px">Fuzzy Name Search</h3>
+    <ul style="color:#c0c0d0;margin:0;padding-left:20px;font-size:13px">
+      <li><strong>Phone:</strong> exact match on normalized digits</li>
+      <li><strong>Name:</strong> Levenshtein distance ≤2 on first token, ≤3 on full name — tolerates common misspellings</li>
+      <li><strong>Combined:</strong> union of results, ranked (exact phone first, then name distance)</li>
+      <li><strong>Proxy expansion:</strong> also returns all families where the person's phone is listed as an authorized proxy</li>
+    </ul>
+  </div>
+
+  <!-- Offline -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #ffd166">
+    <h3 style="color:#ffd166;margin:0 0 10px">Offline Strategy</h3>
+    <ul style="color:#c0c0d0;margin:0;padding-left:20px;font-size:13px">
+      <li>App shell cached on first load — launches instantly with no signal</li>
+      <li>Family lookup requires network — offline banner shown if unavailable</li>
+      <li>Submissions (new families + visits) queue in IndexedDB, sync when signal returns</li>
+      <li>Valid JWT in localStorage = app keeps working offline once logged in</li>
+      <li>Duplicate dedup on sync: phone as soft key, later record wins, flagged for admin review</li>
+    </ul>
+  </div>
+
+  <!-- Bilingual -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #a78bfa">
+    <h3 style="color:#a78bfa;margin:0 0 10px">Bilingual Design Rules</h3>
+    <ul style="color:#c0c0d0;margin:0;padding-left:20px;font-size:13px">
+      <li>Every question = full readable sentence in English (green) <em>and</em> Spanish (purple) — same size, volunteer reads one aloud to client</li>
+      <li>All button labels bilingual: "Yes / Sí", "Search / Buscar", "Confirm / Confirmar"</li>
+      <li>Language preference saved per family, pre-shown on returning visits</li>
+      <li>Admin screens (export, accounts) are English-only</li>
+    </ul>
+  </div>
+
+  <!-- Accessibility -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #ff6b6b">
+    <h3 style="color:#ff6b6b;margin:0 0 10px">Accessibility & Usability</h3>
+    <ul style="color:#c0c0d0;margin:0;padding-left:20px;font-size:13px">
+      <li>Minimum touch target: 48×48px on all interactive elements</li>
+      <li>Minimum font: 16px body, 20px+ for question text</li>
+      <li>High contrast dark theme — readable in sunlight</li>
+      <li>No time-outs on data entry screens</li>
+      <li>Destructive actions require a second tap to confirm</li>
+      <li>"Can't answer" on every sensitive field — never blocks submission</li>
+    </ul>
+  </div>
+
+  <!-- Migration -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px;border-left:4px solid #6a9fd8">
+    <h3 style="color:#6a9fd8;margin:0 0 10px">Data Migration</h3>
+    <p style="color:#c0c0d0;font-size:13px;margin:0 0 8px">Source: <code style="background:#0f0f1a;padding:2px 6px;border-radius:4px">food-data.bubble</code> (682KB JSON) already in ~/Downloads.</p>
+    <ol style="color:#c0c0d0;margin:0;padding-left:20px;font-size:13px">
+      <li>Bubble <code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">family_data</code> → D1 <code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">families</code> table</li>
+      <li><code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">visit_dates_list_date</code> per family → one row per date in <code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">visits</code></li>
+      <li><code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">proxies_list_text</code> + phone numbers → <code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">proxies</code> table</li>
+      <li>Bubble <code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">user</code> type → D1 <code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">users</code> table</li>
+      <li><code style="background:#0f0f1a;padding:2px 4px;border-radius:3px">appdata20260213.csv</code> as cross-check on names + phones</li>
+    </ol>
+    <p style="color:#888;font-size:12px;margin:8px 0 0">One-time Node.js migration script reads Bubble JSON → emits SQL INSERTs for D1.</p>
+  </div>
+
+  <div style="background:#1a2a1a;border-radius:12px;padding:16px;border-left:3px solid #7ee8a2;margin-bottom:8px">
+    <p style="margin:0;color:#a0c4a0;font-size:13px">This spec is saved at <code style="background:#0f0f1a;padding:2px 6px;border-radius:4px">docs/superpowers/specs/2026-05-20-food-line-app-design.md</code>. Reply in the terminal with any changes — or approve and we'll move to the implementation plan.</p>
+  </div>
+
+</div>

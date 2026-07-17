@@ -1,0 +1,68 @@
+<h2>Updated Spec — All Changes Applied</h2>
+<p class="subtitle">11 changes from your list are now in the spec. Two open questions remain at the bottom — answer those in the terminal and we can finalize.</p>
+
+<div style="max-width:800px;margin:0 auto;font-family:sans-serif;line-height:1.7">
+
+  <!-- Change log -->
+  <div style="background:#1a2a1a;border-radius:12px;padding:18px;margin-bottom:16px;border-left:4px solid #7ee8a2">
+    <h3 style="color:#7ee8a2;margin:0 0 12px">What changed</h3>
+    <ul style="color:#c0c0d0;margin:0;padding-left:18px;font-size:13px;line-height:2">
+      <li><strong style="color:#fff">Self-registration:</strong> Volunteers can create their own account with name + phone. Name is required for identification. Admins can still pre-create accounts for staff/admin roles.</li>
+      <li><strong style="color:#fff">Proxy form deferred:</strong> /enter/proxy-forms page removed from scope. Proxy data model kept; proxy relationships still surface at check-in. UI for adding new authorizations is TBD.</li>
+      <li><strong style="color:#fff">Data summary page:</strong> New /data/summary page (staff + admin) with date range selector, totals, AMI bracket chart, ethnicity/language/SNAP/insurance/zip breakdowns, visits over time.</li>
+      <li><strong style="color:#fff">Step 0 question:</strong> Now reads "Have we saved your data before?" / "¿Hemos guardado sus datos antes?" — appropriate for a system migration context.</li>
+      <li><strong style="color:#fff">No "read aloud" labels:</strong> Both EN and ES sentences shown at equal size with no directional markers. Volunteer reads whichever fits.</li>
+      <li><strong style="color:#fff">Duplicate detection:</strong> If name or phone entered during new registration matches an existing record, app surfaces a confirmation card before continuing.</li>
+      <li><strong style="color:#fff">Proxy captured first:</strong> Before the 11-step wizard, new families are asked who usually picks up for them. Answer saved to proxies table. "They pick up for themselves" skips it.</li>
+      <li><strong style="color:#fff">Decline phrasing:</strong> "Can't answer" replaced throughout with "Prefer not to say / Prefiero no responder."</li>
+      <li><strong style="color:#fff">Household size 7+:</strong> Buttons go 1–7; tapping 7+ shows a numeric input for exact count.</li>
+      <li><strong style="color:#fff">Income question overhauled:</strong> Asks pay period (weekly / every 2 weeks / monthly / yearly / prefer not to say), then amount. App silently calculates AMI bracket using Maricopa County thresholds — only bracket stored, raw income discarded.</li>
+      <li><strong style="color:#fff">Text messages split into two steps:</strong> 11a asks if they currently receive texts; 11b (only shown if yes) asks if they want food distribution updates. Yes to 11b triggers Twilio SMS enrollment.</li>
+    </ul>
+  </div>
+
+  <!-- Open questions -->
+  <div style="background:#2a1a1a;border-radius:12px;padding:18px;margin-bottom:16px;border-left:4px solid #ff6b6b">
+    <h3 style="color:#ff6b6b;margin:0 0 10px">Two open questions before we finalize</h3>
+    <ol style="color:#c0c0d0;margin:0;padding-left:18px;font-size:13px;line-height:2">
+      <li><strong style="color:#fff">1-person household AMI:</strong> You provided Maricopa County AMI for 2–7+ person families. What is it for 1-person households? Needed to calculate income brackets for individuals who come to the food line alone.</li>
+      <li><strong style="color:#fff">"Staff" role:</strong> The summary page is listed as staff + admin only. Is "staff" a third role between volunteer and admin (org employees who can see analytics but can't manage accounts), or does it just mean admin here?</li>
+    </ol>
+  </div>
+
+  <!-- AMI bracket table -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:16px;border-left:4px solid #ffd166">
+    <h3 style="color:#ffd166;margin:0 0 12px">Income → AMI Bracket Logic (step 8)</h3>
+    <p style="color:#c0c0d0;font-size:13px;margin:0 0 10px">Pay period entered → annualized → divided by AMI for family size → bracket assigned. Raw income never stored.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px">
+      <tr style="background:#0f0f1a">
+        <td style="padding:6px 10px;color:#888">Bracket stored</td>
+        <td style="padding:6px 10px;color:#888">Condition</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#ff6b6b;font-family:monospace">&lt;30%</td><td style="padding:6px 10px;color:#c0c0d0">Annual income &lt; 30% of AMI for family size</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#ffd166;font-family:monospace">30-50%</td><td style="padding:6px 10px;color:#c0c0d0">30% ≤ income &lt; 50% of AMI</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#a0c4ff;font-family:monospace">50-80%</td><td style="padding:6px 10px;color:#c0c0d0">50% ≤ income &lt; 80% of AMI</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#7ee8a2;font-family:monospace">80-120%</td><td style="padding:6px 10px;color:#c0c0d0">80% ≤ income &lt; 120% of AMI</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#a78bfa;font-family:monospace">&gt;120%</td><td style="padding:6px 10px;color:#c0c0d0">Income ≥ 120% of AMI</td></tr>
+      <tr><td style="padding:6px 10px;color:#888;font-family:monospace">declined</td><td style="padding:6px 10px;color:#c0c0d0">Client chose "Prefer not to say"</td></tr>
+    </table>
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <tr style="background:#0f0f1a">
+        <td style="padding:6px 10px;color:#888">Family size</td>
+        <td style="padding:6px 10px;color:#888">Maricopa County AMI</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#ff6b6b">1 person</td><td style="padding:6px 10px;color:#ff6b6b">TBD — awaiting confirmation</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#c0c0d0">2 people</td><td style="padding:6px 10px;color:#c0c0d0">$94,640</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#c0c0d0">3 people</td><td style="padding:6px 10px;color:#c0c0d0">$115,062</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#c0c0d0">4 people</td><td style="padding:6px 10px;color:#c0c0d0">$125,621</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#c0c0d0">5 people</td><td style="padding:6px 10px;color:#c0c0d0">$121,268</td></tr>
+      <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:6px 10px;color:#c0c0d0">6 people</td><td style="padding:6px 10px;color:#c0c0d0">$132,321</td></tr>
+      <tr><td style="padding:6px 10px;color:#c0c0d0">7+ people</td><td style="padding:6px 10px;color:#c0c0d0">$127,820</td></tr>
+    </table>
+  </div>
+
+  <div style="background:#1a2a1a;border-radius:12px;padding:14px;border-left:3px solid #7ee8a2">
+    <p style="margin:0;color:#a0c4a0;font-size:13px">Spec saved at <code style="background:#0f0f1a;padding:2px 6px;border-radius:4px">docs/superpowers/specs/2026-05-20-food-line-app-design.md</code>. Answer the two questions above in the terminal to finalize, then we move to the implementation plan.</p>
+  </div>
+
+</div>

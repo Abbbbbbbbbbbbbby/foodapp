@@ -1,0 +1,270 @@
+<h2>Food Line Check-In App — Final Design Spec</h2>
+<p class="subtitle">Complete and up to date. All changes applied. Reply in the terminal to approve or request changes.</p>
+
+<div style="max-width:820px;margin:0 auto;font-family:sans-serif;line-height:1.7">
+
+  <!-- Context -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:14px;border-left:4px solid #7ee8a2">
+    <h3 style="color:#7ee8a2;margin:0 0 8px">Context</h3>
+    <p style="color:#c0c0d0;margin:0;font-size:13px">Replacing the Creighton Community Foundation's Bubble.io food distribution check-in app with a mobile-first PWA on Cloudflare. Same data model and logic — faster, more accessible, and resilient to spotty outdoor network conditions. Designed for older volunteers, bilingual interactions, and community families who may not speak English.</p>
+  </div>
+
+  <!-- Roles -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:14px;border-left:4px solid #a78bfa">
+    <h3 style="color:#a78bfa;margin:0 0 12px">Three Roles</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div style="background:#0f0f1a;border-radius:8px;padding:12px;border-top:3px solid #ff6b6b">
+        <div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">Volunteer</div>
+        <div style="color:#c0c0d0;font-size:12px;line-height:1.6">Community volunteers. Can only enter data. Home screen shows one button. Self-registers with name + phone. Role defaults to volunteer.</div>
+      </div>
+      <div style="background:#0f0f1a;border-radius:8px;padding:12px;border-top:3px solid #ffd166">
+        <div style="color:#ffd166;font-weight:700;margin-bottom:6px">Staff</div>
+        <div style="color:#c0c0d0;font-size:12px;line-height:1.6">Org employees. Enter data + view all records + data summary. Cannot manage accounts. Home shows two buttons.</div>
+      </div>
+      <div style="background:#0f0f1a;border-radius:8px;padding:12px;border-top:3px solid #7ee8a2">
+        <div style="color:#7ee8a2;font-weight:700;margin-bottom:6px">Admin</div>
+        <div style="color:#c0c0d0;font-size:12px;line-height:1.6">1–2 people. Full app access. Manages accounts, sets roles, controls page access for other roles, exports data.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Architecture -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:14px;border-left:4px solid #ffd166">
+    <h3 style="color:#ffd166;margin:0 0 10px">Architecture — Cloudflare Pages + Workers + D1</h3>
+    <div style="background:#0f0f1a;border-radius:8px;padding:14px;font-family:monospace;font-size:12px;color:#a0c4ff;margin-bottom:10px;line-height:2">
+      Browser (PWA)<br>
+      &nbsp;&nbsp;├─ Service Worker (offline queue + app shell cache)<br>
+      &nbsp;&nbsp;└─ IndexedDB (submission queue when offline)<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│ syncs when back online<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+      Cloudflare Workers (API) → D1/SQLite · KV (sessions) · Twilio (SMS OTP)<br>
+      Cloudflare Pages (CDN — global edge delivery)
+    </div>
+    <ul style="color:#c0c0d0;margin:0;padding-left:18px;font-size:13px">
+      <li>Works offline — submissions queue locally, sync when signal returns, no data lost</li>
+      <li>D1 SQL model maps directly to Bubble.io export — migration is a SQL import</li>
+      <li>Scales to zero between events</li>
+    </ul>
+  </div>
+
+  <!-- Auth -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:14px;border-left:4px solid #6a9fd8">
+    <h3 style="color:#6a9fd8;margin:0 0 10px">Auth — SMS OTP</h3>
+    <ol style="color:#c0c0d0;margin:0;padding-left:18px;font-size:13px;line-height:1.9">
+      <li>Anyone can self-register: enter name + phone → receive 6-digit SMS code → account created as volunteer</li>
+      <li>Admin promotes accounts to staff or admin as needed</li>
+      <li>JWT issued on login, cached in localStorage, 12-hour TTL — app works offline once logged in</li>
+      <li>No passwords, no email, no area code autofill</li>
+    </ol>
+  </div>
+
+  <!-- Pages -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:14px;border-left:4px solid #7ee8a2">
+    <h3 style="color:#7ee8a2;margin:0 0 12px">App Pages</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <tr style="background:#0f0f1a">
+        <td style="padding:7px 10px;color:#888">Page</td>
+        <td style="padding:7px 10px;color:#ff6b6b;text-align:center">Volunteer</td>
+        <td style="padding:7px 10px;color:#ffd166;text-align:center">Staff</td>
+        <td style="padding:7px 10px;color:#7ee8a2;text-align:center">Admin</td>
+        <td style="padding:7px 10px;color:#888">Notes</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a">
+        <td style="padding:7px 10px;color:#a0c4ff;font-family:monospace">/login</td>
+        <td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td>
+        <td style="padding:7px 10px;color:#888;font-size:11px">Phone + OTP · Create account link</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a">
+        <td style="padding:7px 10px;color:#a0c4ff;font-family:monospace">/ (home)</td>
+        <td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td>
+        <td style="padding:7px 10px;color:#888;font-size:11px">Buttons shown by role</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a">
+        <td style="padding:7px 10px;color:#a0c4ff;font-family:monospace">/enter</td>
+        <td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td>
+        <td style="padding:7px 10px;color:#888;font-size:11px">Core check-in flow</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a">
+        <td style="padding:7px 10px;color:#a0c4ff;font-family:monospace">/view</td>
+        <td style="padding:7px 10px;text-align:center;color:#555">—</td><td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td>
+        <td style="padding:7px 10px;color:#888;font-size:11px">Search individual family records</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a">
+        <td style="padding:7px 10px;color:#a0c4ff;font-family:monospace">/data/summary</td>
+        <td style="padding:7px 10px;text-align:center;color:#555">—</td><td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td>
+        <td style="padding:7px 10px;color:#888;font-size:11px">Aggregate stats by timeframe</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a">
+        <td style="padding:7px 10px;color:#a0c4ff;font-family:monospace">/admin/accounts</td>
+        <td style="padding:7px 10px;text-align:center;color:#555">—</td><td style="padding:7px 10px;text-align:center;color:#555">—</td><td style="padding:7px 10px;text-align:center">✓</td>
+        <td style="padding:7px 10px;color:#888;font-size:11px">Manage accounts, set roles, control page access</td>
+      </tr>
+      <tr style="border-bottom:1px solid #2a2a4a">
+        <td style="padding:7px 10px;color:#a0c4ff;font-family:monospace">/admin/export</td>
+        <td style="padding:7px 10px;text-align:center;color:#555">—</td><td style="padding:7px 10px;text-align:center;color:#555">—</td><td style="padding:7px 10px;text-align:center">✓</td>
+        <td style="padding:7px 10px;color:#888;font-size:11px">CSV export, filterable by date range</td>
+      </tr>
+      <tr>
+        <td style="padding:7px 10px;color:#a0c4ff;font-family:monospace">/account</td>
+        <td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td><td style="padding:7px 10px;text-align:center">✓</td>
+        <td style="padding:7px 10px;color:#888;font-size:11px">Own account settings</td>
+      </tr>
+    </table>
+    <p style="color:#888;font-size:11px;margin:8px 0 0;padding-left:2px">Deferred: /enter/proxy-forms (proxy authorization UI) — scope TBD</p>
+  </div>
+
+  <!-- Check-in flow -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:14px;border-left:4px solid #ff6b6b">
+    <h3 style="color:#ff6b6b;margin:0 0 14px">Core Check-In Flow (/enter)</h3>
+
+    <div style="background:#0f0f1a;border-radius:8px;padding:14px;margin-bottom:10px">
+      <div style="color:#ffd166;font-weight:700;margin-bottom:6px">Step 0 — Have we saved your data before?</div>
+      <div style="display:flex;gap:10px;margin-bottom:6px">
+        <div style="background:#1a4a2a;border-radius:8px;padding:10px 14px;color:#7ee8a2;font-weight:700;font-size:13px">Yes / Sí → Returning path</div>
+        <div style="background:#1a2a4a;border-radius:8px;padding:10px 14px;color:#6a9fd8;font-weight:700;font-size:13px">No → New family path</div>
+      </div>
+      <div style="color:#888;font-size:11px">Shown in both languages at equal size. No "read aloud" labels.</div>
+    </div>
+
+    <div style="background:#0f0f1a;border-radius:8px;padding:14px;margin-bottom:10px">
+      <div style="color:#7ee8a2;font-weight:700;margin-bottom:8px">Returning path (~15 seconds)</div>
+      <ol style="color:#c0c0d0;margin:0;padding-left:16px;font-size:12px;line-height:1.9">
+        <li><strong>Lookup:</strong> Phone (blank, no autofill) and/or name (fuzzy, tolerates misspelling)</li>
+        <li><strong>Results:</strong> Ranked matches — name, partial phone, family size, last visit. "Not found → Register new" at bottom</li>
+        <li><strong>Select families:</strong> Own family first, then all proxy families. <em>None pre-checked.</em> Volunteer taps each being picked up today. Running count shown. Confirm disabled until ≥1 selected.</li>
+        <li><strong>Log per family:</strong> "No change" (marks visit) or "Update info" (mini-edit). After last family → Done.</li>
+      </ol>
+    </div>
+
+    <div style="background:#0f0f1a;border-radius:8px;padding:14px">
+      <div style="color:#ffd166;font-weight:700;margin-bottom:8px">New family path — Registration</div>
+
+      <div style="color:#a78bfa;font-size:12px;font-weight:600;margin-bottom:6px">Before the wizard: Duplicate check</div>
+      <p style="color:#c0c0d0;font-size:12px;margin:0 0 10px">If name or phone entered matches an existing record, app shows confirmation: "We may already have this family on file. Is this them?" — Yes switches to returning flow; No continues registration.</p>
+
+      <div style="color:#a78bfa;font-size:12px;font-weight:600;margin-bottom:6px">Before the wizard: Who usually picks up?</div>
+      <p style="color:#c0c0d0;font-size:12px;margin:0 0 10px">"They pick up for themselves" (skip) or "Someone else picks up for them" (collect proxy name + phone → saved to proxies table).</p>
+
+      <div style="color:#a78bfa;font-size:12px;font-weight:600;margin-bottom:8px">11-step wizard</div>
+      <div style="color:#888;font-size:11px;margin-bottom:8px">Every step: both languages at equal size, no labels. Large tap targets. Back/Skip always visible. Progress bar.</div>
+
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <tr style="background:#1a1a2a">
+          <td style="padding:5px 8px;color:#666;width:24px">#</td>
+          <td style="padding:5px 8px;color:#888">Question (EN / ES)</td>
+          <td style="padding:5px 8px;color:#888">Input</td>
+        </tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">1</td><td style="padding:5px 8px;color:#fff">"What is your full name?" / "¿Cuál es su nombre completo?"</td><td style="padding:5px 8px;color:#a0a0c0">Text</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">2</td><td style="padding:5px 8px;color:#fff">"What is your phone number?" / "¿Cuál es su número de teléfono?"</td><td style="padding:5px 8px;color:#a0a0c0">Phone + "I don't have one"</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">3</td><td style="padding:5px 8px;color:#fff">"What is your zip code?" / "¿Cuál es su código postal?"</td><td style="padding:5px 8px;color:#a0a0c0">Numeric</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">4</td><td style="padding:5px 8px;color:#fff">"What language do you prefer?" / "¿Qué idioma prefiere?"</td><td style="padding:5px 8px;color:#a0a0c0">English / Español / Other / Prefer not to say</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">5</td><td style="padding:5px 8px;color:#fff">"How many people live in your household?" / "¿Cuántas personas viven en su hogar?"</td><td style="padding:5px 8px;color:#a0a0c0">Tap 1–7; 7+ → exact count input</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">6</td><td style="padding:5px 8px;color:#fff">"How many children under 18?" / "¿Cuántos niños menores de 18 años?"</td><td style="padding:5px 8px;color:#a0a0c0">Tap 0–6+</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">7</td><td style="padding:5px 8px;color:#fff">"How many children under 5?" / "¿Cuántos niños menores de 5 años?"</td><td style="padding:5px 8px;color:#a0a0c0">Tap 0–5+</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">8</td><td style="padding:5px 8px;color:#fff">"How often do you get paid, and about how much each time?" / "¿Con qué frecuencia le pagan y aproximadamente cuánto?"</td><td style="padding:5px 8px;color:#a0a0c0">Pay period → amount → AMI bracket calculated silently. Only bracket stored.</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">9</td><td style="padding:5px 8px;color:#fff">"Does your family currently receive SNAP benefits?" / "¿Su familia recibe beneficios de SNAP?"</td><td style="padding:5px 8px;color:#a0a0c0">Yes / No / Prefer not to say</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">10</td><td style="padding:5px 8px;color:#fff">"Does anyone in your family have health insurance?" / "¿Alguien en su familia tiene seguro de salud?"</td><td style="padding:5px 8px;color:#a0a0c0">Yes / No / Prefer not to say</td></tr>
+        <tr style="border-bottom:1px solid #1a1a2a"><td style="padding:5px 8px;color:#666">11a</td><td style="padding:5px 8px;color:#fff">"Do you currently receive text messages?" / "¿Actualmente recibe mensajes de texto?"</td><td style="padding:5px 8px;color:#a0a0c0">Yes / No / Prefer not to say</td></tr>
+        <tr><td style="padding:5px 8px;color:#666">11b</td><td style="padding:5px 8px;color:#fff">"Would you like text updates about food distribution events?" / "¿Le gustaría recibir actualizaciones por texto?"</td><td style="padding:5px 8px;color:#a0a0c0">Yes (triggers Twilio enrollment) / No · Shown only if 11a = Yes</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Income -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:14px;border-left:4px solid #ffd166">
+    <h3 style="color:#ffd166;margin:0 0 10px">Income → AMI Bracket (Step 8)</h3>
+    <p style="color:#c0c0d0;font-size:13px;margin:0 0 10px">Pay period entered → annualized → divided by AMI for family size → bracket stored. Raw income never saved.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div>
+        <div style="color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Brackets</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#ff6b6b;font-family:monospace">&lt;30%</td><td style="padding:5px 8px;color:#c0c0d0">Annual &lt; 30% of AMI</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#ffd166;font-family:monospace">30–50%</td><td style="padding:5px 8px;color:#c0c0d0">30–50% of AMI</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#a0c4ff;font-family:monospace">50–80%</td><td style="padding:5px 8px;color:#c0c0d0">50–80% of AMI</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#7ee8a2;font-family:monospace">80–120%</td><td style="padding:5px 8px;color:#c0c0d0">80–120% of AMI</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#a78bfa;font-family:monospace">&gt;120%</td><td style="padding:5px 8px;color:#c0c0d0">≥ 120% of AMI</td></tr>
+          <tr><td style="padding:5px 8px;color:#888;font-family:monospace">declined</td><td style="padding:5px 8px;color:#888">Prefer not to say</td></tr>
+        </table>
+      </div>
+      <div>
+        <div style="color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Maricopa County AMI</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#c0c0d0">1 person</td><td style="padding:5px 8px;color:#c0c0d0">$59,347</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#c0c0d0">2 people</td><td style="padding:5px 8px;color:#c0c0d0">$94,640</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#c0c0d0">3 people</td><td style="padding:5px 8px;color:#c0c0d0">$115,062</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#c0c0d0">4 people</td><td style="padding:5px 8px;color:#c0c0d0">$125,621</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#c0c0d0">5 people</td><td style="padding:5px 8px;color:#c0c0d0">$121,268</td></tr>
+          <tr style="border-bottom:1px solid #2a2a4a"><td style="padding:5px 8px;color:#c0c0d0">6 people</td><td style="padding:5px 8px;color:#c0c0d0">$132,321</td></tr>
+          <tr><td style="padding:5px 8px;color:#c0c0d0">7+ people</td><td style="padding:5px 8px;color:#c0c0d0">$127,820</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Data summary -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:18px;margin-bottom:14px;border-left:4px solid #a78bfa">
+    <h3 style="color:#a78bfa;margin:0 0 10px">Data Summary Page (/data/summary) — Staff + Admin</h3>
+    <p style="color:#c0c0d0;font-size:13px;margin:0 0 8px"><strong style="color:#fff">Controls:</strong> Date range — Last event / This month / Last 3 months / Custom</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+      <div style="background:#0f0f1a;border-radius:6px;padding:10px">
+        <div style="color:#7ee8a2;font-weight:600;margin-bottom:4px">Summary cards</div>
+        <ul style="color:#c0c0d0;margin:0;padding-left:14px;line-height:1.8">
+          <li>Total families served</li>
+          <li>Total individuals served</li>
+          <li>New vs. returning families</li>
+        </ul>
+      </div>
+      <div style="background:#0f0f1a;border-radius:6px;padding:10px">
+        <div style="color:#ffd166;font-weight:600;margin-bottom:4px">Charts & breakdowns</div>
+        <ul style="color:#c0c0d0;margin:0;padding-left:14px;line-height:1.8">
+          <li>AMI bracket distribution</li>
+          <li>Ethnicity + language breakdown</li>
+          <li>SNAP / health insurance %</li>
+          <li>Top zip codes</li>
+          <li>Visits over time</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Offline + Bilingual -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+    <div style="background:#1a1a2e;border-radius:12px;padding:16px;border-left:4px solid #6a9fd8">
+      <h3 style="color:#6a9fd8;margin:0 0 8px;font-size:14px">Offline Strategy</h3>
+      <ul style="color:#c0c0d0;margin:0;padding-left:16px;font-size:12px;line-height:1.8">
+        <li>App shell cached — instant launch, no signal needed</li>
+        <li>Submissions queue in IndexedDB, sync when online</li>
+        <li>Lookup requires network; offline banner shown</li>
+        <li>Valid JWT = app works offline once logged in</li>
+      </ul>
+    </div>
+    <div style="background:#1a1a2e;border-radius:12px;padding:16px;border-left:4px solid #ff6b6b">
+      <h3 style="color:#ff6b6b;margin:0 0 8px;font-size:14px">Accessibility</h3>
+      <ul style="color:#c0c0d0;margin:0;padding-left:16px;font-size:12px;line-height:1.8">
+        <li>Min touch target: 48×48px</li>
+        <li>Min font: 16px body, 20px+ questions</li>
+        <li>High contrast dark theme — readable in sunlight</li>
+        <li>No time-outs on data entry</li>
+        <li>"Prefer not to say" never blocks submission</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Migration -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:16px;margin-bottom:14px;border-left:4px solid #7ee8a2">
+    <h3 style="color:#7ee8a2;margin:0 0 8px;font-size:14px">Data Migration</h3>
+    <p style="color:#c0c0d0;font-size:12px;margin:0 0 6px">Source: <code style="background:#0f0f1a;padding:2px 5px;border-radius:3px">food-data.bubble</code> (682KB) + <code style="background:#0f0f1a;padding:2px 5px;border-radius:3px">appdata20260213.csv</code> in ~/Downloads. One-time Node.js script → SQL INSERTs for D1.</p>
+    <ol style="color:#c0c0d0;margin:0;padding-left:16px;font-size:12px;line-height:1.9">
+      <li>Bubble <code style="background:#0f0f1a;padding:1px 4px;border-radius:3px">family_data</code> → <code style="background:#0f0f1a;padding:1px 4px;border-radius:3px">families</code> table (recalculate income → ami_bracket; discard raw income)</li>
+      <li><code style="background:#0f0f1a;padding:1px 4px;border-radius:3px">visit_dates_list_date</code> → one row per date in <code style="background:#0f0f1a;padding:1px 4px;border-radius:3px">visits</code></li>
+      <li>Proxy fields → <code style="background:#0f0f1a;padding:1px 4px;border-radius:3px">proxies</code> table</li>
+      <li>Bubble users → <code style="background:#0f0f1a;padding:1px 4px;border-radius:3px">users</code> table</li>
+      <li>Cross-check names/phones against CSV</li>
+    </ol>
+  </div>
+
+  <div style="background:#1a2a1a;border-radius:10px;padding:14px;border-left:3px solid #7ee8a2">
+    <p style="margin:0;color:#a0c4a0;font-size:13px">No open questions remain. Spec saved at <code style="background:#0f0f1a;padding:2px 6px;border-radius:4px">docs/superpowers/specs/2026-05-20-food-line-app-design.md</code>. Approve in the terminal and we'll move to the implementation plan.</p>
+  </div>
+
+</div>
