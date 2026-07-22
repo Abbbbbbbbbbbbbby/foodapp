@@ -1,11 +1,12 @@
 {
-  "name": "foodapp",
+  "name": "foodbox-data-app",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "build": "npm run pwa:build",
+    "deploy": "npm run pwa:build && wrangler deploy",
     "test": "vitest run",
     "test:scripts": "vitest run --config vitest.scripts.config.ts",
     "test:watch": "vitest",
@@ -14,7 +15,8 @@
     "migrate:remote": "wrangler d1 migrations apply foodapp",
     "migrate:bubble": "node scripts/migrate-bubble.js",
     "pwa:dev": "vite --config src/pwa/vite.config.ts",
-    "pwa:build": "vite build --config src/pwa/vite.config.ts"
+    "pwa:build": "vite build --config src/pwa/vite.config.ts",
+    "generate-types": "wrangler types"
   },
   "dependencies": {
     "react": "^18.3.1",

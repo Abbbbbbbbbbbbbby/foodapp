@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "foodbox-data-app",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-07-22",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // PWA static files — served automatically; SPA paths fall back to index.html
+  "assets": {
+    "directory": "./dist/pwa",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  "observability": {
+    "enabled": true
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "foodapp",
+      "database_id": "a8b50c88-0298-4700-b8fb-2a23cdb03d28",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "c54be6c9268845068c3d554b1b14645b",
+      "preview_id": "d3f88eb19899468bbc53e4950ab55426"
+    }
+  ],
+
+  "vars": {
+    "ENVIRONMENT": "development"
+  }
+}
