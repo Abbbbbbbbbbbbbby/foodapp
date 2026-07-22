@@ -31,3 +31,7 @@ migrations/migrated-data.sql
 
 # superpowers tool state (brainstorm sessions, not project code)
 .superpowers/brainstorm/
+
+# graphify local artifacts (baseline graph itself IS committed)
+graphify-out/cache/
+graphify-out/.graphify_python

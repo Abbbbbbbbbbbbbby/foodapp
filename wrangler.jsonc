@@ -16,11 +16,13 @@
     "enabled": true
   },
 
+  // Production resources in the CCF Cloudflare account (created 2026-07-22 via wrangler).
+  // Local dev uses --local emulation; do not point local work at these IDs' data.
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "foodapp",
-      "database_id": "a8b50c88-0298-4700-b8fb-2a23cdb03d28",
+      "database_id": "c99e6b1a-5a9f-416d-835a-fc947c3a472e",
       "migrations_dir": "migrations"
     }
   ],
@@ -28,12 +30,12 @@
   "kv_namespaces": [
     {
       "binding": "SESSIONS",
-      "id": "c54be6c9268845068c3d554b1b14645b",
-      "preview_id": "d3f88eb19899468bbc53e4950ab55426"
+      "id": "544a5eff27184da4b59bff071a064f38",
+      "preview_id": "709ed58d43ea4355b6e6e7c6e093b183"
     }
   ],
 
   "vars": {
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "production"
   }
 }
