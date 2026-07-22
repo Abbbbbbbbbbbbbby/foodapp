@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, ApiError } from '../lib/api';
 import { queueItem } from '../lib/offline';
@@ -9,6 +9,7 @@ import LogVisitScreen from '../components/enter/LogVisitScreen';
 import HowManyFamilies from '../components/enter/HowManyFamilies';
 import ProxyQuestion from '../components/enter/ProxyQuestion';
 import Wizard from '../components/wizard/Wizard';
+import SummaryScreen, { type SummaryFamily } from '../components/enter/SummaryScreen';
 
 type EnterView =
   | { type: 'lookup' }
@@ -18,11 +19,13 @@ type EnterView =
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
   | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
   | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
-  | { type: 'done' };
+  | { type: 'done'; families: SummaryFamily[] };
 
 export default function EnterPage() {
   const [view, setView] = useState<EnterView>({ type: 'lookup' });
   const [error, setError] = useState<string | null>(null);
+  // Accumulates new families across multiple wizard completions for the summary screen
+  const pendingFamilies = useRef<SummaryFamily[]>([]);
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
@@ -36,11 +39,12 @@ export default function EnterPage() {
           return;
         }
       }
-      const params = new URLSearchParams();
-      if (name) params.set('name', name);
-      if (phone) params.set('phone', phone);
+      // URLSearchParams not in Safari 9 — build query string manually
+      const qs: string[] = [];
+      if (name) qs.push('name=' + encodeURIComponent(name));
+      if (phone) qs.push('phone=' + encodeURIComponent(phone));
       const { results } = await api.get<{ results: FamilySearchResult[] }>(
-        `/api/families/search?${params}`
+        '/api/families/search' + (qs.length ? '?' + qs.join('&') : '')
       );
       if (results.length === 0) {
         setView({ type: 'how-many', searchName: name, searchPhone: phone });
@@ -84,7 +88,15 @@ export default function EnterPage() {
     if (current + 1 < families.length) {
       setView({ type: 'log-visit', families, current: current + 1 });
     } else {
-      setView({ type: 'done' });
+      setView({
+        type: 'done',
+        families: families.map(f => ({
+          id: f.id,
+          name: f.name,
+          num_people: f.num_people,
+          bag_received: f.bag_received,
+        })),
+      });
     }
   }
 
@@ -124,8 +136,11 @@ export default function EnterPage() {
         visit_date: new Date().toISOString().slice(0, 10),
         picked_up_by_phone: proxyData?.proxy_phone ?? null,
       });
+      pendingFamilies.current.push({ id, name: data.name, num_people: data.num_people, bag_received: null });
     } catch {
       await queueItem({ type: 'family', payload: { data, proxyData } });
+      // No server ID yet — bags can't be marked until this syncs
+      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people, bag_received: null });
     }
     if (familyIndex + 1 < total) {
       setView({
@@ -136,18 +151,19 @@ export default function EnterPage() {
         prefillPhone: null,
       });
     } else {
-      setView({ type: 'done' });
+      const families = pendingFamilies.current;
+      pendingFamilies.current = [];
+      setView({ type: 'done', families });
     }
   }
 
   if (view.type === 'done') {
     return (
-      <div className="enter-page done">
-        <h2>Done / Listo ✓</h2>
-        <p>Visit recorded / Visita registrada</p>
-        <button className="btn-primary btn-large" onClick={() => setView({ type: 'lookup' })}>
-          Next person / Siguiente persona
-        </button>
+      <div className="enter-page">
+        <SummaryScreen
+          families={view.families}
+          onNext={() => setView({ type: 'lookup' })}
+        />
       </div>
     );
   }

@@ -16,3 +16,7 @@ preview_id = "d3f88eb19899468bbc53e4950ab55426"
 
 [vars]
 ENVIRONMENT = "development"
+
+# Pages build output — used by: wrangler pages deploy dist/pwa
+# Service binding (WORKER → foodapp-worker) is set in the Cloudflare dashboard:
+# Pages project → Settings → Functions → Service Bindings

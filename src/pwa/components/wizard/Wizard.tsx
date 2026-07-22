@@ -10,7 +10,7 @@ const TOTAL_STEPS = 11;
 
 const YES_NO_DECLINED = [
   { value: 'yes', labelEn: 'Yes / Sí', labelEs: 'Sí / Yes' },
-  { value: 'no', labelEn: 'No / No', labelEs: 'No / No' },
+  { value: 'no', labelEn: 'No', labelEs: 'No' },
   { value: 'declined', labelEn: 'Prefer not to say / Prefiero no responder', labelEs: 'Prefiero no responder' },
 ];
 
@@ -32,7 +32,7 @@ function TextsStep({ onComplete, onBack }: TextsStepProps) {
             Yes / Sí
           </button>
           <button className="btn-option" onClick={() => onComplete(false, null)}>
-            No / No
+            No
           </button>
           <button className="btn-option" onClick={() => onComplete(null, null)}>
             Prefer not to say / Prefiero no responder
@@ -56,7 +56,7 @@ function TextsStep({ onComplete, onBack }: TextsStepProps) {
           Yes / Sí
         </button>
         <button className="btn-option" onClick={() => onComplete(true, false)}>
-          No / No
+          No
         </button>
       </div>
       <div className="step-actions">
@@ -193,8 +193,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 7 && (
         <IncomeInput
-          questionEn="How often do you get paid? And about how much each time?"
-          questionEs="¿Con qué frecuencia le pagan? ¿Y aproximadamente cuánto cada vez?"
+          questionEn="How much money does your entire household earn in a week, two weeks, a month, or a year?"
+          questionEs="¿Cuánto dinero gana en total su hogar por semana, cada dos semanas, al mes o al año?"
           familySize={data.num_people ?? 1}
           onChange={v => { set('ami_bracket', v); next(); }}
           onBack={goBack}

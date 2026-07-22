@@ -10,8 +10,8 @@ interface ResultsListProps {
 export default function ResultsList({ results, onSelect, onRegisterNew, onBack }: ResultsListProps) {
   return (
     <div className="results-list">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <button className="btn-ghost" onClick={onBack}>← Back</button>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+        <button className="btn-ghost" style={{ marginRight: 12 }} onClick={onBack}>← Back</button>
         <h2>Results / Resultados ({results.length})</h2>
       </div>
       {results.map(r => (

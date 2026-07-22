@@ -19,12 +19,12 @@ export default function ProxyQuestion({ prefillName, prefillPhone, onAnswer, onB
         <button className="btn-ghost" onClick={() => setShowOther(false)}>← Back</button>
         <p className="question-en">Who is the designated pickup person?</p>
         <p className="question-es">¿Quién es la persona designada para recoger?</p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
           <label>
             Name / Nombre
             <input type="text" value={otherName} onChange={e => setOtherName(e.target.value)} autoFocus />
           </label>
-          <label>
+          <label style={{ marginTop: 12 }}>
             Phone (optional) / Teléfono (opcional)
             <input type="tel" value={otherPhone} onChange={e => setOtherPhone(e.target.value)} />
           </label>

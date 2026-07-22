@@ -30,8 +30,8 @@ export default function FamilySelectScreen({ own, proxy, onConfirm, onBack }: Fa
 
   return (
     <div className="family-select">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-        <button className="btn-ghost" onClick={onBack}>← Back</button>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+        <button className="btn-ghost" style={{ marginRight: 12 }} onClick={onBack}>← Back</button>
         <h2>Select families / Seleccionar familias</h2>
       </div>
       <p className="selection-count">{selected.size} selected / seleccionadas</p>

@@ -28,7 +28,7 @@ export default function IncomeInput({ questionEn, questionEs, familySize, onChan
       <div className="wizard-step">
         <p className="question-en">{questionEn}</p>
         <p className="question-es">{questionEs}</p>
-        <p className="sub-question">How often do you get paid? / ¿Con qué frecuencia le pagan?</p>
+        <p className="sub-question">Choose a time period: / Elija un período:</p>
         <div className="option-list">
           {PERIODS.map(p => (
             <button key={p.value} className="btn-option" onClick={() => setPeriod(p.value)}>
@@ -51,7 +51,7 @@ export default function IncomeInput({ questionEn, questionEs, familySize, onChan
     <div className="wizard-step">
       <p className="question-en">{questionEn}</p>
       <p className="question-es">{questionEs}</p>
-      <p className="sub-question">About how much each time? / ¿Aproximadamente cuánto cada vez?</p>
+      <p className="sub-question">Total from all earners in your household: / Total de todos los que trabajan en el hogar:</p>
       <div className="amount-input">
         <span className="currency">$</span>
         <input
