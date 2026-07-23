@@ -20,8 +20,14 @@ jobs:
 
       - run: npm ci
 
+      - name: Build PWA (required by worker tests)
+        run: npm run build
+
       - name: Worker tests
         run: npx vitest run
 
       - name: PWA unit tests
         run: npx vitest run --config vitest.pwa.config.ts
+
+      - name: Scripts tests
+        run: npm run test:scripts
