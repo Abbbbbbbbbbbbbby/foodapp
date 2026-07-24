@@ -22,6 +22,11 @@ export default function HomePage() {
             Manage Accounts
           </button>
         )}
+        {user.role === 'admin' && (
+          <button className="btn-secondary btn-large" onClick={() => navigate('/admin/import')}>
+            Import from Bubble
+          </button>
+        )}
       </div>
     </div>
   );

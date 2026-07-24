@@ -1,6 +1,7 @@
 import type { Env } from '../schema';
 import { requireRole } from '../middleware';
 import type { AuthContext } from '../middleware';
+import { normalizeName, normalizePhone } from '../db';
 
 interface AdminUser {
   id: string;
@@ -28,6 +29,10 @@ export async function handleAdminRoutes(
 
   if (pathname === '/api/admin/users' && request.method === 'GET') {
     return handleListUsers(env);
+  }
+
+  if (pathname === '/api/admin/import' && request.method === 'POST') {
+    return handleImport(request, env, ctx);
   }
 
   const idMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
@@ -118,4 +123,137 @@ async function handleDeleteUser(
   await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(id).run();
 
   return Response.json({ ok: true });
+}
+
+// ── Bubble import ─────────────────────────────────────────────────────────────
+
+interface ImportFamily {
+  bubble_id: string;
+  name: string;
+  phone: string | null;
+  address: string | null;
+  zip_code: string | null;
+  date_of_birth: string | null;
+  language: string | null;
+  ethnicity: string | null;
+  hispanic: string | null;
+  health_insurance: string | null;
+  snap_benefits: string | null;
+  receives_texts: boolean | null;
+  want_text_updates: boolean | null;
+  id_confirmed: boolean | null;
+  bag_received: boolean | null;
+  num_people: number | null;
+  num_children_under_18: number | null;
+  num_children_under_5: number | null;
+  num_with_diabetes: number | null;
+  ami_bracket: string | null;
+  first_visit_date: string | null;
+  visits: string[];
+  proxies: { name: string; phone: string | null }[];
+}
+
+async function handleImport(
+  request: Request,
+  env: Env,
+  ctx: AuthContext
+): Promise<Response> {
+  let body: { families: ImportFamily[] };
+  try {
+    body = await request.json() as typeof body;
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  const rows = body.families;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return Response.json({ error: 'No families provided' }, { status: 400 });
+  }
+
+  // Load all existing phones once so we can dedup without N queries
+  const existing = await env.DB.prepare(
+    `SELECT phone FROM families WHERE phone IS NOT NULL`
+  ).all<{ phone: string }>();
+  const existingPhones = new Set((existing.results ?? []).map(r => r.phone));
+
+  const now = new Date().toISOString();
+  let imported = 0;
+  let skipped = 0;
+  const errors: { name: string; error: string }[] = [];
+
+  for (const row of rows) {
+    if (!row.name?.trim()) { skipped++; continue; }
+
+    const phone = normalizePhone(row.phone);
+
+    if (phone && existingPhones.has(phone)) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      const id = crypto.randomUUID().replace(/-/g, '');
+
+      const stmts: D1PreparedStatement[] = [
+        env.DB.prepare(`
+          INSERT INTO families (
+            id, name, name_normalized, phone, address, zip_code, date_of_birth,
+            language, ethnicity, hispanic, ami_bracket, num_people,
+            num_children_under_18, num_children_under_5, num_with_diabetes,
+            health_insurance, snap_benefits, receives_texts, want_text_updates,
+            id_confirmed, bag_received, first_visit_date,
+            created_by, created_at, updated_at
+          ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?,
+            ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?,
+            ?, ?, ?
+          )
+        `).bind(
+          id, row.name.trim(), normalizeName(row.name.trim()),
+          phone, row.address, row.zip_code, row.date_of_birth,
+          row.language, row.ethnicity, row.hispanic, row.ami_bracket, row.num_people,
+          row.num_children_under_18, row.num_children_under_5, row.num_with_diabetes,
+          row.health_insurance, row.snap_benefits,
+          row.receives_texts === true ? 1 : row.receives_texts === false ? 0 : null,
+          row.want_text_updates === true ? 1 : row.want_text_updates === false ? 0 : null,
+          row.id_confirmed === true ? 1 : row.id_confirmed === false ? 0 : null,
+          row.bag_received === true ? 1 : row.bag_received === false ? 0 : null,
+          row.first_visit_date,
+          ctx.userId, now, now
+        ),
+      ];
+
+      for (const visitDate of (row.visits ?? [])) {
+        if (!visitDate) continue;
+        const vid = crypto.randomUUID().replace(/-/g, '');
+        stmts.push(
+          env.DB.prepare(
+            `INSERT INTO visits (id, family_id, visit_date, volunteer_id, created_at) VALUES (?, ?, ?, ?, ?)`
+          ).bind(vid, id, visitDate, ctx.userId, now)
+        );
+      }
+
+      for (const proxy of (row.proxies ?? [])) {
+        if (!proxy.name && !proxy.phone) continue;
+        const pid = crypto.randomUUID().replace(/-/g, '');
+        stmts.push(
+          env.DB.prepare(
+            `INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at) VALUES (?, ?, ?, ?, ?)`
+          ).bind(pid, id, proxy.name || null, normalizePhone(proxy.phone), now)
+        );
+      }
+
+      await env.DB.batch(stmts);
+
+      if (phone) existingPhones.add(phone);
+      imported++;
+    } catch (e) {
+      errors.push({ name: row.name, error: e instanceof Error ? e.message : 'Unknown error' });
+    }
+  }
+
+  return Response.json({ imported, skipped, errors });
 }
