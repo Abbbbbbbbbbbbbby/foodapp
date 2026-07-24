@@ -170,14 +170,18 @@ async function handleImport(
     return Response.json({ error: 'No families provided' }, { status: 400 });
   }
 
-  // Load all existing phones once so we can dedup without N queries
-  const existing = await env.DB.prepare(
-    `SELECT phone FROM families WHERE phone IS NOT NULL`
-  ).all<{ phone: string }>();
-  const existingPhones = new Set((existing.results ?? []).map(r => r.phone));
+  // Load all existing phone→id mappings once for dedup and visit-merging
+  const existingFamilyRows = await env.DB.prepare(
+    `SELECT id, phone FROM families WHERE phone IS NOT NULL`
+  ).all<{ id: string; phone: string }>();
+  const phoneToId = new Map<string, string>(
+    (existingFamilyRows.results ?? []).map(r => [r.phone, r.id])
+  );
+  const existingPhones = new Set(phoneToId.keys());
 
   const now = new Date().toISOString();
   let imported = 0;
+  let visits_added = 0;
   let skipped = 0;
   const errors: { name: string; error: string }[] = [];
 
@@ -187,6 +191,33 @@ async function handleImport(
     const phone = normalizePhone(row.phone);
 
     if (phone && existingPhones.has(phone)) {
+      // Family exists — add any new visits rather than skipping
+      const familyId = phoneToId.get(phone);
+      if (familyId && row.visits?.length) {
+        try {
+          const existing = await env.DB.prepare(
+            `SELECT visit_date FROM visits WHERE family_id = ?`
+          ).bind(familyId).all<{ visit_date: string }>();
+          const existingDates = new Set((existing.results ?? []).map(r => r.visit_date));
+
+          const visitStmts: D1PreparedStatement[] = [];
+          for (const visitDate of row.visits) {
+            if (!visitDate || existingDates.has(visitDate)) continue;
+            const vid = crypto.randomUUID().replace(/-/g, '');
+            visitStmts.push(
+              env.DB.prepare(
+                `INSERT INTO visits (id, family_id, visit_date, volunteer_id, created_at) VALUES (?, ?, ?, ?, ?)`
+              ).bind(vid, familyId, visitDate, ctx.userId, now)
+            );
+          }
+          if (visitStmts.length) {
+            await env.DB.batch(visitStmts);
+            visits_added += visitStmts.length;
+          }
+        } catch (e) {
+          errors.push({ name: row.name, error: e instanceof Error ? e.message : 'Unknown error' });
+        }
+      }
       skipped++;
       continue;
     }
@@ -255,5 +286,5 @@ async function handleImport(
     }
   }
 
-  return Response.json({ imported, skipped, errors });
+  return Response.json({ imported, visits_added, skipped, errors });
 }

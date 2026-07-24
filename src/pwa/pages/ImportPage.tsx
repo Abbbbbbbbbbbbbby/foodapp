@@ -40,6 +40,7 @@ interface ParseWarning {
 
 interface ImportResult {
   imported: number;
+  visits_added: number;
   skipped: number;
   errors: { name: string; error: string }[];
 }
@@ -165,7 +166,7 @@ function transformRow(raw: Record<string, string>, rowNum: number): {
   const yearlyIncome = parseIntField(raw['yearly_income_number'] ?? '');
 
   let ami_bracket: AmiBracket | null = null;
-  if (yearlyIncome && yearlyIncome > 0 && numPeople) {
+  if (yearlyIncome !== null && numPeople !== null && numPeople > 0) {
     ami_bracket = calcAmiBracket(yearlyIncome, 'yearly', numPeople);
   }
 
@@ -220,6 +221,31 @@ function transformRow(raw: Record<string, string>, rowNum: number): {
   return { family, warnings };
 }
 
+// ── Phone Grouping ────────────────────────────────────────────────────────────
+// Bubble exports one row per visit. Group same-phone rows into one family
+// entry so we don't create duplicate family records for returning households.
+function groupByPhone(rows: ImportFamily[]): ImportFamily[] {
+  const byPhone = new Map<string, ImportFamily>();
+  const noPhone: ImportFamily[] = [];
+
+  for (const row of rows) {
+    if (row.phone) {
+      const existing = byPhone.get(row.phone);
+      if (existing) {
+        for (const v of row.visits) {
+          if (!existing.visits.includes(v)) existing.visits.push(v);
+        }
+      } else {
+        byPhone.set(row.phone, { ...row, visits: [...row.visits] });
+      }
+    } else {
+      noPhone.push(row);
+    }
+  }
+
+  return [...byPhone.values(), ...noPhone];
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function ImportPage() {
@@ -266,7 +292,7 @@ export default function ImportPage() {
           allWarnings.push(...w);
         });
 
-        setFamilies(allFamilies);
+        setFamilies(groupByPhone(allFamilies));
         setWarnings(allWarnings);
       } catch (e) {
         setParseError('Failed to parse CSV: ' + (e instanceof Error ? e.message : 'Unknown error'));
@@ -364,7 +390,7 @@ export default function ImportPage() {
               </div>
 
               <p className="import-note">
-                Families whose phone number already exists in the database will be skipped.
+                Rows with the same phone number are merged into one family. Families already in the database will have new visits added.
               </p>
 
               {warnings.length > 0 && (
@@ -435,8 +461,12 @@ export default function ImportPage() {
               <span className="import-stat-label">imported</span>
             </div>
             <div className="import-stat">
+              <span className="import-stat-n">{result.visits_added}</span>
+              <span className="import-stat-label">visits added to existing families</span>
+            </div>
+            <div className="import-stat">
               <span className="import-stat-n">{result.skipped}</span>
-              <span className="import-stat-label">skipped (duplicate phone)</span>
+              <span className="import-stat-label">skipped (no name)</span>
             </div>
             {result.errors.length > 0 && (
               <div className="import-stat import-stat-warn">
