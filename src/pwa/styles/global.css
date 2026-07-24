@@ -144,11 +144,6 @@ label > * + * { margin-top: 6px; }
 .home-buttons { display: flex; flex-direction: column; }
 .home-buttons > * + * { margin-top: 12px; }
 
-.bootstrap-section { margin-top: 32px; text-align: center; }
-.bootstrap-btn { color: var(--text-muted); font-size: 14px; width: auto; min-height: 36px; }
-.bootstrap-msg { font-size: 14px; color: var(--text-muted); }
-.bootstrap-success { color: var(--success); }
-.bootstrap-taken { color: var(--danger); }
 
 .lookup-form { display: flex; flex-direction: column; }
 .lookup-form > * + * { margin-top: 16px; }

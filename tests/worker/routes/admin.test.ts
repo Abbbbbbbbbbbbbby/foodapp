@@ -33,39 +33,6 @@ function authHeader(token: string) {
   return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
 }
 
-describe('POST /api/admin/bootstrap', () => {
-  it('promotes the caller to admin when no admins exist', async () => {
-    await seedUser('u1', 'Alice', '4805550001', 'volunteer');
-    const token = await makeToken('u1', '4805550001', 'volunteer');
-    const res = await SELF.fetch('https://example.com/api/admin/bootstrap', {
-      method: 'POST',
-      headers: authHeader(token),
-    });
-    expect(res.status).toBe(200);
-    const db = (env as unknown as Env).DB;
-    const user = await db.prepare('SELECT role FROM users WHERE id = ?').bind('u1').first<{ role: string }>();
-    expect(user?.role).toBe('admin');
-  });
-
-  it('returns 403 when an admin already exists', async () => {
-    await seedUser('a1', 'Admin', '4805550000', 'admin');
-    await seedUser('u1', 'Alice', '4805550001', 'volunteer');
-    const token = await makeToken('u1', '4805550001', 'volunteer');
-    const res = await SELF.fetch('https://example.com/api/admin/bootstrap', {
-      method: 'POST',
-      headers: authHeader(token),
-    });
-    expect(res.status).toBe(403);
-  });
-
-  it('returns 401 with no auth', async () => {
-    const res = await SELF.fetch('https://example.com/api/admin/bootstrap', {
-      method: 'POST',
-    });
-    expect(res.status).toBe(401);
-  });
-});
-
 describe('GET /api/admin/users', () => {
   it('returns 403 for non-admin', async () => {
     await seedUser('u1', 'Alice', '4805550001', 'volunteer');

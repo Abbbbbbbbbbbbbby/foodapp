@@ -1,5 +1,5 @@
 import type { Env } from '../schema';
-import { requireRole, getAuthContext } from '../middleware';
+import { requireRole } from '../middleware';
 import type { AuthContext } from '../middleware';
 
 interface AdminUser {
@@ -21,10 +21,6 @@ export async function handleAdminRoutes(
   pathname: string
 ): Promise<Response | null> {
   if (!pathname.startsWith('/api/admin/')) return null;
-
-  if (pathname === '/api/admin/bootstrap' && request.method === 'POST') {
-    return handleBootstrap(request, env);
-  }
 
   const ctxOrResponse = await requireRole('admin')(request, env);
   if (ctxOrResponse instanceof Response) return ctxOrResponse;
@@ -122,23 +118,4 @@ async function handleDeleteUser(
   await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(id).run();
 
   return Response.json({ ok: true });
-}
-
-async function handleBootstrap(request: Request, env: Env): Promise<Response> {
-  const ctx = await getAuthContext(request, env);
-  if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const existing = await env.DB.prepare(
-    `SELECT id FROM users WHERE role = 'admin' LIMIT 1`
-  ).first<{ id: string }>();
-
-  if (existing) {
-    return Response.json({ error: 'An admin already exists' }, { status: 403 });
-  }
-
-  await env.DB.prepare(
-    `UPDATE users SET role = 'admin' WHERE id = ?`
-  ).bind(ctx.userId).run();
-
-  return Response.json({ ok: true, promoted: ctx.userId });
 }
