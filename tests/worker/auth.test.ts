@@ -39,7 +39,11 @@ describe('signJwt + verifyJwt', () => {
     };
     const token = await signJwt(payload, SECRET);
     const parts = token.split('.');
-    const tampered = `${parts[0]}.${parts[1]}.${parts[2].slice(0, -1)}X`;
+    // Flip a middle character of the signature: the final base64url char has
+    // 4 dead padding bits, so tampering there can decode to identical bytes.
+    const sig = parts[2];
+    const flipped = sig[5] === 'A' ? 'B' : 'A';
+    const tampered = `${parts[0]}.${parts[1]}.${sig.slice(0, 5)}${flipped}${sig.slice(6)}`;
     const result = await verifyJwt(tampered, SECRET);
     expect(result).toBeNull();
   });
