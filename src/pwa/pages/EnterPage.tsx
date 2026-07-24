@@ -1,7 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, ApiError } from '../lib/api';
-import { queueItem } from '../lib/offline';
+import { queueItem, flushQueue, generateUUID } from '../lib/offline';
+import { clearAuth } from '../store/auth';
 import LookupForm from '../components/enter/LookupForm';
 import ResultsList from '../components/enter/ResultsList';
 import FamilySelectScreen from '../components/enter/FamilySelectScreen';
@@ -19,13 +21,31 @@ type EnterView =
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
   | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
   | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
-  | { type: 'done'; families: SummaryFamily[] };
+  | { type: 'done'; families: SummaryFamily[]; error?: string };
 
 export default function EnterPage() {
+  const navigate = useNavigate();
   const [view, setView] = useState<EnterView>({ type: 'lookup' });
   const [error, setError] = useState<string | null>(null);
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
+
+  // Flush any queued offline submissions on mount and whenever connectivity resumes
+  useEffect(() => {
+    const apiFn = (url: string, body: unknown) =>
+      api.post<unknown>(url, body as Record<string, unknown>);
+    const doFlush = async () => {
+      const result = await flushQueue(apiFn);
+      if (result.needsReLogin) {
+        clearAuth();
+        navigate('/login');
+      }
+    };
+    doFlush();
+    const onOnline = () => doFlush();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [navigate]);
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
@@ -77,13 +97,26 @@ export default function EnterPage() {
   async function handleLogVisit(familyId: string) {
     if (view.type !== 'log-visit') return;
     const { families, current } = view;
+    const visitIdemKey = generateUUID();
+    const visitPayload = {
+      family_id: familyId,
+      visit_date: new Date().toISOString().slice(0, 10),
+      idempotency_key: visitIdemKey,
+    };
     try {
-      await api.post('/api/visits', {
-        family_id: familyId,
-        visit_date: new Date().toISOString().slice(0, 10),
-      });
-    } catch {
-      await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: new Date().toISOString().slice(0, 10) } });
+      await api.post('/api/visits', visitPayload);
+    } catch (e) {
+      if (e instanceof ApiError) {
+        setError(e.message);
+        return; // server rejected — don't advance, let user see the error
+      }
+      // Network error — queue with the same idempotency key and continue
+      try {
+        await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey);
+      } catch {
+        setError('Unable to save offline. Check storage permissions and try again.');
+        return;
+      }
     }
     if (current + 1 < families.length) {
       setView({ type: 'log-visit', families, current: current + 1 });
@@ -125,24 +158,75 @@ export default function EnterPage() {
   async function handleWizardComplete(data: WizardFormData, proxyData: ProxyData | null) {
     if (view.type !== 'wizard') return;
     const { familyIndex, total } = view;
+    setError(null);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const familyPayload = {
+      ...data,
+      first_visit_date: today,
+      proxy: proxyData ?? undefined,
+    };
+    // Generate both keys before the first attempt so the server can de-dup
+    // even if the network drops after it committed but before the reply arrived.
+    const familyIdemKey = generateUUID();
+    const visitIdemKey = generateUUID();
+
+    // --- POST family ---
+    let familyId: string;
     try {
-      const { id } = await api.post<{ id: string }>('/api/families', {
-        ...data,
-        first_visit_date: new Date().toISOString().slice(0, 10),
-        proxy: proxyData ?? undefined,
+      const result = await api.post<{ id: string }>('/api/families', {
+        ...familyPayload,
+        idempotency_key: familyIdemKey,
       });
-      await api.post('/api/visits', {
-        family_id: id,
-        visit_date: new Date().toISOString().slice(0, 10),
-        picked_up_by_phone: proxyData?.proxy_phone ?? null,
-      });
-      pendingFamilies.current.push({ id, name: data.name, num_people: data.num_people, bag_received: null });
-    } catch {
-      await queueItem({ type: 'family', payload: { data, proxyData } });
-      // No server ID yet — bags can't be marked until this syncs
-      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people, bag_received: null });
+      familyId = result.id;
+    } catch (e) {
+      if (e instanceof ApiError) {
+        setError(e.message);
+        return; // server rejected — don't advance
+      }
+      // Network error — queue family + visit pair together and advance
+      try {
+        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
+      } catch {
+        setError('Unable to save offline. Check storage permissions and try again.');
+        return;
+      }
+      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null });
+      advanceWizard(familyIndex, total);
+      return;
     }
+
+    // --- POST visit (family already committed to DB with real id) ---
+    const visitPayload = {
+      family_id: familyId,
+      visit_date: today,
+      picked_up_by_phone: proxyData?.proxy_phone ?? null,
+    };
+    let visitError: string | undefined;
+    try {
+      await api.post('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
+    } catch (e) {
+      if (e instanceof ApiError) {
+        // Family saved — still advance but surface the error
+        visitError = `Family saved, but visit log failed: ${e.message}`;
+      } else {
+        // Network — queue only the visit (family already has an id)
+        try {
+          await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey);
+        } catch {
+          visitError = 'Visit not saved offline. Check storage permissions.';
+        }
+      }
+    }
+
+    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null });
+    advanceWizard(familyIndex, total, visitError);
+  }
+
+  function advanceWizard(familyIndex: number, total: number, pendingError?: string) {
     if (familyIndex + 1 < total) {
+      // Surface any visit error before moving to next wizard entry
+      if (pendingError) setError(pendingError);
       setView({
         type: 'proxy-question',
         familyIndex: familyIndex + 1,
@@ -153,13 +237,15 @@ export default function EnterPage() {
     } else {
       const families = pendingFamilies.current;
       pendingFamilies.current = [];
-      setView({ type: 'done', families });
+      // Pass any error into the done view so it renders on the summary screen
+      setView({ type: 'done', families, error: pendingError });
     }
   }
 
   if (view.type === 'done') {
     return (
       <div className="enter-page">
+        {view.error && <p className="error banner">{view.error}</p>}
         <SummaryScreen
           families={view.families}
           onNext={() => setView({ type: 'lookup' })}

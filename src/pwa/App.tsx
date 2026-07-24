@@ -1,15 +1,23 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { getToken } from './store/auth';
+import { getToken, getUser } from './store/auth';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import VerifyPage from './pages/VerifyPage';
 import HomePage from './pages/HomePage';
 import EnterPage from './pages/EnterPage';
+import AdminAccountsPage from './pages/AdminAccountsPage';
 
 function ProtectedLayout() {
   if (!getToken()) return <Navigate to="/login" replace />;
   return <Layout />;
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const user = getUser();
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
 }
 
 export default function App() {
@@ -22,6 +30,10 @@ export default function App() {
         <Route element={<ProtectedLayout />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/enter" element={<EnterPage />} />
+          <Route
+            path="/admin/accounts"
+            element={<AdminRoute><AdminAccountsPage /></AdminRoute>}
+          />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -3,6 +3,7 @@ import { handleAuthRoutes } from './routes/auth';
 import { handleFamilyRoutes } from './routes/families';
 import { handleVisitRoutes } from './routes/visits';
 import { handleQuestionRoutes } from './routes/questions';
+import { handleAdminRoutes } from './routes/admin';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -28,6 +29,9 @@ export default {
 
       const questionResponse = await handleQuestionRoutes(request, env, url.pathname);
       if (questionResponse) return cors(questionResponse);
+
+      const adminResponse = await handleAdminRoutes(request, env, url.pathname);
+      if (adminResponse) return cors(adminResponse);
 
       return cors(Response.json({ error: 'Not found' }, { status: 404 }));
     } catch (err) {

@@ -143,6 +143,80 @@ describe('DELETE /api/auth/logout', () => {
   });
 });
 
+describe('malformed JSON — login / register / verify', () => {
+  it('POST /api/auth/login returns 400 for non-JSON body', async () => {
+    const res = await SELF.fetch('https://example.com/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not json {{{',
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as { error: string };
+    expect(data.error).toMatch(/JSON/i);
+  });
+
+  it('POST /api/auth/register returns 400 for non-JSON body', async () => {
+    const res = await SELF.fetch('https://example.com/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'bad',
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as { error: string };
+    expect(data.error).toMatch(/JSON/i);
+  });
+
+  it('POST /api/auth/verify returns 400 for non-JSON body', async () => {
+    const res = await SELF.fetch('https://example.com/api/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'bad',
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json() as { error: string };
+    expect(data.error).toMatch(/JSON/i);
+  });
+});
+
+describe('SMS rate limiting', () => {
+  it('blocks login after 5 OTP requests in an hour', async () => {
+    await seedUser('4805559001');
+    // Exhaust the 5-per-hour limit
+    for (let i = 0; i < 5; i++) {
+      const r = await SELF.fetch('https://example.com/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: '4805559001' }),
+      });
+      expect(r.status).toBe(200);
+    }
+    const blocked = await SELF.fetch('https://example.com/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: '4805559001' }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it('blocks verify after 10 attempts in an hour', async () => {
+    await seedUser('4805559002');
+    // Exhaust the 10-per-hour verify limit (even with wrong codes)
+    for (let i = 0; i < 10; i++) {
+      await SELF.fetch('https://example.com/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: '4805559002', code: '000000' }),
+      });
+    }
+    const blocked = await SELF.fetch('https://example.com/api/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: '4805559002', code: '000000' }),
+    });
+    expect(blocked.status).toBe(429);
+  });
+});
+
 describe('GET /api/auth/me', () => {
   it('returns user info for authenticated request', async () => {
     const userId = await seedUser('4805551234', 'staff');

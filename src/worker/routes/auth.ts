@@ -3,6 +3,7 @@ import { createOtp, sendOtpSms, verifyOtp } from '../otp';
 import { buildSession, createSession, destroySession } from '../auth';
 import { getAuthContext } from '../middleware';
 import { normalizePhone } from '../db';
+import { checkOtpSendLimit, checkVerifyLimit } from '../ratelimit';
 
 export async function handleAuthRoutes(
   request: Request,
@@ -28,10 +29,19 @@ export async function handleAuthRoutes(
 }
 
 async function handleLogin(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ phone?: string }>();
+  let body: { phone?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   const phone = normalizePhone(body.phone ?? null);
   if (!phone) {
     return Response.json({ error: 'phone is required' }, { status: 400 });
+  }
+  const limit = await checkOtpSendLimit(env.SESSIONS, phone);
+  if (!limit.allowed) {
+    return Response.json({ error: 'Too many code requests. Try again later.' }, { status: 429 });
   }
   const user = await env.DB.prepare(
     `SELECT id FROM users WHERE phone = ? AND active = 1`
@@ -47,7 +57,12 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleRegister(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ name?: string; phone?: string }>();
+  let body: { name?: string; phone?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   const name = body.name?.trim();
   const phone = normalizePhone(body.phone ?? null);
   if (!name) {
@@ -55,6 +70,10 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   }
   if (!phone) {
     return Response.json({ error: 'phone is required' }, { status: 400 });
+  }
+  const limit = await checkOtpSendLimit(env.SESSIONS, phone);
+  if (!limit.allowed) {
+    return Response.json({ error: 'Too many code requests. Try again later.' }, { status: 429 });
   }
   const existing = await env.DB.prepare(
     `SELECT id FROM users WHERE phone = ?`
@@ -81,11 +100,20 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleVerify(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ phone?: string; code?: string }>();
+  let body: { phone?: string; code?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   const phone = normalizePhone(body.phone ?? null);
   const code = body.code?.trim();
   if (!phone || !code) {
     return Response.json({ error: 'phone and code are required' }, { status: 400 });
+  }
+  const limit = await checkVerifyLimit(env.SESSIONS, phone);
+  if (!limit.allowed) {
+    return Response.json({ error: 'Too many verification attempts. Try again later.' }, { status: 429 });
   }
   const valid = await verifyOtp(env.DB, phone, code);
   if (!valid) {

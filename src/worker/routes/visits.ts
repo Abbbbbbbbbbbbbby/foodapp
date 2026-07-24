@@ -19,7 +19,12 @@ export async function handleVisitRoutes(
 async function handleCreate(request: Request, env: Env): Promise<Response> {
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  const body = await request.json<{ family_id?: string; visit_date?: string; picked_up_by_phone?: string }>();
+  let body: { family_id?: string; visit_date?: string; picked_up_by_phone?: string; idempotency_key?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   if (!body.family_id) return Response.json({ error: 'family_id is required' }, { status: 400 });
   const data: NewVisit = {
     family_id: body.family_id,
@@ -27,8 +32,10 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     picked_up_by_phone: body.picked_up_by_phone ?? null,
     volunteer_id: ctx.userId,
   };
-  const id = await insertVisit(env.DB, data);
-  return Response.json({ id }, { status: 201 });
+  const idempotencyKey = typeof body.idempotency_key === 'string' ? body.idempotency_key : undefined;
+  const id = await insertVisit(env.DB, data, idempotencyKey);
+  const status = idempotencyKey ? 200 : 201;
+  return Response.json({ id }, { status });
 }
 
 async function handleGet(request: Request, env: Env): Promise<Response> {

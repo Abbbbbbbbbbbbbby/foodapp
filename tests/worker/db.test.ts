@@ -129,6 +129,56 @@ describe('getFamiliesForPickup', () => {
   });
 });
 
+describe('insertFamily idempotency', () => {
+  it('returns the same id when the same idempotency_key is submitted twice', async () => {
+    const db = (env as unknown as Env).DB;
+    const data = {
+      name: 'Idempotent Family', phone: null, address: null, zip_code: null,
+      date_of_birth: null, language: null, ethnicity: null, hispanic: null,
+      ami_bracket: null, num_people: 2, num_children_under_18: null,
+      num_children_under_5: null, num_with_diabetes: null, health_insurance: null,
+      snap_benefits: null, receives_texts: null, want_text_updates: null,
+      id_confirmed: null, bag_received: null, first_visit_date: null, created_by: null,
+    };
+    const id1 = await insertFamily(db, data, 'idem-key-001');
+    const id2 = await insertFamily(db, data, 'idem-key-001');
+    expect(id1).toBe(id2);
+  });
+
+  it('creates a distinct record when no idempotency_key is provided', async () => {
+    const db = (env as unknown as Env).DB;
+    const data = {
+      name: 'Duplicate Name', phone: null, address: null, zip_code: null,
+      date_of_birth: null, language: null, ethnicity: null, hispanic: null,
+      ami_bracket: null, num_people: 1, num_children_under_18: null,
+      num_children_under_5: null, num_with_diabetes: null, health_insurance: null,
+      snap_benefits: null, receives_texts: null, want_text_updates: null,
+      id_confirmed: null, bag_received: null, first_visit_date: null, created_by: null,
+    };
+    const id1 = await insertFamily(db, data);
+    const id2 = await insertFamily(db, data);
+    expect(id1).not.toBe(id2);
+  });
+});
+
+describe('insertVisit idempotency', () => {
+  it('returns the same id when the same idempotency_key is submitted twice', async () => {
+    const db = (env as unknown as Env).DB;
+    const familyId = await insertFamily(db, {
+      name: 'Visit Idem Family', phone: null, address: null, zip_code: null,
+      date_of_birth: null, language: null, ethnicity: null, hispanic: null,
+      ami_bracket: null, num_people: 1, num_children_under_18: null,
+      num_children_under_5: null, num_with_diabetes: null, health_insurance: null,
+      snap_benefits: null, receives_texts: null, want_text_updates: null,
+      id_confirmed: null, bag_received: null, first_visit_date: null, created_by: null,
+    });
+    const visitData = { family_id: familyId, visit_date: '2026-07-22', picked_up_by_phone: null, volunteer_id: null };
+    const vid1 = await insertVisit(db, visitData, 'visit-idem-001');
+    const vid2 = await insertVisit(db, visitData, 'visit-idem-001');
+    expect(vid1).toBe(vid2);
+  });
+});
+
 describe('insertVisit + getVisitsByFamily', () => {
   it('logs a visit and retrieves it', async () => {
     const db = (env as unknown as Env).DB;

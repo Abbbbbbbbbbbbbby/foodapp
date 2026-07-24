@@ -12,6 +12,10 @@ describe('getAmi', () => {
     expect(getAmi(8)).toBe(127820);
     expect(getAmi(10)).toBe(127820);
   });
+  it('clamps at 1 for zero or negative family size', () => {
+    expect(getAmi(0)).toBe(59347);
+    expect(getAmi(-1)).toBe(59347);
+  });
 });
 
 describe('calcAmiBracket', () => {

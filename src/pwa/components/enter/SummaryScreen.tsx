@@ -21,6 +21,7 @@ function distributionCount(families: SummaryFamily[]): number {
 export default function SummaryScreen({ families, onNext }: SummaryScreenProps) {
   const [bagsMarked, setBagsMarked] = useState(false);
   const [marking, setMarking] = useState(false);
+  const [bagError, setBagError] = useState<string | null>(null);
 
   const distCount = distributionCount(families);
   const hasLarge = families.some(f => (f.num_people ?? 0) > 5);
@@ -28,14 +29,29 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
   const bagCount = bagsMarked ? 0 : needBag.length;
 
   async function handleMarkBags() {
+    setBagError(null);
     setMarking(true);
+    // Families without a persisted id (queue-only entries) cannot be PATCH'd yet
+    const withId = needBag.filter(f => f.id !== '');
+    const withoutId = needBag.filter(f => f.id === '');
     try {
       await Promise.all(
-        needBag
-          .filter(f => f.id)
-          .map(f => api.patch(`/api/families/${f.id}`, { bag_received: true }))
+        withId.map(f => api.patch(`/api/families/${f.id}`, { bag_received: true }))
       );
       setBagsMarked(true);
+      if (withoutId.length > 0) {
+        // These families haven't synced yet so there is no server id to PATCH.
+        // Bag status cannot be recorded for them until they sync and re-appear
+        // in the system. Inform the volunteer plainly rather than promise a
+        // background update that isn't wired up.
+        setBagError(
+          `${withoutId.length} family record(s) are still pending sync — bag status cannot be recorded until they upload. Note it manually for now.`
+        );
+      }
+    } catch (err) {
+      setBagError(
+        err instanceof Error ? err.message : 'Failed to save — check your connection and try again.'
+      );
     } finally {
       setMarking(false);
     }
@@ -96,6 +112,12 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
           {bagCount}
         </span>
       </div>
+
+      {bagError && (
+        <p style={{ marginTop: 8, fontSize: 13, color: 'var(--error, #c0392b)', padding: '8px 12px', background: 'var(--error-bg, #fdecea)', borderRadius: 6 }}>
+          {bagError}
+        </p>
+      )}
 
       {bagCount > 0 && (
         <button

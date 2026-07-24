@@ -20,7 +20,7 @@ const AMI_BY_SIZE: Record<number, number> = {
 };
 
 export function getAmi(familySize: number): number {
-  return AMI_BY_SIZE[Math.min(familySize, 7)];
+  return AMI_BY_SIZE[Math.min(Math.max(familySize, 1), 7)];
 }
 
 export function calcAmiBracket(

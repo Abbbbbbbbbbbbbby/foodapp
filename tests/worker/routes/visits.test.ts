@@ -22,6 +22,41 @@ beforeAll(async () => {
   ).bind(testFamilyId).run();
 });
 
+describe('POST /api/visits — malformed JSON', () => {
+  it('returns 400 for non-JSON body', async () => {
+    const res = await SELF.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: 'not json {{{',
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json<{ error: string }>();
+    expect(data.error).toMatch(/JSON/i);
+  });
+});
+
+describe('POST /api/visits — idempotency', () => {
+  it('returns the same id for the same idempotency_key', async () => {
+    const key = `visit-idem-${Date.now()}`;
+    const body = { family_id: testFamilyId, idempotency_key: key };
+    const r1 = await SELF.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify(body),
+    });
+    const r2 = await SELF.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify(body),
+    });
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    const d1 = await r1.json<{ id: string }>();
+    const d2 = await r2.json<{ id: string }>();
+    expect(d1.id).toBe(d2.id);
+  });
+});
+
 describe('POST /api/visits', () => {
   it('returns 401 without auth', async () => {
     const res = await SELF.fetch('http://example.com/api/visits', {

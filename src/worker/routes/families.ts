@@ -2,9 +2,28 @@ import type { Env } from '../schema';
 import { getAuthContext } from '../middleware';
 import {
   searchFamilies, getFamiliesForPickup, getFamilyById,
-  insertFamily, updateFamily,
+  insertFamily, updateFamily, normalizePhone,
 } from '../db';
-import type { NewFamily } from '../schema';
+import type { NewFamily, YesNoDeclined, AmiBracket } from '../schema';
+
+const YES_NO_DECLINED = new Set<string>(['yes', 'no', 'declined']);
+const AMI_BRACKETS = new Set<string>(['<30%', '30-50%', '50-80%', '80-120%', '>120%', 'declined']);
+
+function validateEnums(body: Partial<NewFamily>): string | null {
+  if (body.hispanic !== undefined && body.hispanic !== null && !YES_NO_DECLINED.has(body.hispanic))
+    return `invalid hispanic value: ${body.hispanic}`;
+  if (body.health_insurance !== undefined && body.health_insurance !== null && !YES_NO_DECLINED.has(body.health_insurance))
+    return `invalid health_insurance value: ${body.health_insurance}`;
+  if (body.snap_benefits !== undefined && body.snap_benefits !== null && !YES_NO_DECLINED.has(body.snap_benefits))
+    return `invalid snap_benefits value: ${body.snap_benefits}`;
+  if (body.ami_bracket !== undefined && body.ami_bracket !== null && !AMI_BRACKETS.has(body.ami_bracket))
+    return `invalid ami_bracket value: ${body.ami_bracket}`;
+  if (body.language !== undefined && body.language !== null && typeof body.language !== 'string')
+    return 'language must be a string';
+  if (body.num_people !== undefined && body.num_people !== null && typeof body.num_people !== 'number')
+    return 'num_people must be a number';
+  return null;
+}
 
 export async function handleFamilyRoutes(
   request: Request,
@@ -62,10 +81,18 @@ async function handleGet(request: Request, env: Env, id: string): Promise<Respon
 async function handleCreate(request: Request, env: Env): Promise<Response> {
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  const body = await request.json<Partial<NewFamily> & { proxy?: { proxy_name: string; proxy_phone: string | null } }>();
+  let body: Partial<NewFamily> & { idempotency_key?: string; proxy?: { proxy_name: string; proxy_phone: string | null } };
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   if (!body.name?.trim()) {
     return Response.json({ error: 'name is required' }, { status: 400 });
   }
+  const enumError = validateEnums(body);
+  if (enumError) return Response.json({ error: enumError }, { status: 400 });
+
   const data: NewFamily = {
     name: body.name.trim(),
     phone: body.phone ?? null,
@@ -74,14 +101,14 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     date_of_birth: body.date_of_birth ?? null,
     language: body.language ?? null,
     ethnicity: body.ethnicity ?? null,
-    hispanic: body.hispanic ?? null,
-    ami_bracket: body.ami_bracket ?? null,
+    hispanic: (body.hispanic ?? null) as YesNoDeclined | null,
+    ami_bracket: (body.ami_bracket ?? null) as AmiBracket | null,
     num_people: body.num_people ?? null,
     num_children_under_18: body.num_children_under_18 ?? null,
     num_children_under_5: body.num_children_under_5 ?? null,
     num_with_diabetes: body.num_with_diabetes ?? null,
-    health_insurance: body.health_insurance ?? null,
-    snap_benefits: body.snap_benefits ?? null,
+    health_insurance: (body.health_insurance ?? null) as YesNoDeclined | null,
+    snap_benefits: (body.snap_benefits ?? null) as YesNoDeclined | null,
     receives_texts: body.receives_texts ?? null,
     want_text_updates: body.want_text_updates ?? null,
     id_confirmed: body.id_confirmed ?? null,
@@ -89,14 +116,37 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     first_visit_date: body.first_visit_date ?? null,
     created_by: ctx.userId,
   };
-  const id = await insertFamily(env.DB, data);
-  if (body.proxy) {
-    const proxyId = crypto.randomUUID().replace(/-/g, '');
-    await env.DB.prepare(
-      `INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
-    ).bind(proxyId, id, body.proxy.proxy_name, body.proxy.proxy_phone).run();
+
+  const idempotencyKey = typeof body.idempotency_key === 'string' ? body.idempotency_key : undefined;
+
+  // Check for existing record before insert so we can skip the proxy on replay
+  let wasReplay = false;
+  if (idempotencyKey) {
+    const prior = await env.DB.prepare(
+      `SELECT id FROM families WHERE idempotency_key = ?`
+    ).bind(idempotencyKey).first<{ id: string }>();
+    wasReplay = !!prior;
   }
-  return Response.json({ id }, { status: 201 });
+
+  const id = await insertFamily(env.DB, data, idempotencyKey);
+
+  if (body.proxy && !wasReplay) {
+    const proxyPhone = normalizePhone(body.proxy.proxy_phone);
+    // Explicit conflict check: the unique index on (family_id, proxy_phone) prevents
+    // duplicate rows but only surfaces it as a thrown error, so we skip gracefully.
+    const existingProxy = await env.DB.prepare(
+      `SELECT 1 FROM proxies WHERE family_id = ? AND proxy_phone IS ? LIMIT 1`
+    ).bind(id, proxyPhone).first();
+    if (!existingProxy) {
+      const proxyId = crypto.randomUUID().replace(/-/g, '');
+      await env.DB.prepare(
+        `INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
+      ).bind(proxyId, id, body.proxy.proxy_name, proxyPhone).run();
+    }
+  }
+  // 200 for idempotent replay, 201 for new creation
+  const status = idempotencyKey ? 200 : 201;
+  return Response.json({ id }, { status });
 }
 
 async function handleUpdate(request: Request, env: Env, id: string): Promise<Response> {
@@ -108,6 +158,8 @@ async function handleUpdate(request: Request, env: Env, id: string): Promise<Res
   } catch {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 });
   }
+  const enumError = validateEnums(body);
+  if (enumError) return Response.json({ error: enumError }, { status: 400 });
   await updateFamily(env.DB, id, body);
   return Response.json({ ok: true });
 }

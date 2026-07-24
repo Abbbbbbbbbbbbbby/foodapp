@@ -75,6 +75,67 @@ describe('GET /api/families/pickup', () => {
   });
 });
 
+describe('POST /api/families — malformed JSON', () => {
+  it('returns 400 for non-JSON body', async () => {
+    const res = await SELF.fetch('http://example.com/api/families', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: 'not json {{{',
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json<{ error: string }>();
+    expect(data.error).toMatch(/JSON/i);
+  });
+});
+
+describe('PATCH /api/families/:id — enum validation', () => {
+  it('returns 400 for invalid hispanic value', async () => {
+    const id = await insertFamily('Enum Test');
+    const res = await SELF.fetch(`http://example.com/api/families/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ hispanic: 'maybe' }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json<{ error: string }>();
+    expect(data.error).toContain('hispanic');
+  });
+
+  it('returns 400 for invalid ami_bracket value', async () => {
+    const id = await insertFamily('Enum Test 2');
+    const res = await SELF.fetch(`http://example.com/api/families/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ ami_bracket: 'rich' }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json<{ error: string }>();
+    expect(data.error).toContain('ami_bracket');
+  });
+});
+
+describe('POST /api/families — idempotency', () => {
+  it('returns the same id for the same idempotency_key', async () => {
+    const key = `test-idem-${Date.now()}`;
+    const body = { name: 'Idem Route Family', idempotency_key: key };
+    const r1 = await SELF.fetch('http://example.com/api/families', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify(body),
+    });
+    const r2 = await SELF.fetch('http://example.com/api/families', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify(body),
+    });
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    const d1 = await r1.json<{ id: string }>();
+    const d2 = await r2.json<{ id: string }>();
+    expect(d1.id).toBe(d2.id);
+  });
+});
+
 describe('POST /api/families', () => {
   it('returns 401 without auth', async () => {
     const res = await SELF.fetch('http://example.com/api/families', {
