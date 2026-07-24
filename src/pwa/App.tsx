@@ -7,6 +7,7 @@ import VerifyPage from './pages/VerifyPage';
 import HomePage from './pages/HomePage';
 import EnterPage from './pages/EnterPage';
 import AdminAccountsPage from './pages/AdminAccountsPage';
+import RecordsPage from './pages/RecordsPage';
 
 function ProtectedLayout() {
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -17,6 +18,13 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   const user = getUser();
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== 'admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+function StaffRoute({ children }: { children: React.ReactNode }) {
+  const user = getUser();
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role === 'volunteer') return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -33,6 +41,10 @@ export default function App() {
           <Route
             path="/admin/accounts"
             element={<AdminRoute><AdminAccountsPage /></AdminRoute>}
+          />
+          <Route
+            path="/records"
+            element={<StaffRoute><RecordsPage /></StaffRoute>}
           />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -10,6 +10,8 @@ import schema2 from '../../migrations/0002_question_settings.sql?raw';
 import schema3 from '../../migrations/0003_idempotency.sql?raw';
 // @ts-expect-error - Vite ?raw import
 import schema4 from '../../migrations/0004_name_normalized_proxy_unique.sql?raw';
+// @ts-expect-error - Vite ?raw import
+import schema5 from '../../migrations/0005_records_audit.sql?raw';
 
 function applySchema(sql: string): string[] {
   return (sql as string)
@@ -20,7 +22,7 @@ function applySchema(sql: string): string[] {
 
 beforeAll(async () => {
   const db = (env as unknown as Env).DB;
-  for (const stmt of [...applySchema(schema1), ...applySchema(schema2), ...applySchema(schema3), ...applySchema(schema4)]) {
+  for (const stmt of [...applySchema(schema1), ...applySchema(schema2), ...applySchema(schema3), ...applySchema(schema4), ...applySchema(schema5)]) {
     await db.prepare(stmt).run();
   }
 });

@@ -13,8 +13,8 @@ export default function HomePage() {
           Enter Data / Ingresar datos
         </button>
         {(user.role === 'staff' || user.role === 'admin') && (
-          <button className="btn-secondary btn-large" disabled>
-            View Records / Ver registros (coming soon)
+          <button className="btn-secondary btn-large" onClick={() => navigate('/records')}>
+            View Records / Ver registros
           </button>
         )}
         {user.role === 'admin' && (
