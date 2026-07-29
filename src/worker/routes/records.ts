@@ -2,6 +2,7 @@ import type { Env } from '../schema';
 import { getAuthContext } from '../middleware';
 import type { AuthContext } from '../middleware';
 import { subscribeRecipient } from '../messageeverywhere';
+import { normalizeName } from '../db';
 
 type Role = 'admin' | 'staff' | 'volunteer';
 
@@ -200,8 +201,12 @@ async function handlePatchVisit(
   sets.push('updated_by = ?', "updated_at = datetime('now')");
   vals.push(ctx.userId, id);
 
-  await env.DB.prepare(`UPDATE visits SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
-  await logChange(env, 'visits', id, ctx.userId, changes);
+  const changeId = crypto.randomUUID().replace(/-/g, '');
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE visits SET ${sets.join(', ')} WHERE id = ?`).bind(...vals),
+    env.DB.prepare(`INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, ?, ?, ?, ?)`)
+      .bind(changeId, 'visits', id, ctx.userId, JSON.stringify(changes)),
+  ]);
   return Response.json({ ok: true });
 }
 
@@ -224,6 +229,7 @@ async function handlePatchFamily(
   const changes: Record<string, { old: unknown; new: unknown }> = {};
   const sets: string[] = [];
   const vals: unknown[] = [];
+  let nameChanged = false;
 
   for (const f of fields) {
     const oldVal = current[f];
@@ -232,16 +238,26 @@ async function handlePatchFamily(
       changes[f] = { old: oldVal, new: body[f] };
       sets.push(`${f} = ?`);
       vals.push(newVal);
+      if (f === 'name') nameChanged = true;
     }
   }
 
   if (sets.length === 0) return Response.json({ ok: true });
 
+  if (nameChanged && typeof body.name === 'string') {
+    sets.push('name_normalized = ?');
+    vals.push(normalizeName(body.name));
+  }
+
   sets.push('updated_by = ?', "updated_at = datetime('now')");
   vals.push(ctx.userId, id);
 
-  await env.DB.prepare(`UPDATE families SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
-  await logChange(env, 'families', id, ctx.userId, changes);
+  const changeId = crypto.randomUUID().replace(/-/g, '');
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE families SET ${sets.join(', ')} WHERE id = ?`).bind(...vals),
+    env.DB.prepare(`INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, ?, ?, ?, ?)`)
+      .bind(changeId, 'families', id, ctx.userId, JSON.stringify(changes)),
+  ]);
 
   if (env.MESSAGE_EVERYWHERE_API_KEY && changes.want_text_updates?.new === true
       && current.phone) {
