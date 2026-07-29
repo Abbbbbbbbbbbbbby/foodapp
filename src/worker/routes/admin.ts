@@ -182,11 +182,12 @@ async function handleImport(
   const now = new Date().toISOString();
   let imported = 0;
   let visits_added = 0;
-  let skipped = 0;
+  let skipped_existing = 0;
+  let skipped_no_name = 0;
   const errors: { name: string; error: string }[] = [];
 
   for (const row of rows) {
-    if (!row.name?.trim()) { skipped++; continue; }
+    if (!row.name?.trim()) { skipped_no_name++; continue; }
 
     const phone = normalizePhone(row.phone);
 
@@ -218,7 +219,7 @@ async function handleImport(
           errors.push({ name: row.name, error: e instanceof Error ? e.message : 'Unknown error' });
         }
       }
-      skipped++;
+      skipped_existing++;
       continue;
     }
 
@@ -286,5 +287,5 @@ async function handleImport(
     }
   }
 
-  return Response.json({ imported, visits_added, skipped, errors });
+  return Response.json({ imported, visits_added, skipped_existing, skipped_no_name, errors });
 }

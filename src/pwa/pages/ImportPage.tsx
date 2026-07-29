@@ -41,7 +41,8 @@ interface ParseWarning {
 interface ImportResult {
   imported: number;
   visits_added: number;
-  skipped: number;
+  skipped_existing: number;
+  skipped_no_name: number;
   errors: { name: string; error: string }[];
 }
 
@@ -464,10 +465,18 @@ export default function ImportPage() {
               <span className="import-stat-n">{result.visits_added}</span>
               <span className="import-stat-label">visits added to existing families</span>
             </div>
-            <div className="import-stat">
-              <span className="import-stat-n">{result.skipped}</span>
-              <span className="import-stat-label">skipped (no name)</span>
-            </div>
+            {result.skipped_existing > 0 && (
+              <div className="import-stat">
+                <span className="import-stat-n">{result.skipped_existing}</span>
+                <span className="import-stat-label">already in database</span>
+              </div>
+            )}
+            {result.skipped_no_name > 0 && (
+              <div className="import-stat">
+                <span className="import-stat-n">{result.skipped_no_name}</span>
+                <span className="import-stat-label">skipped (no name)</span>
+              </div>
+            )}
             {result.errors.length > 0 && (
               <div className="import-stat import-stat-warn">
                 <span className="import-stat-n">{result.errors.length}</span>
