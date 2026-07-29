@@ -79,10 +79,11 @@ input, select, textarea {
   padding: 12px;
   width: 100%;
 }
-input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 4px; }
 
 label { display: flex; flex-direction: column; font-size: 14px; color: var(--text-muted); }
-label > * + * { margin-top: 6px; }
+label > * + * { margin-top: 10px; }
+label > input, label > select, label > textarea { margin-top: 8px; }
 
 .error { color: var(--danger); font-size: 14px; margin-top: 8px; }
 .error.banner {
