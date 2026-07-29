@@ -66,20 +66,20 @@ export async function insertFamily(
   try {
     await db.prepare(`
       INSERT INTO families (
-        id, name, name_normalized, phone, address, zip_code, date_of_birth, language, ethnicity,
+        id, name, phone, address, zip_code, date_of_birth, language, ethnicity,
         hispanic, ami_bracket, num_people, num_children_under_18, num_children_under_5,
         num_with_diabetes, health_insurance, snap_benefits, receives_texts,
         want_text_updates, id_confirmed, bag_received, first_visit_date,
         created_by, created_at, updated_at, idempotency_key
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?
       )
     `).bind(
-      id, data.name, normalizeName(data.name),
+      id, data.name,
       normalizePhone(data.phone), data.address, data.zip_code,
       data.date_of_birth, data.language, data.ethnicity,
       data.hispanic, data.ami_bracket, data.num_people, data.num_children_under_18,
@@ -125,13 +125,7 @@ export async function updateFamily(
   const entries = Object.entries(data).filter(([k]) => UPDATABLE_FAMILY_COLUMNS.has(k));
   if (entries.length === 0) return;
 
-  // When updating name, also update the normalized version for search
-  const updatesName = entries.some(([k]) => k === 'name');
-  const extra: [string, unknown][] = updatesName
-    ? [['name_normalized', normalizeName(data.name as string)]]
-    : [];
-
-  const allEntries = [...entries, ...extra];
+  const allEntries = [...entries];
   const fields = allEntries.map(([k]) => `${k} = ?`).join(', ');
   const values = allEntries.map(([k, v]) =>
     k === 'phone' ? normalizePhone(v as string | null) : v
@@ -187,7 +181,7 @@ export async function searchFamilies(
       SELECT f.*, MAX(v.visit_date) as last_visit_date
       FROM families f
       LEFT JOIN visits v ON v.family_id = f.id
-      WHERE COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\'
+      WHERE LOWER(f.name) LIKE ? ESCAPE '\\'
       GROUP BY f.id
       LIMIT 100
     `).bind(`${prefix}%`).all<Record<string, unknown>>();
