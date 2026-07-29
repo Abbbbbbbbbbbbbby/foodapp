@@ -8,34 +8,49 @@ import IncomeInput from './inputs/IncomeInput';
 
 const TOTAL_STEPS = 11;
 
+const ORDINALS_EN = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+const ORDINALS_ES = ['primera', 'segunda', 'tercera', 'cuarta', 'quinta', 'sexta', 'séptima', 'octava', 'novena', 'décima'];
+function ordinalEn(i: number) { return ORDINALS_EN[i] ?? `${i + 1}th`; }
+function ordinalEs(i: number) { return ORDINALS_ES[i] ?? `${i + 1}ª`; }
+
 const YES_NO_DECLINED = [
-  { value: 'yes', labelEn: 'Yes / Sí', labelEs: 'Sí / Yes' },
+  { value: 'yes', labelEn: 'Yes', labelEs: 'Sí' },
   { value: 'no', labelEn: 'No', labelEs: 'No' },
-  { value: 'declined', labelEn: 'Prefer not to say / Prefiero no responder', labelEs: 'Prefiero no responder' },
+  { value: 'declined', labelEn: "Don't know / Prefer not to say", labelEs: 'No sé / Prefiero no responder' },
 ];
 
 interface TextsStepProps {
+  language?: string | null;
   onComplete: (receivesTexts: boolean | null, wantUpdates: boolean | null) => void;
   onBack: () => void;
 }
 
-function TextsStep({ onComplete, onBack }: TextsStepProps) {
+function TextsStep({ language, onComplete, onBack }: TextsStepProps) {
   const [subStep, setSubStep] = useState(0);
+  const [receivesTexts, setReceivesTexts] = useState<boolean | null>(null);
+
+  const isSpanish = language?.toLowerCase().startsWith('es');
+
+  function yesLabel() { return isSpanish ? <><span>Sí</span><span style={{ fontSize: 14, color: 'var(--text-muted)' }}>Yes</span></> : <><span>Yes</span><span style={{ fontSize: 14, color: 'var(--text-muted)' }}>Sí</span></>; }
+  function noLabel() { return <span>No</span>; }
+  function dkLabel() { return isSpanish
+    ? <><span>No sé / Prefiero no responder</span><span style={{ fontSize: 14, color: 'var(--text-muted)' }}>{"Don't know / Prefer not to say"}</span></>
+    : <><span>{"Don't know / Prefer not to say"}</span><span style={{ fontSize: 14, color: 'var(--text-muted)' }}>No sé / Prefiero no responder</span></>; }
 
   if (subStep === 0) {
     return (
       <div className="wizard-step">
-        <p className="question-en">Do you currently receive text messages?</p>
-        <p className="question-es">¿Actualmente recibe mensajes de texto?</p>
+        <p className="question-en">Do you currently receive weekly text messages from us?</p>
+        <p className="question-es">¿Actualmente recibe mensajes de texto semanales de nuestra parte?</p>
         <div className="option-list">
-          <button className="btn-option" onClick={() => setSubStep(1)}>
-            Yes / Sí
+          <button className="btn-option" onClick={() => onComplete(true, null)}>
+            {yesLabel()}
           </button>
-          <button className="btn-option" onClick={() => onComplete(false, null)}>
-            No
+          <button className="btn-option" onClick={() => { setReceivesTexts(false); setSubStep(1); }}>
+            {noLabel()}
           </button>
-          <button className="btn-option" onClick={() => onComplete(null, null)}>
-            Prefer not to say / Prefiero no responder
+          <button className="btn-option" onClick={() => { setReceivesTexts(null); setSubStep(1); }}>
+            {dkLabel()}
           </button>
         </div>
         <div className="step-actions"><button className="btn-ghost" onClick={onBack}>Back / Atrás</button></div>
@@ -46,17 +61,17 @@ function TextsStep({ onComplete, onBack }: TextsStepProps) {
   return (
     <div className="wizard-step">
       <p className="question-en">
-        Would you like to receive text updates about food distribution events?
+        Would you like to receive weekly text updates about food distribution events?
       </p>
       <p className="question-es">
-        ¿Le gustaría recibir actualizaciones por mensaje de texto sobre eventos de distribución de alimentos?
+        ¿Le gustaría recibir actualizaciones semanales por mensaje de texto sobre eventos de distribución de alimentos?
       </p>
       <div className="option-list">
-        <button className="btn-option" onClick={() => onComplete(true, true)}>
-          Yes / Sí
+        <button className="btn-option" onClick={() => onComplete(receivesTexts, true)}>
+          {yesLabel()}
         </button>
-        <button className="btn-option" onClick={() => onComplete(true, false)}>
-          No
+        <button className="btn-option" onClick={() => onComplete(receivesTexts, false)}>
+          {noLabel()}
         </button>
       </div>
       <div className="step-actions">
@@ -112,8 +127,12 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
 
       {step === 0 && (
         <TextInput
-          questionEn="What is your full name?"
-          questionEs="¿Cuál es su nombre completo?"
+          questionEn={total === 1
+            ? 'What is the full name of the person receiving the food?'
+            : `What is the full name of the person receiving the food in the ${ordinalEn(familyIndex)} family?`}
+          questionEs={total === 1
+            ? '¿Cuál es el nombre completo de la persona que recibe los alimentos?'
+            : `¿Cuál es el nombre completo de la persona que recibe los alimentos en la ${ordinalEs(familyIndex)} familia?`}
           value={data.name ?? ''}
           onChange={v => set('name', v)}
           onNext={next}
@@ -141,7 +160,7 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
           onNext={next}
           onBack={goBack}
           onSkip={() => { set('zip_code', null); next(); }}
-          inputMode="numeric"
+          type="tel"
         />
       )}
       {step === 3 && (
@@ -153,8 +172,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
           options={[
             { value: 'en', labelEn: 'English', labelEs: 'English' },
             { value: 'es', labelEn: 'Español', labelEs: 'Español' },
-            { value: 'other', labelEn: 'Other / Otro', labelEs: 'Otro / Other' },
-            { value: 'declined', labelEn: 'Prefer not to say / Prefiero no responder', labelEs: 'Prefiero no responder' },
+            { value: 'other', labelEn: 'Other', labelEs: 'Otro' },
+            { value: 'declined', labelEn: "Don't know / Prefer not to say", labelEs: 'No sé / Prefiero no responder' },
           ]}
         />
       )}
@@ -169,28 +188,38 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
           overflowMin={7}
         />
       )}
-      {step === 5 && (
-        <NumberInput
-          questionEn="How many children under 18 live in your household?"
-          questionEs="¿Cuántos niños menores de 18 años viven en su hogar?"
-          onChange={v => { set('num_children_under_18', v); next(); }}
-          onBack={goBack}
-          options={[0, 1, 2, 3, 4, 5]}
-          overflowLabel="6+"
-          overflowMin={6}
-        />
-      )}
-      {step === 6 && (
-        <NumberInput
-          questionEn="How many children under 5 live in your household?"
-          questionEs="¿Cuántos niños menores de 5 años viven en su hogar?"
-          onChange={v => { set('num_children_under_5', v); next(); }}
-          onBack={goBack}
-          options={[0, 1, 2, 3, 4]}
-          overflowLabel="5+"
-          overflowMin={5}
-        />
-      )}
+      {step === 5 && (() => {
+        const max18 = data.num_people ?? 6;
+        const opts18 = Array.from({ length: Math.min(max18, 6) + 1 }, (_, i) => i);
+        const hasOverflow18 = max18 > 6;
+        return (
+          <NumberInput
+            questionEn="How many children under 18 live in your household?"
+            questionEs="¿Cuántos niños menores de 18 años viven en su hogar?"
+            onChange={v => { set('num_children_under_18', v); next(); }}
+            onBack={goBack}
+            options={opts18}
+            overflowLabel={hasOverflow18 ? '7+' : undefined}
+            overflowMin={hasOverflow18 ? 7 : undefined}
+          />
+        );
+      })()}
+      {step === 6 && (() => {
+        const max5 = data.num_children_under_18 ?? 5;
+        const opts5 = Array.from({ length: Math.min(max5, 5) + 1 }, (_, i) => i);
+        const hasOverflow5 = max5 > 5;
+        return (
+          <NumberInput
+            questionEn="How many children under 5 live in your household?"
+            questionEs="¿Cuántos niños menores de 5 años viven en su hogar?"
+            onChange={v => { set('num_children_under_5', v); next(); }}
+            onBack={goBack}
+            options={opts5}
+            overflowLabel={hasOverflow5 ? '6+' : undefined}
+            overflowMin={hasOverflow5 ? 6 : undefined}
+          />
+        );
+      })()}
       {step === 7 && (
         <IncomeInput
           questionEn="How much money does your entire household earn in a week, two weeks, a month, or a year?"
@@ -208,6 +237,7 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
           onChange={v => { set('snap_benefits', v as YesNoDeclined); next(); }}
           onBack={goBack}
           options={YES_NO_DECLINED}
+          language={data.language}
         />
       )}
       {step === 9 && (
@@ -217,10 +247,12 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
           onChange={v => { set('health_insurance', v as YesNoDeclined); next(); }}
           onBack={goBack}
           options={YES_NO_DECLINED}
+          language={data.language}
         />
       )}
       {step === 10 && (
         <TextsStep
+          language={data.language}
           onComplete={(rt, wu) => {
             if (!submitting) finish({ ...data, receives_texts: rt, want_text_updates: wu });
           }}

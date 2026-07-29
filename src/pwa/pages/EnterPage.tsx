@@ -297,6 +297,8 @@ export default function EnterPage() {
       )}
       {view.type === 'proxy-question' && (
         <ProxyQuestion
+          familyIndex={view.familyIndex}
+          total={view.total}
           prefillName={view.prefillName}
           prefillPhone={view.prefillPhone}
           onAnswer={handleProxyAnswer}

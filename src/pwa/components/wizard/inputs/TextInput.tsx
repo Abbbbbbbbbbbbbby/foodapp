@@ -7,18 +7,19 @@ interface TextInputProps {
   onBack: () => void;
   onSkip?: () => void;
   required?: boolean;
+  type?: 'text' | 'tel';
   inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
 }
 
 export default function TextInput({
-  questionEn, questionEs, value, onChange, onNext, onBack, onSkip, required, inputMode = 'text',
+  questionEn, questionEs, value, onChange, onNext, onBack, onSkip, required, type = 'text', inputMode = 'text',
 }: TextInputProps) {
   return (
     <div className="wizard-step">
       <p className="question-en">{questionEn}</p>
       <p className="question-es">{questionEs}</p>
       <input
-        type="text"
+        type={type}
         inputMode={inputMode}
         value={value}
         onChange={e => onChange(e.target.value)}

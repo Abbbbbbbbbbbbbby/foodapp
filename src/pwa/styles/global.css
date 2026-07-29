@@ -94,7 +94,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   margin-bottom: 16px;
 }
 
-.question-en { font-size: 22px; font-weight: 600; line-height: 1.3; margin-bottom: 8px; }
+.question-en { font-size: 22px; font-weight: 600; line-height: 1.3; margin-bottom: 2px; }
 .question-es { font-size: 22px; line-height: 1.3; color: var(--text-muted); margin-bottom: 24px; }
 
 .wizard-step { display: flex; flex-direction: column; padding: 20px 16px; }
@@ -262,11 +262,13 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 
 .admin-header {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   padding: 8px 0 16px;
+  gap: 6px;
 }
-.admin-back { padding: 8px 12px; min-height: 40px; flex-shrink: 0; }
-.admin-title { font-size: 20px; font-weight: 700; flex: 1; margin-left: 4px; }
+.admin-back { padding: 8px 12px; min-height: 40px; }
+.admin-title { font-size: 20px; font-weight: 700; margin: 0; }
 .admin-count {
   font-size: 13px;
   color: var(--text-muted);
@@ -453,10 +455,14 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   display: -webkit-box;
   display: -ms-flexbox;
   display: flex;
-  -webkit-box-align: center;
-  -ms-flex-align: center;
-  align-items: center;
-  gap: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-box-direction: normal;
+  -ms-flex-direction: column;
+  flex-direction: column;
+  -webkit-box-align: start;
+  -ms-flex-align: start;
+  align-items: flex-start;
+  gap: 6px;
   margin-bottom: 20px;
 }
 
@@ -874,10 +880,14 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   display: -webkit-box;
   display: -ms-flexbox;
   display: flex;
-  -webkit-box-align: center;
-  -ms-flex-align: center;
-  align-items: center;
-  gap: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-box-direction: normal;
+  -ms-flex-direction: column;
+  flex-direction: column;
+  -webkit-box-align: start;
+  -ms-flex-align: start;
+  align-items: flex-start;
+  gap: 6px;
   margin-bottom: 24px;
 }
 

@@ -255,7 +255,7 @@ export default function DuplicatesPage() {
 
   return (
     <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 16px 40px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '20px 0 16px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, padding: '20px 0 16px' }}>
         <button className="btn-ghost" onClick={() => navigate('/')}>← Back</button>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Duplicate Families</h1>
         {!loading && (

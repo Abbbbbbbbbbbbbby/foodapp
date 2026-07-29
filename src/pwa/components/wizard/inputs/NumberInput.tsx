@@ -6,8 +6,8 @@ interface NumberInputProps {
   onChange: (v: number) => void;
   onBack: () => void;
   options: number[];
-  overflowLabel: string;
-  overflowMin: number;
+  overflowLabel?: string;
+  overflowMin?: number;
 }
 
 export default function NumberInput({
@@ -16,14 +16,14 @@ export default function NumberInput({
   const [showCustom, setShowCustom] = useState(false);
   const [custom, setCustom] = useState('');
 
-  if (showCustom) {
+  if (showCustom && overflowMin !== undefined) {
     const n = parseInt(custom);
     return (
       <div className="wizard-step">
         <p className="question-en">{questionEn}</p>
         <p className="question-es">{questionEs}</p>
         <input
-          type="number"
+          type="tel"
           inputMode="numeric"
           min={overflowMin}
           value={custom}
@@ -52,7 +52,9 @@ export default function NumberInput({
         {options.map(n => (
           <button key={n} className="btn-tap" onClick={() => onChange(n)}>{n}</button>
         ))}
-        <button className="btn-tap" onClick={() => setShowCustom(true)}>{overflowLabel}</button>
+        {overflowLabel && overflowMin !== undefined && (
+          <button className="btn-tap" onClick={() => setShowCustom(true)}>{overflowLabel}</button>
+        )}
       </div>
       <div className="step-actions">
         <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>

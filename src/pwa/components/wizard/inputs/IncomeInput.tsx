@@ -39,7 +39,7 @@ export default function IncomeInput({ questionEn, questionEs, familySize, onChan
         <div className="step-actions">
           <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
           <button className="btn-ghost" onClick={onSkip}>
-            Prefer not to say / Prefiero no responder
+            Don't know / Prefer not to say / No sé / Prefiero no responder
           </button>
         </div>
       </div>
@@ -67,7 +67,7 @@ export default function IncomeInput({ questionEn, questionEs, familySize, onChan
       <div className="step-actions">
         <button className="btn-ghost" onClick={() => setPeriod(null)}>Back / Atrás</button>
         <button className="btn-ghost" onClick={onSkip}>
-          Prefer not to say / Prefiero no responder
+          Don't know / Prefer not to say / No sé / Prefiero no responder
         </button>
         <button
           className="btn-primary"
