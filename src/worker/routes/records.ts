@@ -270,6 +270,7 @@ async function handleDeleteFamily(env: Env, id: string, ctx: AuthContext): Promi
   const visitCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM visits WHERE family_id = ?')
     .bind(id).first<{ n: number }>();
 
+  await env.DB.prepare(`DELETE FROM duplicate_flags WHERE family_a_id = ? OR family_b_id = ?`).bind(id, id).run();
   await env.DB.prepare('DELETE FROM visits WHERE family_id = ?').bind(id).run();
   await env.DB.prepare('DELETE FROM proxies WHERE family_id = ?').bind(id).run();
   await env.DB.prepare('DELETE FROM families WHERE id = ?').bind(id).run();

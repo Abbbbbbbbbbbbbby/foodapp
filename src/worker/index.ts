@@ -5,6 +5,7 @@ import { handleVisitRoutes } from './routes/visits';
 import { handleQuestionRoutes } from './routes/questions';
 import { handleAdminRoutes } from './routes/admin';
 import { handleRecordRoutes } from './routes/records';
+import { handleDuplicateRoutes } from './routes/duplicates';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -33,6 +34,9 @@ export default {
 
       const adminResponse = await handleAdminRoutes(request, env, url.pathname);
       if (adminResponse) return cors(adminResponse);
+
+      const duplicateResponse = await handleDuplicateRoutes(request, env, url.pathname);
+      if (duplicateResponse) return cors(duplicateResponse);
 
       const recordResponse = await handleRecordRoutes(request, env, url.pathname);
       if (recordResponse) return cors(recordResponse);

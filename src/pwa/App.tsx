@@ -9,6 +9,7 @@ import EnterPage from './pages/EnterPage';
 import AdminAccountsPage from './pages/AdminAccountsPage';
 import RecordsPage from './pages/RecordsPage';
 import ImportPage from './pages/ImportPage';
+import DuplicatesPage from './pages/DuplicatesPage';
 
 function ProtectedLayout() {
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -50,6 +51,10 @@ export default function App() {
           <Route
             path="/admin/import"
             element={<AdminRoute><ImportPage /></AdminRoute>}
+          />
+          <Route
+            path="/admin/duplicates"
+            element={<AdminRoute><DuplicatesPage /></AdminRoute>}
           />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
