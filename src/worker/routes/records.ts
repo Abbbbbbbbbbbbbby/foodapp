@@ -31,6 +31,19 @@ function allowedVisitFields(role: Role): Set<string> {
   return new Set();
 }
 
+async function logChange(
+  env: Env,
+  table: string,
+  recordId: string,
+  changedBy: string,
+  changes: Record<string, { old: unknown; new: unknown }>
+) {
+  const id = crypto.randomUUID().replace(/-/g, '');
+  await env.DB.prepare(
+    `INSERT INTO record_changes (id, table_name, record_id, changed_by, changes)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(id, table, recordId, changedBy, JSON.stringify(changes)).run();
+}
 
 export async function handleRecordRoutes(
   request: Request,
@@ -72,6 +85,12 @@ export async function handleRecordRoutes(
     }
   }
 
+  const changesMatch = pathname.match(/^\/api\/records\/changes\/(families|visits)\/([^/]+)$/);
+  if (changesMatch && request.method === 'GET') {
+    if (ctx.role !== 'admin') return Response.json({ error: 'Forbidden' }, { status: 403 });
+    return handleGetChanges(env, changesMatch[1], changesMatch[2]);
+  }
+
   return null;
 }
 
@@ -87,18 +106,24 @@ async function handleListVisits(request: Request, env: Env): Promise<Response> {
 
   const sql = `
     SELECT
-      v.id, v.visit_date, v.picked_up_by_phone, v.created_at,
+      v.id, v.visit_date, v.bag_received, v.picked_up_by_phone,
+      v.created_at, v.updated_at, v.updated_by,
       f.id AS family_id, f.name AS family_name, f.phone AS family_phone, f.num_people,
-      u.name AS volunteer_name
+      u.name AS volunteer_name, ub.name AS updated_by_name
     FROM visits v
     JOIN families f ON f.id = v.family_id
     LEFT JOIN users u ON u.id = v.volunteer_id
+    LEFT JOIN users ub ON ub.id = v.updated_by
     ${where}
     ORDER BY v.visit_date DESC, v.created_at DESC
   `;
 
   const result = await env.DB.prepare(sql).bind(...params).all<Record<string, unknown>>();
-  return Response.json({ visits: result.results ?? [] });
+  const visits = (result.results ?? []).map(v => ({
+    ...v,
+    bag_received: v.bag_received === 1 || v.bag_received === true,
+  }));
+  return Response.json({ visits });
 }
 
 async function handleListFamilies(request: Request, env: Env): Promise<Response> {
@@ -108,22 +133,24 @@ async function handleListFamilies(request: Request, env: Env): Promise<Response>
   let where = '';
   const params: string[] = [];
   if (q) {
-    where = "WHERE (LOWER(f.name) LIKE ? ESCAPE '\\' OR f.phone LIKE ?)";
+    where = "WHERE (COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\' OR f.phone LIKE ?)";
     const term = '%' + q.toLowerCase().replace(/[%_\\]/g, '\\$&') + '%';
     params.push(term, '%' + q + '%');
   }
 
   const sql = `
     SELECT
-      f.id, f.name, f.phone, f.num_people, f.created_at, f.updated_at,
+      f.id, f.name, f.phone, f.num_people, f.created_at, f.updated_at, f.updated_by,
       f.hispanic, f.health_insurance, f.snap_benefits, f.ami_bracket,
       f.num_children_under_18, f.num_children_under_5, f.num_with_diabetes,
       f.receives_texts, f.want_text_updates, f.id_confirmed, f.first_visit_date,
       f.address, f.zip_code, f.date_of_birth, f.language, f.ethnicity,
       COUNT(v.id) AS visit_count,
-      MAX(v.visit_date) AS last_visit_date
+      MAX(v.visit_date) AS last_visit_date,
+      ub.name AS updated_by_name
     FROM families f
     LEFT JOIN visits v ON v.family_id = f.id
+    LEFT JOIN users ub ON ub.id = f.updated_by
     ${where}
     GROUP BY f.id
     ORDER BY last_visit_date DESC NULLS LAST, f.name ASC
@@ -170,9 +197,11 @@ async function handlePatchVisit(
 
   if (sets.length === 0) return Response.json({ ok: true });
 
-  vals.push(id);
+  sets.push('updated_by = ?', "updated_at = datetime('now')");
+  vals.push(ctx.userId, id);
 
   await env.DB.prepare(`UPDATE visits SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+  await logChange(env, 'visits', id, ctx.userId, changes);
   return Response.json({ ok: true });
 }
 
@@ -208,10 +237,11 @@ async function handlePatchFamily(
 
   if (sets.length === 0) return Response.json({ ok: true });
 
-  sets.push("updated_at = datetime('now')");
-  vals.push(id);
+  sets.push('updated_by = ?', "updated_at = datetime('now')");
+  vals.push(ctx.userId, id);
 
   await env.DB.prepare(`UPDATE families SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+  await logChange(env, 'families', id, ctx.userId, changes);
 
   if (env.MESSAGE_EVERYWHERE_API_KEY && changes.want_text_updates?.new === true
       && current.phone) {
@@ -243,11 +273,19 @@ async function handleAddVisit(
 
   const id = crypto.randomUUID().replace(/-/g, '');
   await env.DB.prepare(
-    `INSERT INTO visits (id, family_id, visit_date, volunteer_id) VALUES (?, ?, ?, ?)`
+    `INSERT INTO visits (id, family_id, visit_date, volunteer_id, bag_received, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).bind(
     id, body.family_id, body.visit_date,
-    body.volunteer_id ?? ctx.userId
+    body.volunteer_id ?? ctx.userId,
+    body.bag_received ? 1 : 0,
+    ctx.userId
   ).run();
+
+  await logChange(env, 'visits', id, ctx.userId, {
+    _action: { old: null, new: 'created (backdated)' },
+    visit_date: { old: null, new: body.visit_date },
+  });
 
   return Response.json({ id }, { status: 201 });
 }
@@ -257,6 +295,12 @@ async function handleDeleteVisit(env: Env, id: string, ctx: AuthContext): Promis
     `SELECT v.*, f.name AS family_name FROM visits v JOIN families f ON f.id = v.family_id WHERE v.id = ?`
   ).bind(id).first<Record<string, unknown>>();
   if (!visit) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  await logChange(env, 'visits', id, ctx.userId, {
+    _action: { old: 'exists', new: 'deleted' },
+    visit_date: { old: visit.visit_date, new: null },
+    family_name: { old: visit.family_name, new: null },
+  });
 
   await env.DB.prepare('DELETE FROM visits WHERE id = ?').bind(id).run();
   return Response.json({ ok: true });
@@ -270,6 +314,12 @@ async function handleDeleteFamily(env: Env, id: string, ctx: AuthContext): Promi
   const visitCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM visits WHERE family_id = ?')
     .bind(id).first<{ n: number }>();
 
+  await logChange(env, 'families', id, ctx.userId, {
+    _action: { old: 'exists', new: 'deleted' },
+    name: { old: family.name, new: null },
+    visit_count: { old: visitCount?.n ?? 0, new: null },
+  });
+
   await env.DB.prepare(`DELETE FROM duplicate_flags WHERE family_a_id = ? OR family_b_id = ?`).bind(id, id).run();
   await env.DB.prepare('DELETE FROM visits WHERE family_id = ?').bind(id).run();
   await env.DB.prepare('DELETE FROM proxies WHERE family_id = ?').bind(id).run();
@@ -277,3 +327,18 @@ async function handleDeleteFamily(env: Env, id: string, ctx: AuthContext): Promi
   return Response.json({ ok: true });
 }
 
+async function handleGetChanges(env: Env, table: string, recordId: string): Promise<Response> {
+  const result = await env.DB.prepare(`
+    SELECT rc.id, rc.changed_at, rc.changes, u.name AS changed_by_name
+    FROM record_changes rc
+    LEFT JOIN users u ON u.id = rc.changed_by
+    WHERE rc.table_name = ? AND rc.record_id = ?
+    ORDER BY rc.changed_at DESC
+  `).bind(table, recordId).all<{ id: string; changed_at: string; changes: string; changed_by_name: string }>();
+
+  const entries = (result.results ?? []).map(r => ({
+    ...r,
+    changes: JSON.parse(r.changes) as Record<string, { old: unknown; new: unknown }>,
+  }));
+  return Response.json({ changes: entries });
+}
