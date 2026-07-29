@@ -38,7 +38,9 @@ button {
 .btn-primary { background: var(--accent); color: #000; font-weight: 700; }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
-.btn-ghost { background: transparent; color: var(--text-muted); min-height: var(--touch); padding: 8px 12px; }
+.btn-ghost { background: transparent; color: var(--text-muted); min-height: var(--touch); padding: 8px 12px; text-align: left; }
+.proxy-question > .btn-ghost,
+.how-many > .btn-ghost { -webkit-align-self: flex-start; align-self: flex-start; }
 .btn-large { font-size: 20px; padding: 16px 28px; width: 100%; }
 
 .btn-tap {
