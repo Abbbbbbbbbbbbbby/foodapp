@@ -434,7 +434,7 @@ function FamilyCard({ family, role, onUpdated, onDeleted }: FamilyCardProps) {
     setSaving(true); setErr(null);
     const patch: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(draft)) {
-      if (v !== '' && v !== null && v !== undefined) patch[k] = v;
+      if (v !== null && v !== undefined) patch[k] = v;
     }
     try {
       await api.patch(`/api/records/families/${family.id}`, patch);
@@ -602,16 +602,21 @@ function FamiliesTab({ role }: FamiliesTabProps) {
   const [families, setFamilies] = useState<FamilyRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const seqRef = useRef(0);
 
   const load = useCallback(async (search: string) => {
+    const seq = ++seqRef.current;
     setLoading(true); setError(null);
     try {
       const qs = search ? '?q=' + encodeURIComponent(search) : '';
       const data = await api.get<{ families: FamilyRecord[] }>('/api/records/families' + qs);
+      if (seq !== seqRef.current) return;
       setFamilies(data.families);
     } catch (e) {
+      if (seq !== seqRef.current) return;
       setError(e instanceof Error ? e.message : 'Failed to load');
-    } finally { setLoading(false); }
+    } finally { if (seq === seqRef.current) setLoading(false); }
   }, []);
 
   useEffect(() => { load(''); }, [load]);
@@ -623,11 +628,10 @@ function FamiliesTab({ role }: FamiliesTabProps) {
     setFamilies(fs => fs.filter(f => f.id !== id));
   }
 
-  let searchTimer: ReturnType<typeof setTimeout>;
   function handleSearch(val: string) {
     setQ(val);
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => load(val), 300);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => load(val), 300);
   }
 
   return (
