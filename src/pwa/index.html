@@ -6,9 +6,15 @@
     <meta name="theme-color" content="#121212" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Food Line Check-In</title>
+    <script>
+      window.onerror = function(msg, src, line, col, err) {
+        var d = document.getElementById('root');
+        if (d) d.innerHTML = '<pre style="color:#f4f4f4;padding:16px;font-size:13px;white-space:pre-wrap;word-break:break-all">JS Error:\n' + msg + '\n' + (src || '') + ':' + line + '\n' + (err && err.stack ? err.stack : '') + '</pre>';
+      };
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div style="color:#f4f4f4;padding:32px;font-family:-apple-system,sans-serif;font-size:18px">Loading…</div></div>
     <script type="module" src="/main.tsx"></script>
   </body>
 </html>

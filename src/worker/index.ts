@@ -37,7 +37,13 @@ export default {
       const recordResponse = await handleRecordRoutes(request, env, url.pathname);
       if (recordResponse) return cors(recordResponse);
 
-      return cors(Response.json({ error: 'Not found' }, { status: 404 }));
+      // Unknown /api/* routes return JSON 404
+      if (url.pathname.startsWith('/api/')) {
+        return cors(Response.json({ error: 'Not found' }, { status: 404 }));
+      }
+
+      // All other requests: serve the PWA static assets (SPA fallback to index.html)
+      return env.ASSETS.fetch(request);
     } catch (err) {
       console.error(err);
       return cors(Response.json({ error: 'Internal server error' }, { status: 500 }));

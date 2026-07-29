@@ -60,6 +60,7 @@ export interface Proxy {
 export interface Env {
   DB: D1Database;
   SESSIONS: KVNamespace;
+  ASSETS: Fetcher;
   TWILIO_ACCOUNT_SID: string;
   TWILIO_AUTH_TOKEN: string;
   TWILIO_PHONE_NUMBER: string;
