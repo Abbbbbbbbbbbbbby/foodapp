@@ -27,6 +27,8 @@ export default function EnterPage() {
   const [error, setError] = useState<string | null>(null);
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
+  // Accumulates visit IDs for the log-visit (existing family) flow
+  const pendingVisitIds = useRef<(string | null)[]>([]);
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
@@ -72,6 +74,7 @@ export default function EnterPage() {
 
   function handleFamilySelectConfirm(families: FamilySearchResult[]) {
     if (families.length === 0) return;
+    pendingVisitIds.current = [];
     setView({ type: 'log-visit', families, current: 0 });
   }
 
@@ -84,8 +87,10 @@ export default function EnterPage() {
       visit_date: localDateString(),
       idempotency_key: visitIdemKey,
     };
+    let visitId: string | null = null;
     try {
-      await api.post('/api/visits', visitPayload);
+      const result = await api.post<{ id: string }>('/api/visits', visitPayload);
+      visitId = result.id;
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);
@@ -99,16 +104,20 @@ export default function EnterPage() {
         return;
       }
     }
+    pendingVisitIds.current.push(visitId);
     if (current + 1 < families.length) {
       setView({ type: 'log-visit', families, current: current + 1 });
     } else {
+      const visitIds = pendingVisitIds.current;
+      pendingVisitIds.current = [];
       setView({
         type: 'done',
-        families: families.map(f => ({
+        families: families.map((f, i) => ({
           id: f.id,
           name: f.name,
           num_people: f.num_people,
           bag_received: f.bag_received,
+          visitId: visitIds[i] ?? null,
         })),
       });
     }
@@ -172,7 +181,7 @@ export default function EnterPage() {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
       }
-      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null });
+      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId: null });
       advanceWizard(familyIndex, total);
       return;
     }
@@ -183,9 +192,11 @@ export default function EnterPage() {
       visit_date: today,
       picked_up_by_phone: proxyData?.proxy_phone ?? null,
     };
+    let visitId: string | null = null;
     let visitError: string | undefined;
     try {
-      await api.post('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
+      const visitResult = await api.post<{ id: string }>('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
+      visitId = visitResult.id;
     } catch (e) {
       if (e instanceof ApiError) {
         // Family saved — still advance but surface the error
@@ -200,7 +211,7 @@ export default function EnterPage() {
       }
     }
 
-    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null });
+    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId });
     advanceWizard(familyIndex, total, visitError);
   }
 

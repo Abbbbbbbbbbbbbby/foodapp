@@ -6,6 +6,7 @@ export interface SummaryFamily {
   name: string;
   num_people: number | null;
   bag_received: boolean | null;
+  visitId: string | null;
 }
 
 interface SummaryScreenProps {
@@ -31,21 +32,16 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
   async function handleMarkBags() {
     setBagError(null);
     setMarking(true);
-    // Families without a persisted id (queue-only entries) cannot be PATCH'd yet
-    const withId = needBag.filter(f => f.id !== '');
-    const withoutId = needBag.filter(f => f.id === '');
+    const withVisitId = needBag.filter(f => f.visitId);
+    const withoutVisitId = needBag.filter(f => !f.visitId);
     try {
       await Promise.all(
-        withId.map(f => api.patch(`/api/families/${f.id}`, { bag_received: true }))
+        withVisitId.map(f => api.patch(`/api/records/visits/${f.visitId}`, { bag_received: true }))
       );
       setBagsMarked(true);
-      if (withoutId.length > 0) {
-        // These families haven't synced yet so there is no server id to PATCH.
-        // Bag status cannot be recorded for them until they sync and re-appear
-        // in the system. Inform the volunteer plainly rather than promise a
-        // background update that isn't wired up.
+      if (withoutVisitId.length > 0) {
         setBagError(
-          `${withoutId.length} family record(s) are still pending sync — bag status cannot be recorded until they upload. Note it manually for now.`
+          `${withoutVisitId.length} family record(s) are still pending sync — bag status cannot be recorded until they upload. Note it manually for now.`
         );
       }
     } catch (err) {

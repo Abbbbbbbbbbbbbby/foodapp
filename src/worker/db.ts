@@ -268,11 +268,12 @@ export async function insertVisit(
 
   const id = crypto.randomUUID().replace(/-/g, '');
   const now = new Date().toISOString();
+  const bagReceived = data.bag_received ? 1 : 0;
   try {
     await db.prepare(`
-      INSERT INTO visits (id, family_id, visit_date, picked_up_by_phone, volunteer_id, created_at, idempotency_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(id, data.family_id, data.visit_date, data.picked_up_by_phone, data.volunteer_id, now, idempotencyKey ?? null).run();
+      INSERT INTO visits (id, family_id, visit_date, picked_up_by_phone, volunteer_id, bag_received, created_at, idempotency_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(id, data.family_id, data.visit_date, data.picked_up_by_phone, data.volunteer_id, bagReceived, now, idempotencyKey ?? null).run();
   } catch (err) {
     if (idempotencyKey && err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
       const existing = await db.prepare(
