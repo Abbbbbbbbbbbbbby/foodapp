@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { getUser } from '../store/auth';
+import { localDateString, localMonthStart } from '../lib/date';
 
 type Role = 'admin' | 'staff' | 'volunteer';
 
@@ -64,12 +65,11 @@ type Timeframe = 'today' | 'month' | 'custom' | 'all';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localDateString();
 }
 
 function monthStart(): string {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
+  return localMonthStart();
 }
 
 function fmtDate(iso: string | null): string {

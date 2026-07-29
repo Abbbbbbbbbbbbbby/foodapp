@@ -38,7 +38,7 @@ describe('POST /api/visits — malformed JSON', () => {
 describe('POST /api/visits — idempotency', () => {
   it('returns the same id for the same idempotency_key', async () => {
     const key = `visit-idem-${Date.now()}`;
-    const body = { family_id: testFamilyId, idempotency_key: key };
+    const body = { family_id: testFamilyId, idempotency_key: key, visit_date: '2026-01-01' };
     const r1 = await SELF.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
@@ -76,11 +76,20 @@ describe('POST /api/visits', () => {
     expect(res.status).toBe(400);
   });
 
-  it('creates visit and returns id', async () => {
+  it('returns 400 without visit_date', async () => {
     const res = await SELF.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({ family_id: testFamilyId }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('creates visit and returns id', async () => {
+    const res = await SELF.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ family_id: testFamilyId, visit_date: '2026-01-01' }),
     });
     expect(res.status).toBe(201);
     const data = await res.json<{ id: string }>();

@@ -26,9 +26,10 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 });
   }
   if (!body.family_id) return Response.json({ error: 'family_id is required' }, { status: 400 });
+  if (!body.visit_date) return Response.json({ error: 'visit_date is required' }, { status: 400 });
   const data: NewVisit = {
     family_id: body.family_id,
-    visit_date: body.visit_date ?? new Date().toISOString().slice(0, 10),
+    visit_date: body.visit_date,
     picked_up_by_phone: body.picked_up_by_phone ?? null,
     volunteer_id: ctx.userId,
   };

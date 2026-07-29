@@ -1,9 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, ApiError } from '../lib/api';
-import { queueItem, flushQueue, generateUUID } from '../lib/offline';
-import { clearAuth } from '../store/auth';
+import { queueItem, generateUUID } from '../lib/offline';
+import { localDateString } from '../lib/date';
 import LookupForm from '../components/enter/LookupForm';
 import ResultsList from '../components/enter/ResultsList';
 import FamilySelectScreen from '../components/enter/FamilySelectScreen';
@@ -24,28 +23,10 @@ type EnterView =
   | { type: 'done'; families: SummaryFamily[]; error?: string };
 
 export default function EnterPage() {
-  const navigate = useNavigate();
   const [view, setView] = useState<EnterView>({ type: 'lookup' });
   const [error, setError] = useState<string | null>(null);
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
-
-  // Flush any queued offline submissions on mount and whenever connectivity resumes
-  useEffect(() => {
-    const apiFn = (url: string, body: unknown) =>
-      api.post<unknown>(url, body as Record<string, unknown>);
-    const doFlush = async () => {
-      const result = await flushQueue(apiFn);
-      if (result.needsReLogin) {
-        clearAuth();
-        navigate('/login');
-      }
-    };
-    doFlush();
-    const onOnline = () => doFlush();
-    window.addEventListener('online', onOnline);
-    return () => window.removeEventListener('online', onOnline);
-  }, [navigate]);
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
@@ -100,7 +81,7 @@ export default function EnterPage() {
     const visitIdemKey = generateUUID();
     const visitPayload = {
       family_id: familyId,
-      visit_date: new Date().toISOString().slice(0, 10),
+      visit_date: localDateString(),
       idempotency_key: visitIdemKey,
     };
     try {
@@ -160,7 +141,7 @@ export default function EnterPage() {
     const { familyIndex, total } = view;
     setError(null);
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateString();
     const familyPayload = {
       ...data,
       first_visit_date: today,

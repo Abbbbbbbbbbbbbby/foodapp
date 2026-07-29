@@ -52,8 +52,17 @@ export async function getPending(): Promise<PendingItem[]> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).getAll();
-    req.onsuccess = () => resolve(req.result as PendingItem[]);
+    const items: PendingItem[] = [];
+    const req = tx.objectStore(STORE).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (cursor) {
+        items.push(cursor.value as PendingItem);
+        cursor.continue();
+      } else {
+        resolve(items);
+      }
+    };
     req.onerror = () => reject(req.error);
   });
 }
@@ -109,12 +118,14 @@ export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<v
       proxy: proxyData ?? undefined,
       idempotency_key: item.idempotencyKey,
     }) as { id: string };
-    const visitDate = (data.first_visit_date as string | undefined) ?? new Date().toISOString().slice(0, 10);
+    const d = new Date();
+    const todayLocal = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const visitDate = (data.first_visit_date as string | undefined) ?? todayLocal;
     await apiFn('/api/visits', {
       family_id: result.id,
       visit_date: visitDate,
       picked_up_by_phone: proxyData?.proxy_phone ?? null,
-      idempotency_key: `${item.idempotencyKey}-visit`,
+      idempotency_key: `${item.idempotencyKey ?? item.id}-visit`,
     });
   }
 }

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, clearAuth, getToken } from '../store/auth';
-import { getPendingCount } from '../lib/offline';
+import { getPendingCount, flushQueue } from '../lib/offline';
+import { api } from '../lib/api';
 
 interface NavItem {
   label: string;
@@ -23,6 +24,7 @@ export default function Layout() {
   const location = useLocation();
   const user = getUser()!;
   const [pendingCount, setPendingCount] = useState(0);
+  const [deadLetterCount, setDeadLetterCount] = useState(0);
 
   useEffect(() => {
     function refresh() {
@@ -32,6 +34,26 @@ export default function Layout() {
     window.addEventListener('offlinecountchange', refresh);
     return () => window.removeEventListener('offlinecountchange', refresh);
   }, []);
+
+  useEffect(() => {
+    const apiFn = (url: string, body: unknown) =>
+      api.post<unknown>(url, body as Record<string, unknown>);
+    const doFlush = async () => {
+      try {
+        const result = await flushQueue(apiFn);
+        if (result.needsReLogin) {
+          clearAuth();
+          navigate('/login');
+        }
+        if (result.deadLettered > 0) {
+          setDeadLetterCount(n => n + result.deadLettered);
+        }
+      } catch { /* IndexedDB unavailable — degrade silently */ }
+    };
+    doFlush();
+    window.addEventListener('online', doFlush);
+    return () => window.removeEventListener('online', doFlush);
+  }, [navigate]);
 
   async function handleLogout() {
     try {
@@ -50,6 +72,11 @@ export default function Layout() {
 
   return (
     <div className="layout">
+      {deadLetterCount > 0 && (
+        <p className="error banner" style={{ margin: 0, borderRadius: 0 }}>
+          {deadLetterCount} {deadLetterCount === 1 ? 'entry' : 'entries'} could not be saved and {deadLetterCount === 1 ? 'was' : 'were'} removed. Please inform a supervisor.
+        </p>
+      )}
       <header className="header">
         <span className="header-name">{user.name}</span>
         {pendingCount > 0 && (

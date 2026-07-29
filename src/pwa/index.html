@@ -9,7 +9,12 @@
     <script>
       window.onerror = function(msg, src, line, col, err) {
         var d = document.getElementById('root');
-        if (d) d.innerHTML = '<pre style="color:#f4f4f4;padding:16px;font-size:13px;white-space:pre-wrap;word-break:break-all">JS Error:\n' + msg + '\n' + (src || '') + ':' + line + '\n' + (err && err.stack ? err.stack : '') + '</pre>';
+        if (!d) return;
+        var pre = document.createElement('pre');
+        pre.style.cssText = 'color:#f4f4f4;padding:16px;font-size:13px;white-space:pre-wrap;word-break:break-all';
+        pre.textContent = 'JS Error:\n' + msg + '\n' + (src || '') + ':' + line + '\n' + (err && err.stack ? err.stack : '');
+        d.innerHTML = '';
+        d.appendChild(pre);
       };
     </script>
   </head>
