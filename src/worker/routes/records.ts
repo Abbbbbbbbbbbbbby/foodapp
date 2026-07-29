@@ -1,6 +1,7 @@
 import type { Env } from '../schema';
 import { getAuthContext } from '../middleware';
 import type { AuthContext } from '../middleware';
+import { subscribeRecipient } from '../messageeverywhere';
 
 type Role = 'admin' | 'staff' | 'volunteer';
 
@@ -211,6 +212,17 @@ async function handlePatchFamily(
   vals.push(id);
 
   await env.DB.prepare(`UPDATE families SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+
+  if (env.MESSAGE_EVERYWHERE_API_KEY && changes.want_text_updates?.new === true
+      && current.phone) {
+    subscribeRecipient(
+      env.MESSAGE_EVERYWHERE_API_KEY,
+      current.phone as string,
+      current.language as string | null,
+      current.name as string
+    ).catch(() => { /* best-effort */ });
+  }
+
   return Response.json({ ok: true });
 }
 

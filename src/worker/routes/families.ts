@@ -5,6 +5,7 @@ import {
   insertFamily, updateFamily, normalizePhone,
 } from '../db';
 import type { NewFamily, YesNoDeclined, AmiBracket } from '../schema';
+import { subscribeRecipient } from '../messageeverywhere';
 
 const YES_NO_DECLINED = new Set<string>(['yes', 'no', 'declined']);
 const AMI_BRACKETS = new Set<string>(['<30%', '30-50%', '50-80%', '80-120%', '>120%', 'declined']);
@@ -129,6 +130,11 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
   }
 
   const id = await insertFamily(env.DB, data, idempotencyKey);
+
+  if (!wasReplay && data.want_text_updates && data.phone && env.MESSAGE_EVERYWHERE_API_KEY) {
+    subscribeRecipient(env.MESSAGE_EVERYWHERE_API_KEY, data.phone, data.language, data.name)
+      .catch(() => { /* best-effort */ });
+  }
 
   if (body.proxy && !wasReplay) {
     const proxyPhone = normalizePhone(body.proxy.proxy_phone);

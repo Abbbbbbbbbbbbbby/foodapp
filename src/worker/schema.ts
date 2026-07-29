@@ -66,6 +66,7 @@ export interface Env {
   TWILIO_PHONE_NUMBER: string;
   JWT_SECRET: string;
   ENVIRONMENT: string;
+  MESSAGE_EVERYWHERE_API_KEY: string;
 }
 
 export type NewFamily = Omit<Family, 'id' | 'created_at' | 'updated_at'>;
