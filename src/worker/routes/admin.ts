@@ -83,9 +83,27 @@ async function handleUpdateUser(
   }
 
   const user = await env.DB.prepare(
-    `SELECT id, role FROM users WHERE id = ?`
-  ).bind(id).first<{ id: string; role: string }>();
+    `SELECT id, role, active FROM users WHERE id = ?`
+  ).bind(id).first<{ id: string; role: string; active: number }>();
   if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  // Block self-demotion and self-deactivation
+  const wouldDemote = body.role !== undefined && body.role !== 'admin';
+  const wouldDeactivate = body.active === false;
+  if (id === ctx.userId && (wouldDemote || wouldDeactivate)) {
+    return Response.json({ error: 'Cannot demote or deactivate your own account' }, { status: 400 });
+  }
+
+  // Block removing the last active admin
+  const isRemovingAdmin = user.role === 'admin' && user.active === 1 && (wouldDemote || wouldDeactivate);
+  if (isRemovingAdmin) {
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1 AND id != ?`
+    ).bind(id).first<{ n: number }>();
+    if ((row?.n ?? 0) === 0) {
+      return Response.json({ error: 'Cannot remove the last admin' }, { status: 400 });
+    }
+  }
 
   const updates: string[] = [];
   const values: unknown[] = [];
@@ -111,9 +129,18 @@ async function handleDeleteUser(
   }
 
   const user = await env.DB.prepare(
-    `SELECT id FROM users WHERE id = ?`
-  ).bind(id).first<{ id: string }>();
+    `SELECT id, role, active FROM users WHERE id = ?`
+  ).bind(id).first<{ id: string; role: string; active: number }>();
   if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  if (user.role === 'admin' && user.active === 1) {
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1 AND id != ?`
+    ).bind(id).first<{ n: number }>();
+    if ((row?.n ?? 0) === 0) {
+      return Response.json({ error: 'Cannot delete the last admin' }, { status: 400 });
+    }
+  }
 
   // Null out FK references before deleting so the delete doesn't violate
   // constraints if foreign_keys pragma is on
