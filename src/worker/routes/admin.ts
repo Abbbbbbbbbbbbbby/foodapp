@@ -179,6 +179,13 @@ async function handleImport(
   );
   const existingPhones = new Set(phoneToId.keys());
 
+  // For families with no phone, dedup by normalized name to prevent
+  // re-importing the same phoneless family on subsequent CSV runs
+  const noPhoneNameRows = await env.DB.prepare(
+    `SELECT LOWER(name) AS n FROM families WHERE phone IS NULL`
+  ).all<{ n: string }>();
+  const existingNoPhoneNames = new Set((noPhoneNameRows.results ?? []).map(r => r.n));
+
   const now = new Date().toISOString();
   let imported = 0;
   let visits_added = 0;
@@ -190,6 +197,11 @@ async function handleImport(
     if (!row.name?.trim()) { skipped_no_name++; continue; }
 
     const phone = normalizePhone(row.phone);
+
+    if (!phone && existingNoPhoneNames.has(row.name.trim().toLowerCase())) {
+      skipped_existing++;
+      continue;
+    }
 
     if (phone && existingPhones.has(phone)) {
       // Family exists — add any new visits rather than skipping
@@ -281,6 +293,7 @@ async function handleImport(
       await env.DB.batch(stmts);
 
       if (phone) existingPhones.add(phone);
+      else existingNoPhoneNames.add(row.name.trim().toLowerCase());
       imported++;
     } catch (e) {
       errors.push({ name: row.name, error: e instanceof Error ? e.message : 'Unknown error' });
