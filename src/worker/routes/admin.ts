@@ -241,14 +241,14 @@ async function handleImport(
       const stmts: D1PreparedStatement[] = [
         env.DB.prepare(`
           INSERT INTO families (
-            id, name, phone, address, zip_code, date_of_birth,
+            id, name, name_normalized, phone, address, zip_code, date_of_birth,
             language, ethnicity, hispanic, ami_bracket, num_people,
             num_children_under_18, num_children_under_5, num_with_diabetes,
             health_insurance, snap_benefits, receives_texts, want_text_updates,
             id_confirmed, bag_received, first_visit_date,
             created_by, created_at, updated_at
           ) VALUES (
-            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?, ?,
@@ -256,7 +256,7 @@ async function handleImport(
             ?, ?, ?
           )
         `).bind(
-          id, row.name.trim(),
+          id, row.name.trim(), normalizeName(row.name.trim()),
           phone, row.address, row.zip_code, row.date_of_birth,
           row.language, row.ethnicity, row.hispanic, row.ami_bracket, row.num_people,
           row.num_children_under_18, row.num_children_under_5, row.num_with_diabetes,
