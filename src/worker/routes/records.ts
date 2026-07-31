@@ -296,20 +296,18 @@ async function handleAddVisit(
   if (!family) return Response.json({ error: 'Family not found' }, { status: 404 });
 
   const id = crypto.randomUUID().replace(/-/g, '');
-  await env.DB.prepare(
-    `INSERT INTO visits (id, family_id, visit_date, volunteer_id, bag_received, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(
-    id, body.family_id, body.visit_date,
-    body.volunteer_id ?? ctx.userId,
-    body.bag_received ? 1 : 0,
-    ctx.userId
-  ).run();
-
-  await logChange(env, 'visits', id, ctx.userId, {
-    _action: { old: null, new: 'created (backdated)' },
-    visit_date: { old: null, new: body.visit_date },
-  });
+  const changeId = crypto.randomUUID().replace(/-/g, '');
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO visits (id, family_id, visit_date, volunteer_id, bag_received, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, body.family_id, body.visit_date, body.volunteer_id ?? ctx.userId, body.bag_received ? 1 : 0, ctx.userId),
+    env.DB.prepare(`INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, ?, ?, ?, ?)`)
+      .bind(changeId, 'visits', id, ctx.userId, JSON.stringify({
+        _action: { old: null, new: 'created (backdated)' },
+        visit_date: { old: null, new: body.visit_date },
+      })),
+  ]);
 
   return Response.json({ id }, { status: 201 });
 }
@@ -320,13 +318,16 @@ async function handleDeleteVisit(env: Env, id: string, ctx: AuthContext): Promis
   ).bind(id).first<Record<string, unknown>>();
   if (!visit) return Response.json({ error: 'Not found' }, { status: 404 });
 
-  await logChange(env, 'visits', id, ctx.userId, {
-    _action: { old: 'exists', new: 'deleted' },
-    visit_date: { old: visit.visit_date, new: null },
-    family_name: { old: visit.family_name, new: null },
-  });
-
-  await env.DB.prepare('DELETE FROM visits WHERE id = ?').bind(id).run();
+  const dvChangeId = crypto.randomUUID().replace(/-/g, '');
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, ?, ?, ?, ?)`)
+      .bind(dvChangeId, 'visits', id, ctx.userId, JSON.stringify({
+        _action: { old: 'exists', new: 'deleted' },
+        visit_date: { old: visit.visit_date, new: null },
+        family_name: { old: visit.family_name, new: null },
+      })),
+    env.DB.prepare('DELETE FROM visits WHERE id = ?').bind(id),
+  ]);
   return Response.json({ ok: true });
 }
 
@@ -338,16 +339,19 @@ async function handleDeleteFamily(env: Env, id: string, ctx: AuthContext): Promi
   const visitCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM visits WHERE family_id = ?')
     .bind(id).first<{ n: number }>();
 
-  await logChange(env, 'families', id, ctx.userId, {
-    _action: { old: 'exists', new: 'deleted' },
-    name: { old: family.name, new: null },
-    visit_count: { old: visitCount?.n ?? 0, new: null },
-  });
-
-  await env.DB.prepare(`DELETE FROM duplicate_flags WHERE family_a_id = ? OR family_b_id = ?`).bind(id, id).run();
-  await env.DB.prepare('DELETE FROM visits WHERE family_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM proxies WHERE family_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM families WHERE id = ?').bind(id).run();
+  const dfChangeId = crypto.randomUUID().replace(/-/g, '');
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, ?, ?, ?, ?)`)
+      .bind(dfChangeId, 'families', id, ctx.userId, JSON.stringify({
+        _action: { old: 'exists', new: 'deleted' },
+        name: { old: family.name, new: null },
+        visit_count: { old: visitCount?.n ?? 0, new: null },
+      })),
+    env.DB.prepare(`DELETE FROM duplicate_flags WHERE family_a_id = ? OR family_b_id = ?`).bind(id, id),
+    env.DB.prepare('DELETE FROM visits WHERE family_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM proxies WHERE family_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM families WHERE id = ?').bind(id),
+  ]);
   return Response.json({ ok: true });
 }
 
