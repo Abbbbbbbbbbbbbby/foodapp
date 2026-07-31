@@ -1,9 +1,11 @@
 const CACHE = 'foodapp-v2';
 const NAV_TIMEOUT_MS = 4000;
 
+const PRECACHE_URLS = []; // __PRECACHE_URLS__
+
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE).then(c => c.add('/')).then(() => self.skipWaiting())
+    caches.open(CACHE).then(c => c.addAll(['/', ...PRECACHE_URLS])).then(() => self.skipWaiting())
   );
 });
 

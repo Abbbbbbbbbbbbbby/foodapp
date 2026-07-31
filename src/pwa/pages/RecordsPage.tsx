@@ -615,8 +615,7 @@ function FamiliesTab({ role }: FamiliesTabProps) {
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
   const seqRef = useRef(0);
 
-  const load = useCallback(async (search: string) => {
-    const seq = ++seqRef.current;
+  const load = useCallback(async (search: string, seq: number) => {
     setLoading(true); setError(null);
     try {
       const qs = search ? '?q=' + encodeURIComponent(search) : '';
@@ -629,7 +628,7 @@ function FamiliesTab({ role }: FamiliesTabProps) {
     } finally { if (seq === seqRef.current) setLoading(false); }
   }, []);
 
-  useEffect(() => { load(''); }, [load]);
+  useEffect(() => { load('', ++seqRef.current); }, [load]);
 
   function handleUpdated(id: string, patch: Partial<FamilyRecord>) {
     setFamilies(fs => fs.map(f => f.id === id ? { ...f, ...patch } : f));
@@ -640,8 +639,9 @@ function FamiliesTab({ role }: FamiliesTabProps) {
 
   function handleSearch(val: string) {
     setQ(val);
+    const seq = ++seqRef.current;
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => load(val), 300);
+    timerRef.current = setTimeout(() => load(val, seq), 300);
   }
 
   return (

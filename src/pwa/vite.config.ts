@@ -66,6 +66,7 @@ export default defineConfig({
   build: {
     outDir: '../../dist/pwa',
     emptyOutDir: true,
+    manifest: true,
   },
   server: {
     proxy: {

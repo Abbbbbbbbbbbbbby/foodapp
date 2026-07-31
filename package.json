@@ -15,7 +15,7 @@
     "migrate:remote": "wrangler d1 migrations apply foodapp",
     "migrate:bubble": "node scripts/migrate-bubble.js",
     "pwa:dev": "vite --config src/pwa/vite.config.ts",
-    "pwa:build": "vite build --config src/pwa/vite.config.ts",
+    "pwa:build": "vite build --config src/pwa/vite.config.ts && node scripts/inject-precache.mjs",
     "generate-types": "wrangler types"
   },
   "dependencies": {

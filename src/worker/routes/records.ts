@@ -33,19 +33,6 @@ function allowedVisitFields(role: Role): Set<string> {
   return new Set();
 }
 
-async function logChange(
-  env: Env,
-  table: string,
-  recordId: string,
-  changedBy: string,
-  changes: Record<string, { old: unknown; new: unknown }>
-) {
-  const id = crypto.randomUUID().replace(/-/g, '');
-  await env.DB.prepare(
-    `INSERT INTO record_changes (id, table_name, record_id, changed_by, changes)
-     VALUES (?, ?, ?, ?, ?)`
-  ).bind(id, table, recordId, changedBy, JSON.stringify(changes)).run();
-}
 
 export async function handleRecordRoutes(
   request: Request,
@@ -136,7 +123,7 @@ async function handleListFamilies(request: Request, env: Env): Promise<Response>
   const params: string[] = [];
   if (q) {
     where = "WHERE (COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\' OR f.phone LIKE ?)";
-    const term = '%' + q.toLowerCase().replace(/[%_\\]/g, '\\$&') + '%';
+    const term = '%' + normalizeName(q).replace(/[%_\\]/g, '\\$&') + '%';
     params.push(term, '%' + q + '%');
   }
 
