@@ -13,6 +13,10 @@ export async function handleVisitRoutes(
   if (pathname === '/api/visits' && request.method === 'GET') {
     return handleGet(request, env);
   }
+  const bagMatch = pathname.match(/^\/api\/visits\/([^/]+)\/bag$/);
+  if (bagMatch && request.method === 'PATCH') {
+    return handleMarkBag(request, env, bagMatch[1]);
+  }
   return null;
 }
 
@@ -37,6 +41,21 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
   const id = await insertVisit(env.DB, data, idempotencyKey);
   const status = idempotencyKey ? 200 : 201;
   return Response.json({ id }, { status });
+}
+
+async function handleMarkBag(request: Request, env: Env, visitId: string): Promise<Response> {
+  const ctx = await getAuthContext(request, env);
+  if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  let body: { bag_received?: boolean };
+  try { body = await request.json(); } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+  const bagReceived = body.bag_received ? 1 : 0;
+  const result = await env.DB.prepare(
+    'UPDATE visits SET bag_received = ? WHERE id = ?'
+  ).bind(bagReceived, visitId).run();
+  if (result.meta.rows_written === 0) return Response.json({ error: 'Not found' }, { status: 404 });
+  return Response.json({ ok: true });
 }
 
 async function handleGet(request: Request, env: Env): Promise<Response> {

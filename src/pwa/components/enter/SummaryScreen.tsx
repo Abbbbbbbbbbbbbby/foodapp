@@ -36,9 +36,9 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     const withoutVisitId = needBag.filter(f => !f.visitId);
     try {
       await Promise.all(
-        withVisitId.map(f => api.patch(`/api/records/visits/${f.visitId}`, { bag_received: true }))
+        withVisitId.map(f => api.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true }))
       );
-      setBagsMarked(true);
+      if (withVisitId.length > 0) setBagsMarked(true);
       if (withoutVisitId.length > 0) {
         setBagError(
           `${withoutVisitId.length} family record(s) are still pending sync — bag status cannot be recorded until they upload. Note it manually for now.`

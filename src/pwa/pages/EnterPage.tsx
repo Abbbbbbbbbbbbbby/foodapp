@@ -116,7 +116,7 @@ export default function EnterPage() {
           id: f.id,
           name: f.name,
           num_people: f.num_people,
-          bag_received: f.bag_received,
+          bag_received: null,
           visitId: visitIds[i] ?? null,
         })),
       });
