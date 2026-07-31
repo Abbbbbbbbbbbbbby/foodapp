@@ -228,9 +228,20 @@ async function handlePatchFamily(
   for (const f of fields) {
     const oldVal = current[f];
     let newVal: unknown = BOOL_FIELDS.has(f) ? (body[f] ? 1 : 0) : body[f];
-    if (f === 'phone') newVal = normalizePhone(body[f] as string | null);
+    if (f === 'phone') {
+      const raw = body[f] as string | null;
+      if (raw) {
+        const normalized = normalizePhone(raw);
+        if (normalized === null) {
+          return Response.json({ error: 'invalid phone number' }, { status: 400 });
+        }
+        newVal = normalized;
+      } else {
+        newVal = null;
+      }
+    }
     if (String(oldVal) !== String(newVal)) {
-      changes[f] = { old: oldVal, new: body[f] };
+      changes[f] = { old: oldVal, new: newVal };
       sets.push(`${f} = ?`);
       vals.push(newVal);
       if (f === 'name') nameChanged = true;

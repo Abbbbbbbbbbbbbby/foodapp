@@ -224,10 +224,16 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
             result.needsReLogin = true;
             // Don't dead-letter: the item may succeed after re-login
           } else if (err.status >= 400 && err.status < 500) {
-            // Permanent client error — persist to dead-letter store before removing
-            try { await addDeadLetter(item, err.status, err.message); } catch { /* best-effort */ }
-            try { await removeItem(item.id); } catch { /* best-effort */ }
-            result.deadLettered++;
+            // Permanent client error — write to dead-letter store first; only remove
+            // from pending if that succeeds so the item is never silently dropped.
+            try {
+              await addDeadLetter(item, err.status, err.message);
+              try { await removeItem(item.id); } catch { /* best-effort removal */ }
+              result.deadLettered++;
+            } catch {
+              // Dead-letter write failed — leave item in pending for retry
+              result.errors++;
+            }
           } else {
             // 5xx: transient server error — keep in queue
             result.errors++;

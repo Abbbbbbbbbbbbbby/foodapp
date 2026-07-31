@@ -152,13 +152,7 @@ async function handleDeleteUser(
     }
   }
 
-  // Null out FK references before deleting so the delete doesn't violate
-  // constraints if foreign_keys pragma is on
-  await env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?`).bind(id).run();
-  await env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?`).bind(id).run();
-  await env.DB.prepare(`DELETE FROM otp_codes WHERE phone = (SELECT phone FROM users WHERE id = ?)`).bind(id).run();
-
-  // For active admins, add a subquery guard so concurrent deletes can't both remove the last admin
+  // Delete first (with last-admin guard) so a rejected guard doesn't corrupt FK references
   const isLastAdminGuarded = user.role === 'admin' && user.active === 1;
   const deleteWhere = isLastAdminGuarded
     ? `id = ? AND (role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?) > 0)`
@@ -169,6 +163,13 @@ async function handleDeleteUser(
   if (isLastAdminGuarded && deleteResult.meta.rows_written === 0) {
     return Response.json({ error: 'Cannot delete the last admin' }, { status: 400 });
   }
+
+  // Cascade FK cleanup only after the delete succeeded
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?`).bind(id),
+    env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?`).bind(id),
+    env.DB.prepare(`DELETE FROM otp_codes WHERE phone = (SELECT phone FROM users WHERE id = ?)`).bind(id),
+  ]);
 
   return Response.json({ ok: true });
 }

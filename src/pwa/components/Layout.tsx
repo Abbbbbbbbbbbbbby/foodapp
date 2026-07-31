@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, clearAuth, getToken } from '../store/auth';
-import { getPendingCount, flushQueue, getDeadLetters } from '../lib/offline';
+import { getPendingCount, flushQueue, getDeadLetters, clearDeadLetters } from '../lib/offline';
+import type { DeadLetterEntry } from '../lib/offline';
 import { api } from '../lib/api';
 
 interface NavItem {
@@ -24,7 +25,7 @@ export default function Layout() {
   const location = useLocation();
   const user = getUser()!;
   const [pendingCount, setPendingCount] = useState(0);
-  const [deadLetterCount, setDeadLetterCount] = useState(0);
+  const [deadLetterEntries, setDeadLetterEntries] = useState<DeadLetterEntry[]>([]);
 
   useEffect(() => {
     function refresh() {
@@ -36,8 +37,7 @@ export default function Layout() {
   }, []);
 
   useEffect(() => {
-    // Load any persisted dead-letter entries on mount
-    getDeadLetters().then(entries => setDeadLetterCount(entries.length)).catch(() => {});
+    getDeadLetters().then(setDeadLetterEntries).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -48,7 +48,7 @@ export default function Layout() {
         const result = await flushQueue(apiFn);
         // Update dead-letter count from the durable store before any navigation
         if (result.deadLettered > 0) {
-          getDeadLetters().then(entries => setDeadLetterCount(entries.length)).catch(() => {});
+          getDeadLetters().then(setDeadLetterEntries).catch(() => {});
         }
         if (result.needsReLogin) {
           clearAuth();
@@ -60,6 +60,11 @@ export default function Layout() {
     window.addEventListener('online', doFlush);
     return () => window.removeEventListener('online', doFlush);
   }, [navigate]);
+
+  async function handleDismissDeadLetters() {
+    try { await clearDeadLetters(); } catch { /* best-effort */ }
+    setDeadLetterEntries([]);
+  }
 
   async function handleLogout() {
     try {
@@ -78,10 +83,18 @@ export default function Layout() {
 
   return (
     <div className="layout">
-      {deadLetterCount > 0 && (
-        <p className="error banner" style={{ margin: 0, borderRadius: 0 }}>
-          {deadLetterCount} {deadLetterCount === 1 ? 'entry' : 'entries'} could not be saved and {deadLetterCount === 1 ? 'was' : 'were'} removed. Please inform a supervisor.
-        </p>
+      {deadLetterEntries.length > 0 && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0 }}>
+          <p style={{ margin: 0 }}>
+            {deadLetterEntries.length} {deadLetterEntries.length === 1 ? 'entry' : 'entries'} could not be saved and {deadLetterEntries.length === 1 ? 'was' : 'were'} removed. Please inform a supervisor.
+          </p>
+          <ul style={{ margin: '4px 0 4px', paddingLeft: 20 }}>
+            {deadLetterEntries.map(e => (
+              <li key={e.id}>{e.label} — {e.errorMessage}</li>
+            ))}
+          </ul>
+          <button className="btn-ghost" onClick={handleDismissDeadLetters}>Dismiss</button>
+        </div>
       )}
       <header className="header">
         <span className="header-name">{user.name}</span>
