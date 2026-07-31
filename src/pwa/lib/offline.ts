@@ -1,5 +1,7 @@
 const DB_NAME = 'foodapp_offline';
+const DB_VERSION = 2;
 const STORE = 'pending';
+const DL_STORE = 'dead-letter';
 
 // crypto.randomUUID() not available in Safari 9; use Math.random-based v4 UUID
 export function generateUUID(): string {
@@ -17,10 +19,24 @@ export interface PendingItem {
   createdAt: number;
 }
 
+export interface DeadLetterEntry {
+  id: string;
+  timestamp: number;
+  type: PendingItem['type'];
+  label: string;          // best-effort name/identifier for display
+  errorStatus: number;
+  errorMessage: string;
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = req.result;
+      const oldVersion = (e as IDBVersionChangeEvent).oldVersion;
+      if (oldVersion < 1) db.createObjectStore(STORE, { keyPath: 'id' });
+      if (oldVersion < 2) db.createObjectStore(DL_STORE, { keyPath: 'id' });
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -87,6 +103,56 @@ export async function removeItem(id: string): Promise<void> {
   });
 }
 
+async function addDeadLetter(item: PendingItem, errorStatus: number, errorMessage: string): Promise<void> {
+  let label = item.type === 'family'
+    ? ((item.payload as { data?: { name?: string } })?.data?.name ?? 'Unknown family')
+    : `Visit for family ${(item.payload as { family_id?: string })?.family_id ?? '?'}`;
+  const entry: DeadLetterEntry = {
+    id: generateUUID(),
+    timestamp: Date.now(),
+    type: item.type,
+    label,
+    errorStatus,
+    errorMessage,
+  };
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DL_STORE, 'readwrite');
+    tx.objectStore(DL_STORE).add(entry);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function getDeadLetters(): Promise<DeadLetterEntry[]> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DL_STORE, 'readonly');
+    const items: DeadLetterEntry[] = [];
+    const req = tx.objectStore(DL_STORE).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (cursor) {
+        items.push(cursor.value as DeadLetterEntry);
+        cursor.continue();
+      } else {
+        resolve(items);
+      }
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function clearDeadLetters(): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DL_STORE, 'readwrite');
+    tx.objectStore(DL_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export type ApiFn = (url: string, body: unknown) => Promise<unknown>;
 
 // Duck-typed check for ApiError (avoids importing api.ts into this module)
@@ -100,13 +166,14 @@ function isApiError(err: unknown): err is { status: number; message: string } {
 
 // Exported so it can be unit-tested with an injected API function
 export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<void> {
+  const key = item.idempotencyKey ?? item.id;
   if (item.type === 'visit') {
     const payload = item.payload as {
       family_id: string;
       visit_date: string;
       picked_up_by_phone?: string | null;
     };
-    await apiFn('/api/visits', { ...payload, idempotency_key: item.idempotencyKey });
+    await apiFn('/api/visits', { ...payload, idempotency_key: key });
   } else {
     // type === 'family': POST family then POST visit with derived idempotency keys
     const { data, proxyData } = item.payload as {
@@ -116,7 +183,7 @@ export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<v
     const result = await apiFn('/api/families', {
       ...data,
       proxy: proxyData ?? undefined,
-      idempotency_key: item.idempotencyKey,
+      idempotency_key: key,
     }) as { id: string };
     const d = new Date();
     const todayLocal = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -125,7 +192,7 @@ export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<v
       family_id: result.id,
       visit_date: visitDate,
       picked_up_by_phone: proxyData?.proxy_phone ?? null,
-      idempotency_key: `${item.idempotencyKey ?? item.id}-visit`,
+      idempotency_key: `${key}-visit`,
     });
   }
 }
@@ -157,8 +224,9 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
             result.needsReLogin = true;
             // Don't dead-letter: the item may succeed after re-login
           } else if (err.status >= 400 && err.status < 500) {
-            // Permanent client error — retrying will always fail; remove from queue
-            await removeItem(item.id);
+            // Permanent client error — persist to dead-letter store before removing
+            try { await addDeadLetter(item, err.status, err.message); } catch { /* best-effort */ }
+            try { await removeItem(item.id); } catch { /* best-effort */ }
             result.deadLettered++;
           } else {
             // 5xx: transient server error — keep in queue

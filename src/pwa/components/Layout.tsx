@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, clearAuth, getToken } from '../store/auth';
-import { getPendingCount, flushQueue } from '../lib/offline';
+import { getPendingCount, flushQueue, getDeadLetters } from '../lib/offline';
 import { api } from '../lib/api';
 
 interface NavItem {
@@ -36,17 +36,23 @@ export default function Layout() {
   }, []);
 
   useEffect(() => {
+    // Load any persisted dead-letter entries on mount
+    getDeadLetters().then(entries => setDeadLetterCount(entries.length)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     const apiFn = (url: string, body: unknown) =>
       api.post<unknown>(url, body as Record<string, unknown>);
     const doFlush = async () => {
       try {
         const result = await flushQueue(apiFn);
+        // Update dead-letter count from the durable store before any navigation
+        if (result.deadLettered > 0) {
+          getDeadLetters().then(entries => setDeadLetterCount(entries.length)).catch(() => {});
+        }
         if (result.needsReLogin) {
           clearAuth();
           navigate('/login');
-        }
-        if (result.deadLettered > 0) {
-          setDeadLetterCount(n => n + result.deadLettered);
         }
       } catch { /* IndexedDB unavailable — degrade silently */ }
     };
