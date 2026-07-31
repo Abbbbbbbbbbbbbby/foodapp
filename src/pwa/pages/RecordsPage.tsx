@@ -431,10 +431,20 @@ function FamilyCard({ family, role, onUpdated, onDeleted }: FamilyCardProps) {
   }
 
   async function save() {
+    if (draft.name !== undefined && !draft.name) {
+      setErr('Name cannot be empty');
+      return;
+    }
     setSaving(true); setErr(null);
+    const ENUM_FIELDS = new Set(['hispanic', 'health_insurance', 'snap_benefits', 'ami_bracket']);
+    const NUM_FIELDS = new Set(['num_people', 'num_children_under_18', 'num_children_under_5', 'num_with_diabetes']);
     const patch: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(draft)) {
-      if (v !== null && v !== undefined) patch[k] = v;
+      if (v === undefined) continue;
+      if (v === '' && ENUM_FIELDS.has(k)) { patch[k] = null; continue; }
+      if (v === '' && NUM_FIELDS.has(k)) { patch[k] = null; continue; }
+      if (v !== null) patch[k] = v;
+      else patch[k] = null; // explicit null clears the field
     }
     try {
       await api.patch(`/api/records/families/${family.id}`, patch);

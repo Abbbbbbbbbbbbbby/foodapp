@@ -2,7 +2,8 @@ import type { Env } from '../schema';
 import { getAuthContext } from '../middleware';
 import type { AuthContext } from '../middleware';
 import { subscribeRecipient } from '../messageeverywhere';
-import { normalizeName } from '../db';
+import { normalizeName, normalizePhone } from '../db';
+import { validateEnums } from './families';
 
 type Role = 'admin' | 'staff' | 'volunteer';
 
@@ -221,6 +222,12 @@ async function handlePatchFamily(
   const fields = Object.keys(body).filter(k => allowed.has(k));
   if (fields.length === 0) return Response.json({ error: 'No editable fields provided' }, { status: 400 });
 
+  if (body.name !== undefined && !body.name) {
+    return Response.json({ error: 'name cannot be empty' }, { status: 400 });
+  }
+  const enumErr = validateEnums(body);
+  if (enumErr) return Response.json({ error: enumErr }, { status: 400 });
+
   const current = await env.DB.prepare(`SELECT * FROM families WHERE id = ?`)
     .bind(id).first<Record<string, unknown>>();
   if (!current) return Response.json({ error: 'Not found' }, { status: 404 });
@@ -233,7 +240,8 @@ async function handlePatchFamily(
 
   for (const f of fields) {
     const oldVal = current[f];
-    const newVal = BOOL_FIELDS.has(f) ? (body[f] ? 1 : 0) : body[f];
+    let newVal: unknown = BOOL_FIELDS.has(f) ? (body[f] ? 1 : 0) : body[f];
+    if (f === 'phone') newVal = normalizePhone(body[f] as string | null);
     if (String(oldVal) !== String(newVal)) {
       changes[f] = { old: oldVal, new: body[f] };
       sets.push(`${f} = ?`);

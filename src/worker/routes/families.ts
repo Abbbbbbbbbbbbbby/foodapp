@@ -8,17 +8,15 @@ import type { NewFamily, YesNoDeclined, AmiBracket } from '../schema';
 import { subscribeRecipient } from '../messageeverywhere';
 import { checkForDuplicates } from '../duplicates';
 
-const YES_NO_DECLINED = new Set<string>(['yes', 'no', 'declined']);
-const AMI_BRACKETS = new Set<string>(['<30%', '30-50%', '50-80%', '80-120%', '>120%', 'declined']);
+export const YES_NO_DECLINED = new Set<string>(['yes', 'no', 'declined']);
+export const AMI_BRACKETS = new Set<string>(['<30%', '30-50%', '50-80%', '80-120%', '>120%', 'declined']);
 
-function validateEnums(body: Partial<NewFamily>): string | null {
-  if (body.hispanic !== undefined && body.hispanic !== null && !YES_NO_DECLINED.has(body.hispanic))
-    return `invalid hispanic value: ${body.hispanic}`;
-  if (body.health_insurance !== undefined && body.health_insurance !== null && !YES_NO_DECLINED.has(body.health_insurance))
-    return `invalid health_insurance value: ${body.health_insurance}`;
-  if (body.snap_benefits !== undefined && body.snap_benefits !== null && !YES_NO_DECLINED.has(body.snap_benefits))
-    return `invalid snap_benefits value: ${body.snap_benefits}`;
-  if (body.ami_bracket !== undefined && body.ami_bracket !== null && !AMI_BRACKETS.has(body.ami_bracket))
+export function validateEnums(body: Record<string, unknown>): string | null {
+  const ynd = (v: unknown) => v === undefined || v === null || YES_NO_DECLINED.has(v as string);
+  if (!ynd(body.hispanic)) return `invalid hispanic value: ${body.hispanic}`;
+  if (!ynd(body.health_insurance)) return `invalid health_insurance value: ${body.health_insurance}`;
+  if (!ynd(body.snap_benefits)) return `invalid snap_benefits value: ${body.snap_benefits}`;
+  if (body.ami_bracket !== undefined && body.ami_bracket !== null && !AMI_BRACKETS.has(body.ami_bracket as string))
     return `invalid ami_bracket value: ${body.ami_bracket}`;
   if (body.language !== undefined && body.language !== null && typeof body.language !== 'string')
     return 'language must be a string';
