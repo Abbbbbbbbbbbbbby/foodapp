@@ -37,7 +37,8 @@ function allowedVisitFields(role: Role): Set<string> {
 export async function handleRecordRoutes(
   request: Request,
   env: Env,
-  pathname: string
+  pathname: string,
+  execCtx: ExecutionContext
 ): Promise<Response | null> {
   if (!pathname.startsWith('/api/records/')) return null;
 
@@ -67,7 +68,7 @@ export async function handleRecordRoutes(
 
   const familyMatch = pathname.match(/^\/api\/records\/families\/([^/]+)$/);
   if (familyMatch) {
-    if (request.method === 'PATCH') return handlePatchFamily(request, env, familyMatch[1], ctx);
+    if (request.method === 'PATCH') return handlePatchFamily(request, env, familyMatch[1], ctx, execCtx);
     if (request.method === 'DELETE') {
       if (ctx.role !== 'admin') return Response.json({ error: 'Forbidden' }, { status: 403 });
       return handleDeleteFamily(env, familyMatch[1], ctx);
@@ -199,7 +200,7 @@ async function handlePatchVisit(
 }
 
 async function handlePatchFamily(
-  request: Request, env: Env, id: string, ctx: AuthContext
+  request: Request, env: Env, id: string, ctx: AuthContext, execCtx: ExecutionContext
 ): Promise<Response> {
   let body: Record<string, unknown>;
   try { body = await request.json() as Record<string, unknown>; }
@@ -256,12 +257,14 @@ async function handlePatchFamily(
 
   if (env.MESSAGE_EVERYWHERE_API_KEY && changes.want_text_updates?.new === true
       && current.phone) {
-    subscribeRecipient(
-      env.MESSAGE_EVERYWHERE_API_KEY,
-      current.phone as string,
-      current.language as string | null,
-      current.name as string
-    ).catch(() => { /* best-effort */ });
+    execCtx.waitUntil(
+      subscribeRecipient(
+        env.MESSAGE_EVERYWHERE_API_KEY,
+        current.phone as string,
+        current.language as string | null,
+        current.name as string
+      ).catch(() => { /* best-effort */ })
+    );
   }
 
   return Response.json({ ok: true });

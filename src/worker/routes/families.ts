@@ -28,7 +28,8 @@ export function validateEnums(body: Record<string, unknown>): string | null {
 export async function handleFamilyRoutes(
   request: Request,
   env: Env,
-  pathname: string
+  pathname: string,
+  execCtx: ExecutionContext
 ): Promise<Response | null> {
   if (pathname === '/api/families/search' && request.method === 'GET') {
     return handleSearch(request, env);
@@ -37,7 +38,7 @@ export async function handleFamilyRoutes(
     return handlePickup(request, env);
   }
   if (pathname === '/api/families' && request.method === 'POST') {
-    return handleCreate(request, env);
+    return handleCreate(request, env, execCtx);
   }
   const idMatch = pathname.match(/^\/api\/families\/([a-f0-9]+)$/);
   if (idMatch) {
@@ -78,7 +79,7 @@ async function handleGet(request: Request, env: Env, id: string): Promise<Respon
   return Response.json(family);
 }
 
-async function handleCreate(request: Request, env: Env): Promise<Response> {
+async function handleCreate(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
   let body: Partial<NewFamily> & { idempotency_key?: string; proxy?: { proxy_name: string; proxy_phone: string | null } };
@@ -130,14 +131,20 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
 
   const id = await insertFamily(env.DB, data, idempotencyKey);
 
+  // waitUntil: without it the runtime may terminate these once the response
+  // returns (Cloudflare documents floating promises as unreliable in Workers).
   if (!wasReplay && data.want_text_updates && data.phone && env.MESSAGE_EVERYWHERE_API_KEY) {
-    subscribeRecipient(env.MESSAGE_EVERYWHERE_API_KEY, data.phone, data.language, data.name)
-      .catch(() => { /* best-effort */ });
+    execCtx.waitUntil(
+      subscribeRecipient(env.MESSAGE_EVERYWHERE_API_KEY, data.phone, data.language, data.name)
+        .catch(() => { /* best-effort */ })
+    );
   }
 
   if (!wasReplay) {
-    checkForDuplicates(env.DB, id, data.name, data.phone)
-      .catch(() => { /* best-effort */ });
+    execCtx.waitUntil(
+      checkForDuplicates(env.DB, id, data.name, data.phone)
+        .catch(() => { /* best-effort */ })
+    );
   }
 
   if (body.proxy && !wasReplay) {
