@@ -15,8 +15,13 @@ describe('normalizePhone', () => {
     expect(normalizePhone(null)).toBeNull();
     expect(normalizePhone('')).toBeNull();
   });
-  it('returns null for strings with fewer than 7 digits', () => {
+  it('returns null for anything that is not exactly 10 digits (runtime search rule)', () => {
     expect(normalizePhone('123')).toBeNull();
+    expect(normalizePhone('555-1234')).toBeNull();       // 7 digits — unfindable at runtime
+    expect(normalizePhone('480555123456')).toBeNull();    // 12 digits
+  });
+  it('strips a leading 1 from 11-digit numbers', () => {
+    expect(normalizePhone('1-480-555-1234')).toBe('4805551234');
   });
 });
 

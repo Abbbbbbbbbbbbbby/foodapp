@@ -5,10 +5,25 @@ import { randomUUID } from 'crypto';
 
 const AMI = { 1: 59347, 2: 94640, 3: 115062, 4: 125621, 5: 121268, 6: 132321, 7: 127820 };
 
+// Mirrors the runtime rule in src/worker/db.ts: search and pickup lookups
+// require exactly 10 digits, so anything else imported here would be
+// permanently unfindable by phone. 11-digit numbers with a leading 1 are
+// canonicalized; the rest become null and are counted in the run summary.
 export function normalizePhone(phone) {
   if (phone == null) return null;
-  const digits = String(phone).replace(/\D/g, '');
-  return digits.length >= 7 ? digits : null;
+  let digits = String(phone).replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  return digits.length === 10 ? digits : null;
+}
+
+// Tracks phones dropped by normalizePhone so the summary can report them
+// instead of silently importing unfindable families.
+export function auditPhone(phone, droppedList, context) {
+  const norm = normalizePhone(phone);
+  if (norm === null && phone != null && String(phone).replace(/\D/g, '').length > 0) {
+    droppedList.push({ context, raw: String(phone) });
+  }
+  return norm;
 }
 
 export function annualizeIncome(amount, unit) {
@@ -94,6 +109,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   let familyCount = 0;
   let visitCount = 0;
   let proxyCount = 0;
+  const droppedPhones = [];
 
   const familyType = Object.values(userTypes).find(t => t.name === 'family_data');
   if (!familyType) {
@@ -110,9 +126,9 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
         const parts = l.replace(/^"|"$/gm, '').split('","');
         return {
           name: parts[0]?.trim(),
-          phone: normalizePhone(parts[1]),
+          phone: auditPhone(parts[1], droppedPhones, `family "${parts[0]}"`),
           proxies: parts[2]?.trim(),
-          proxyPhones: normalizePhone(parts[3]),
+          proxyPhones: auditPhone(parts[3], droppedPhones, `proxy for "${parts[0]}"`),
         };
       })
       .filter(f => f.name);
@@ -150,4 +166,8 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   writeFileSync(outPath, lines.join('\n'));
   console.log(`Wrote ${lines.length} SQL lines to ${outPath}`);
   console.log(`Migrated: ${userCount} users, ${familyCount} families, ${visitCount} visits, ${proxyCount} proxies`);
+  if (droppedPhones.length > 0) {
+    console.warn(`WARNING: ${droppedPhones.length} phone(s) were not valid 10-digit numbers and were imported as NULL (family will not be findable by phone):`);
+    for (const d of droppedPhones) console.warn(`  - ${d.context}: "${d.raw}"`);
+  }
 }
