@@ -101,19 +101,11 @@ async function handleMerge(
   }
   const discardId = keep_id === flag.family_a_id ? flag.family_b_id : flag.family_a_id;
 
-  await mergeFamilies(env.DB, keep_id, discardId);
-
-  // Mark this flag as merged
-  await env.DB.prepare(`
-    UPDATE duplicate_flags SET status = 'merged', reviewed_by = ?, reviewed_at = datetime('now')
-    WHERE id = ?
-  `).bind(ctx.userId, flagId).run();
-
-  // Dismiss any other pending flags that referenced the now-deleted discard family
-  await env.DB.prepare(`
-    UPDATE duplicate_flags SET status = 'dismissed', reviewed_by = ?, reviewed_at = datetime('now')
-    WHERE status = 'pending' AND (family_a_id = ? OR family_b_id = ?)
-  `).bind(ctx.userId, discardId, discardId).run();
+  // One atomic batch: merge, delete flags referencing the discard family
+  // (their NOT NULL FK blocks the family delete), delete the family, and
+  // write the merge to record_changes. Flags referencing only the keep
+  // family remain pending and stay reviewable.
+  await mergeFamilies(env.DB, keep_id, discardId, ctx.userId, flagId);
 
   return Response.json({ ok: true });
 }

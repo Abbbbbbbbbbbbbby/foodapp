@@ -49,12 +49,18 @@ const NULLABLE_FIELDS = [
   'first_visit_date',
 ];
 
-// Merges discard into keep: fills null fields, moves visits and proxies,
-// then deletes the discard family. Caller is responsible for updating the flag status.
+// Merges discard into keep as ONE atomic batch: fills null fields, MOVES
+// visits/proxies (UPDATE, not copy — preserves ids, bag_received,
+// idempotency_key, and audit metadata), deletes every duplicate_flags row
+// referencing the discard family (their NOT NULL FK would otherwise block the
+// family delete forever), deletes the discard family, and records the merge in
+// record_changes. D1 rolls back the whole batch if any statement fails.
 export async function mergeFamilies(
   db: D1Database,
   keepId: string,
-  discardId: string
+  discardId: string,
+  reviewerId: string,
+  flagId: string
 ): Promise<void> {
   const [keep, discard] = await Promise.all([
     db.prepare(`SELECT * FROM families WHERE id = ?`).bind(keepId).first<Record<string, unknown>>(),
@@ -62,36 +68,46 @@ export async function mergeFamilies(
   ]);
   if (!keep || !discard) throw new Error('Family not found');
 
-  // Fill any null fields on keep from discard
   const sets = NULLABLE_FIELDS.map(f => `${f} = COALESCE(${f}, ?)`);
   const vals: unknown[] = NULLABLE_FIELDS.map(f => discard[f] ?? null);
   vals.push(keepId);
-  await db.prepare(
-    `UPDATE families SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`
-  ).bind(...vals).run();
 
-  // Move visits from discard to keep (only dates not already present in keep)
-  await db.prepare(`
-    INSERT INTO visits (id, family_id, visit_date, picked_up_by_phone, volunteer_id, created_at)
-    SELECT lower(hex(randomblob(16))), ?, visit_date, picked_up_by_phone, volunteer_id, created_at
-    FROM visits
-    WHERE family_id = ?
-    AND visit_date NOT IN (SELECT visit_date FROM visits WHERE family_id = ?)
-  `).bind(keepId, discardId, keepId).run();
+  const auditId = crypto.randomUUID().replace(/-/g, '');
+  const auditChanges = JSON.stringify({
+    _action: 'merged duplicate family',
+    merged_from: { id: discardId, name: discard.name, phone: discard.phone },
+    flag_id: flagId,
+  });
 
-  // Move proxies from discard to keep (only phone numbers not already present)
-  await db.prepare(`
-    INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at)
-    SELECT lower(hex(randomblob(16))), ?, proxy_name, proxy_phone, created_at
-    FROM proxies p
-    WHERE p.family_id = ?
-    AND (p.proxy_phone IS NULL OR p.proxy_phone NOT IN (
-      SELECT proxy_phone FROM proxies WHERE family_id = ? AND proxy_phone IS NOT NULL
-    ))
-  `).bind(keepId, discardId, keepId).run();
-
-  // Delete discard (visits and proxies first since no ON DELETE CASCADE)
-  await db.prepare(`DELETE FROM visits WHERE family_id = ?`).bind(discardId).run();
-  await db.prepare(`DELETE FROM proxies WHERE family_id = ?`).bind(discardId).run();
-  await db.prepare(`DELETE FROM families WHERE id = ?`).bind(discardId).run();
+  await db.batch([
+    // Fill any null fields on keep from discard
+    db.prepare(
+      `UPDATE families SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`
+    ).bind(...vals),
+    // Move visits whose date isn't already on keep; leftovers are same-date dupes
+    db.prepare(`
+      UPDATE visits SET family_id = ?
+      WHERE family_id = ?
+      AND visit_date NOT IN (SELECT visit_date FROM visits WHERE family_id = ?)
+    `).bind(keepId, discardId, keepId),
+    db.prepare(`DELETE FROM visits WHERE family_id = ?`).bind(discardId),
+    // Move proxies whose phone isn't already on keep; leftovers are dupes
+    db.prepare(`
+      UPDATE proxies SET family_id = ?
+      WHERE family_id = ?
+      AND (proxy_phone IS NULL OR proxy_phone NOT IN (
+        SELECT proxy_phone FROM proxies WHERE family_id = ? AND proxy_phone IS NOT NULL
+      ))
+    `).bind(keepId, discardId, keepId),
+    db.prepare(`DELETE FROM proxies WHERE family_id = ?`).bind(discardId),
+    // Flags referencing discard must go before the family row can (NOT NULL FK);
+    // the merge itself is preserved in record_changes below.
+    db.prepare(
+      `DELETE FROM duplicate_flags WHERE family_a_id = ? OR family_b_id = ?`
+    ).bind(discardId, discardId),
+    db.prepare(`DELETE FROM families WHERE id = ?`).bind(discardId),
+    db.prepare(
+      `INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, 'families', ?, ?, ?)`
+    ).bind(auditId, keepId, reviewerId, auditChanges),
+  ]);
 }
