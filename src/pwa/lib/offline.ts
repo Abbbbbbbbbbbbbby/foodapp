@@ -20,12 +20,14 @@ export interface PendingItem {
 }
 
 export interface DeadLetterEntry {
-  id: string;
+  id: string;             // same id as the pending queue entry — put() makes re-dead-lettering idempotent
   timestamp: number;
   type: PendingItem['type'];
   label: string;          // best-effort name/identifier for display
   errorStatus: number;
   errorMessage: string;
+  payload: unknown;       // full original submission — recoverable/re-enterable
+  idempotencyKey: string; // replaying via this key cannot create a duplicate
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -43,7 +45,9 @@ function openDb(): Promise<IDBDatabase> {
 }
 
 function dispatchCountChange() {
-  window.dispatchEvent(new Event('offlinecountchange'));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('offlinecountchange'));
+  }
 }
 
 // Accept an explicit idempotency key (generated before the first attempt) so
@@ -108,17 +112,22 @@ async function addDeadLetter(item: PendingItem, errorStatus: number, errorMessag
     ? ((item.payload as { data?: { name?: string } })?.data?.name ?? 'Unknown family')
     : `Visit for family ${(item.payload as { family_id?: string })?.family_id ?? '?'}`;
   const entry: DeadLetterEntry = {
-    id: generateUUID(),
+    id: item.id,
     timestamp: Date.now(),
     type: item.type,
     label,
     errorStatus,
     errorMessage,
+    payload: item.payload,
+    idempotencyKey: item.idempotencyKey ?? item.id,
   };
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(DL_STORE, 'readwrite');
-    tx.objectStore(DL_STORE).add(entry);
+    // put(), keyed by the pending item's id: if removeItem fails afterward and
+    // the item is re-dead-lettered on a later flush, it overwrites rather than
+    // duplicating the entry.
+    tx.objectStore(DL_STORE).put(entry);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -224,9 +233,19 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
             result.needsReLogin = true;
             // Don't dead-letter: the item may succeed after re-login
           } else if (err.status >= 400 && err.status < 500) {
-            // Permanent client error — persist to dead-letter store before removing
-            try { await addDeadLetter(item, err.status, err.message); } catch { /* best-effort */ }
-            try { await removeItem(item.id); } catch { /* best-effort */ }
+            // Permanent client error. Persist the durable dead-letter record
+            // FIRST; only remove from pending if that write succeeded. If the
+            // dead-letter write fails, the item stays queued (bounded retry
+            // beats silent loss).
+            try {
+              await addDeadLetter(item, err.status, err.message);
+            } catch {
+              result.errors++;
+              continue;
+            }
+            // If this remove fails the item retries next flush and re-dead-
+            // letters; put() by item id makes that overwrite, not duplicate.
+            try { await removeItem(item.id); } catch { /* retried next flush */ }
             result.deadLettered++;
           } else {
             // 5xx: transient server error — keep in queue

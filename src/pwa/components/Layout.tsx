@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, clearAuth, getToken } from '../store/auth';
-import { getPendingCount, flushQueue, getDeadLetters } from '../lib/offline';
+import { getPendingCount, flushQueue, getDeadLetters, clearDeadLetters } from '../lib/offline';
+import type { DeadLetterEntry } from '../lib/offline';
 import { api } from '../lib/api';
 
 interface NavItem {
@@ -24,7 +25,8 @@ export default function Layout() {
   const location = useLocation();
   const user = getUser()!;
   const [pendingCount, setPendingCount] = useState(0);
-  const [deadLetterCount, setDeadLetterCount] = useState(0);
+  const [deadLetters, setDeadLetters] = useState<DeadLetterEntry[]>([]);
+  const [dlExpanded, setDlExpanded] = useState(false);
 
   useEffect(() => {
     function refresh() {
@@ -37,7 +39,7 @@ export default function Layout() {
 
   useEffect(() => {
     // Load any persisted dead-letter entries on mount
-    getDeadLetters().then(entries => setDeadLetterCount(entries.length)).catch(() => {});
+    getDeadLetters().then(setDeadLetters).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -46,9 +48,9 @@ export default function Layout() {
     const doFlush = async () => {
       try {
         const result = await flushQueue(apiFn);
-        // Update dead-letter count from the durable store before any navigation
+        // Refresh dead-letter entries from the durable store before any navigation
         if (result.deadLettered > 0) {
-          getDeadLetters().then(entries => setDeadLetterCount(entries.length)).catch(() => {});
+          getDeadLetters().then(setDeadLetters).catch(() => {});
         }
         if (result.needsReLogin) {
           clearAuth();
@@ -60,6 +62,14 @@ export default function Layout() {
     window.addEventListener('online', doFlush);
     return () => window.removeEventListener('online', doFlush);
   }, [navigate]);
+
+  async function handleAcknowledgeDeadLetters() {
+    try {
+      await clearDeadLetters();
+      setDeadLetters([]);
+      setDlExpanded(false);
+    } catch { /* keep the banner if the clear failed */ }
+  }
 
   async function handleLogout() {
     try {
@@ -78,10 +88,29 @@ export default function Layout() {
 
   return (
     <div className="layout">
-      {deadLetterCount > 0 && (
-        <p className="error banner" style={{ margin: 0, borderRadius: 0 }}>
-          {deadLetterCount} {deadLetterCount === 1 ? 'entry' : 'entries'} could not be saved and {deadLetterCount === 1 ? 'was' : 'were'} removed. Please inform a supervisor.
-        </p>
+      {deadLetters.length > 0 && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
+          <p style={{ margin: 0 }}>
+            {deadLetters.length} {deadLetters.length === 1 ? 'entry' : 'entries'} could not be saved. Show a supervisor before dismissing.
+            <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => setDlExpanded(e => !e)}>
+              {dlExpanded ? 'Hide' : 'Details'}
+            </button>
+          </p>
+          {dlExpanded && (
+            <div style={{ marginTop: 6 }}>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                {deadLetters.map(dl => (
+                  <li key={dl.id}>
+                    {dl.label} — {new Date(dl.timestamp).toLocaleString()} — server said: {dl.errorStatus} {dl.errorMessage}
+                  </li>
+                ))}
+              </ul>
+              <button className="btn-ghost" style={{ marginTop: 6, fontSize: 12 }} onClick={handleAcknowledgeDeadLetters}>
+                Acknowledge and dismiss / Confirmar y descartar
+              </button>
+            </div>
+          )}
+        </div>
       )}
       <header className="header">
         <span className="header-name">{user.name}</span>
