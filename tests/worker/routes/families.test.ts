@@ -191,3 +191,62 @@ describe('PATCH /api/families/:id', () => {
     expect(data.ok).toBe(true);
   });
 });
+
+describe('POST /api/families/:id/proxies', () => {
+  async function createFamily(name: string): Promise<string> {
+    const res = await SELF.fetch('https://x/api/families', {
+      method: 'POST',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const body = await res.json() as { id: string };
+    return body.id;
+  }
+
+  it('persists a normalized proxy and is idempotent on re-add', async () => {
+    const famId = await createFamily('Proxy Target Family');
+    for (let i = 0; i < 2; i++) {
+      const res = await SELF.fetch(`https://x/api/families/${famId}/proxies`, {
+        method: 'POST',
+        headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proxy_name: 'Helper Person', proxy_phone: '(480) 555-0199' }),
+      });
+      expect(res.status).toBe(200);
+    }
+    const rows = await env.DB.prepare(
+      `SELECT proxy_name, proxy_phone FROM proxies WHERE family_id = ?`
+    ).bind(famId).all<{ proxy_name: string; proxy_phone: string }>();
+    expect(rows.results!.length).toBe(1);
+    expect(rows.results![0].proxy_phone).toBe('4805550199');
+  });
+
+  it('surfaces the added family in pickup lookup by proxy phone', async () => {
+    const famId = await createFamily('Pickup Via Proxy Family');
+    await SELF.fetch(`https://x/api/families/${famId}/proxies`, {
+      method: 'POST',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy_name: 'Neighbor', proxy_phone: '4805550777' }),
+    });
+    const res = await SELF.fetch('https://x/api/families/pickup?phone=4805550777', {
+      headers: { Authorization: authHeader },
+    });
+    const body = await res.json() as { proxy: Array<{ id: string }> };
+    expect(body.proxy.some(f => f.id === famId)).toBe(true);
+  });
+
+  it('400s without proxy_name and 404s for a missing family', async () => {
+    const famId = await createFamily('Validation Family');
+    const noName = await SELF.fetch(`https://x/api/families/${famId}/proxies`, {
+      method: 'POST',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy_phone: '4805550001' }),
+    });
+    expect(noName.status).toBe(400);
+    const missing = await SELF.fetch('https://x/api/families/ffffffffffffffff/proxies', {
+      method: 'POST',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy_name: 'X' }),
+    });
+    expect(missing.status).toBe(404);
+  });
+});

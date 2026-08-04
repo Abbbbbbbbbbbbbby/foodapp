@@ -40,12 +40,45 @@ export async function handleFamilyRoutes(
   if (pathname === '/api/families' && request.method === 'POST') {
     return handleCreate(request, env, execCtx);
   }
+  const proxyMatch = pathname.match(/^\/api\/families\/([a-f0-9]+)\/proxies$/);
+  if (proxyMatch && request.method === 'POST') {
+    return handleAddProxy(request, env, proxyMatch[1]);
+  }
   const idMatch = pathname.match(/^\/api\/families\/([a-f0-9]+)$/);
   if (idMatch) {
     if (request.method === 'GET') return handleGet(request, env, idMatch[1]);
     if (request.method === 'PATCH') return handleUpdate(request, env, idMatch[1]);
   }
   return null;
+}
+
+// Persist a pickup authorization discovered at the window ("also picking up
+// for" a family not yet linked to this person's phone). Idempotent: re-adding
+// an existing (family, phone) pair is a no-op.
+async function handleAddProxy(request: Request, env: Env, familyId: string): Promise<Response> {
+  const authCtx = await getAuthContext(request, env);
+  if (!authCtx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  let body: { proxy_name?: string; proxy_phone?: string | null };
+  try { body = await request.json() as typeof body; }
+  catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+
+  const proxyName = body.proxy_name?.trim();
+  if (!proxyName) return Response.json({ error: 'proxy_name is required' }, { status: 400 });
+
+  const family = await env.DB.prepare(`SELECT 1 FROM families WHERE id = ?`).bind(familyId).first();
+  if (!family) return Response.json({ error: 'Family not found' }, { status: 404 });
+
+  const proxyPhone = normalizePhone(body.proxy_phone ?? null);
+  const existing = await env.DB.prepare(
+    `SELECT 1 FROM proxies WHERE family_id = ? AND proxy_phone IS ? LIMIT 1`
+  ).bind(familyId, proxyPhone).first();
+  if (!existing) {
+    const proxyId = crypto.randomUUID().replace(/-/g, '');
+    await env.DB.prepare(
+      `INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
+    ).bind(proxyId, familyId, proxyName, proxyPhone).run();
+  }
+  return Response.json({ ok: true });
 }
 
 async function handleSearch(request: Request, env: Env): Promise<Response> {

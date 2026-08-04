@@ -15,7 +15,7 @@ import SummaryScreen, { type SummaryFamily } from '../components/enter/SummarySc
 type EnterView =
   | { type: 'lookup' }
   | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null }
-  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[] }
+  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null }
   | { type: 'log-visit'; families: FamilySearchResult[]; current: number }
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
   | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
@@ -38,7 +38,7 @@ export default function EnterPage() {
           `/api/families/pickup?phone=${encodeURIComponent(phone)}`
         );
         if (pickup.own || pickup.proxy.length > 0) {
-          setView({ type: 'family-select', own: pickup.own, proxy: pickup.proxy });
+          setView({ type: 'family-select', own: pickup.own, proxy: pickup.proxy, pickupName: pickup.own?.name ?? name, pickupPhone: phone });
           return;
         }
       }
@@ -65,11 +65,11 @@ export default function EnterPage() {
         const pickup = await api.get<{ own: FamilySearchResult | null; proxy: FamilySearchResult[] }>(
           `/api/families/pickup?phone=${encodeURIComponent(result.phone)}`
         );
-        setView({ type: 'family-select', own: pickup.own ?? result, proxy: pickup.proxy });
+        setView({ type: 'family-select', own: pickup.own ?? result, proxy: pickup.proxy, pickupName: (pickup.own ?? result).name, pickupPhone: result.phone });
         return;
       } catch { /* fall through to single-family select */ }
     }
-    setView({ type: 'family-select', own: result, proxy: [] });
+    setView({ type: 'family-select', own: result, proxy: [], pickupName: result.name, pickupPhone: result.phone });
   }
 
   function handleFamilySelectConfirm(families: FamilySearchResult[]) {
@@ -273,6 +273,8 @@ export default function EnterPage() {
         <FamilySelectScreen
           own={view.own}
           proxy={view.proxy}
+          pickupName={view.pickupName}
+          pickupPhone={view.pickupPhone}
           onConfirm={handleFamilySelectConfirm}
           onBack={() => setView({ type: 'lookup' })}
         />
