@@ -28,7 +28,7 @@ export default function EnterPage() {
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
   // Accumulates visit IDs for the log-visit (existing family) flow
-  const pendingVisitIds = useRef<(string | null)[]>([]);
+  const pendingVisitIds = useRef<{ visitId: string | null; queueId: string | null }[]>([]);
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
@@ -88,6 +88,7 @@ export default function EnterPage() {
       idempotency_key: visitIdemKey,
     };
     let visitId: string | null = null;
+    let queueId: string | null = null;
     try {
       const result = await api.post<{ id: string }>('/api/visits', visitPayload);
       visitId = result.id;
@@ -98,17 +99,17 @@ export default function EnterPage() {
       }
       // Network error — queue with the same idempotency key and continue
       try {
-        await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey);
+        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
       }
     }
-    pendingVisitIds.current.push(visitId);
+    pendingVisitIds.current.push({ visitId, queueId });
     if (current + 1 < families.length) {
       setView({ type: 'log-visit', families, current: current + 1 });
     } else {
-      const visitIds = pendingVisitIds.current;
+      const visitRefs = pendingVisitIds.current;
       pendingVisitIds.current = [];
       setView({
         type: 'done',
@@ -117,7 +118,8 @@ export default function EnterPage() {
           name: f.name,
           num_people: f.num_people,
           bag_received: null,
-          visitId: visitIds[i] ?? null,
+          visitId: visitRefs[i]?.visitId ?? null,
+          queueId: visitRefs[i]?.queueId ?? null,
         })),
       });
     }
@@ -175,13 +177,14 @@ export default function EnterPage() {
         return; // server rejected — don't advance
       }
       // Network error — queue family + visit pair together and advance
+      let familyQueueId: string;
       try {
-        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
+        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
       }
-      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId: null });
+      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId: null, queueId: familyQueueId });
       advanceWizard(familyIndex, total);
       return;
     }
@@ -193,6 +196,7 @@ export default function EnterPage() {
       picked_up_by_phone: proxyData?.proxy_phone ?? null,
     };
     let visitId: string | null = null;
+    let visitQueueId: string | null = null;
     let visitError: string | undefined;
     try {
       const visitResult = await api.post<{ id: string }>('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
@@ -204,14 +208,14 @@ export default function EnterPage() {
       } else {
         // Network — queue only the visit (family already has an id)
         try {
-          await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey);
+          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey);
         } catch {
           visitError = 'Visit not saved offline. Check storage permissions.';
         }
       }
     }
 
-    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId });
+    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId, queueId: visitQueueId });
     advanceWizard(familyIndex, total, visitError);
   }
 

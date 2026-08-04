@@ -17,6 +17,7 @@ export interface PendingItem {
   type: 'family' | 'visit';
   payload: unknown;
   createdAt: number;
+  bag?: boolean;          // a bag was given for this submission's visit — applied after sync
 }
 
 export interface DeadLetterEntry {
@@ -56,14 +57,32 @@ function dispatchCountChange() {
 export async function queueItem(
   item: Pick<PendingItem, 'type' | 'payload'>,
   idempotencyKey?: string
-): Promise<void> {
+): Promise<string> {
   const id = generateUUID();
   const key = idempotencyKey ?? id;
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).add({ ...item, id, idempotencyKey: key, createdAt: Date.now() });
-    tx.oncomplete = () => { dispatchCountChange(); resolve(); };
+    tx.oncomplete = () => { dispatchCountChange(); resolve(id); };
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// Mark a queued submission as having received a bag; the flush applies it to
+// the created visit after the item syncs.
+export async function setItemBag(id: string, bag: boolean): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const item = getReq.result as PendingItem | undefined;
+      if (!item) { reject(new Error('Queued item not found — it may have already synced')); return; }
+      store.put({ ...item, bag });
+    };
+    tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
 }
@@ -162,7 +181,7 @@ export async function clearDeadLetters(): Promise<void> {
   });
 }
 
-export type ApiFn = (url: string, body: unknown) => Promise<unknown>;
+export type ApiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') => Promise<unknown>;
 
 // Duck-typed check for ApiError (avoids importing api.ts into this module)
 function isApiError(err: unknown): err is { status: number; message: string } {
@@ -176,13 +195,15 @@ function isApiError(err: unknown): err is { status: number; message: string } {
 // Exported so it can be unit-tested with an injected API function
 export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<void> {
   const key = item.idempotencyKey ?? item.id;
+  let visitId: string | undefined;
   if (item.type === 'visit') {
     const payload = item.payload as {
       family_id: string;
       visit_date: string;
       picked_up_by_phone?: string | null;
     };
-    await apiFn('/api/visits', { ...payload, idempotency_key: key });
+    const visit = await apiFn('/api/visits', { ...payload, idempotency_key: key }) as { id?: string };
+    visitId = visit?.id;
   } else {
     // type === 'family': POST family then POST visit with derived idempotency keys
     const { data, proxyData } = item.payload as {
@@ -197,12 +218,18 @@ export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<v
     const d = new Date();
     const todayLocal = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     const visitDate = (data.first_visit_date as string | undefined) ?? todayLocal;
-    await apiFn('/api/visits', {
+    const visit = await apiFn('/api/visits', {
       family_id: result.id,
       visit_date: visitDate,
       picked_up_by_phone: proxyData?.proxy_phone ?? null,
       idempotency_key: `${key}-visit`,
-    });
+    }) as { id?: string };
+    visitId = visit?.id;
+  }
+  // Bag allocated while the submission was offline: apply it to the synced
+  // visit. Idempotent server-side; a failure here throws and the item retries.
+  if (item.bag && visitId) {
+    await apiFn(`/api/visits/${visitId}/bag`, { bag_received: true }, 'PATCH');
   }
 }
 

@@ -43,8 +43,10 @@ export default function Layout() {
   }, []);
 
   useEffect(() => {
-    const apiFn = (url: string, body: unknown) =>
-      api.post<unknown>(url, body as Record<string, unknown>);
+    const apiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') =>
+      method === 'PATCH'
+        ? api.patch<unknown>(url, body as Record<string, unknown>)
+        : api.post<unknown>(url, body as Record<string, unknown>);
     const doFlush = async () => {
       try {
         const result = await flushQueue(apiFn);

@@ -116,6 +116,25 @@ describe('flushQueue — dead-letter contract (durable IDB)', () => {
     expect(await getDeadLetters()).toHaveLength(0);
   });
 
+  it('bag allocated offline is applied to the synced visit via PATCH', async () => {
+    const calls: Array<{ url: string; method?: string }> = [];
+    const { setItemBag } = await import('../../src/pwa/lib/offline');
+    const queueId = await queueItem({ type: 'family', payload: FAMILY_PAYLOAD }, 'key-bag');
+    await setItemBag(queueId, true);
+
+    const result = await flushQueue(async (url, _body, method) => {
+      calls.push({ url, method });
+      return { id: url === '/api/families' ? 'fam-9' : 'visit-9' };
+    });
+
+    expect(result.flushed).toBe(1);
+    expect(calls).toEqual([
+      { url: '/api/families', method: undefined },
+      { url: '/api/visits', method: undefined },
+      { url: '/api/visits/visit-9/bag', method: 'PATCH' },
+    ]);
+  });
+
   it('successful sync flushes family then visit with derived key', async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     await queueItem({ type: 'family', payload: FAMILY_PAYLOAD }, 'key-ok');
