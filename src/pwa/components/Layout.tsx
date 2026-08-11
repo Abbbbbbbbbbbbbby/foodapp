@@ -47,12 +47,17 @@ export default function Layout() {
       method === 'PATCH'
         ? api.patch<unknown>(url, body as Record<string, unknown>)
         : api.post<unknown>(url, body as Record<string, unknown>);
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
     const doFlush = async () => {
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = undefined; }
       try {
         const result = await flushQueue(apiFn);
         if (result.errors > 0) {
-          // Transient failures stay queued; make the condition tail-able.
-          console.warn(`offline sync: ${result.errors} item(s) failed transiently and will retry`);
+          console.warn(`offline sync: ${result.errors} item(s) failed transiently — retrying in 30s`);
+          // Mount and 'online' are not enough: a 503 or transient fetch
+          // failure while the browser STAYS online needs a scheduled retry.
+          if (!disposed) retryTimer = setTimeout(doFlush, 30_000);
         }
         // Refresh dead-letter entries from the durable store before any navigation
         if (result.deadLettered > 0) {
@@ -64,9 +69,24 @@ export default function Layout() {
         }
       } catch { /* IndexedDB unavailable — degrade silently */ }
     };
+    // Items queued while already online (e.g. a request that failed over live
+    // wifi) get a near-term flush instead of waiting for a connectivity event.
+    let queuedTimer: ReturnType<typeof setTimeout> | undefined;
+    const onCountChange = () => {
+      if (navigator.onLine === false) return;
+      if (queuedTimer) clearTimeout(queuedTimer);
+      queuedTimer = setTimeout(doFlush, 5_000);
+    };
     doFlush();
     window.addEventListener('online', doFlush);
-    return () => window.removeEventListener('online', doFlush);
+    window.addEventListener('offlinecountchange', onCountChange);
+    return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (queuedTimer) clearTimeout(queuedTimer);
+      window.removeEventListener('online', doFlush);
+      window.removeEventListener('offlinecountchange', onCountChange);
+    };
   }, [navigate]);
 
   async function handleAcknowledgeDeadLetters() {

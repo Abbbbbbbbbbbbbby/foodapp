@@ -78,6 +78,19 @@ export async function mergeFamilies(
     `SELECT id FROM duplicate_flags WHERE (family_a_id = ? OR family_b_id = ?) AND id != ?`
   ).bind(discardId, discardId, flagId).all<{ id: string }>();
 
+  // Same-date visits on BOTH families: the discard side is about to be
+  // deleted, so capture its metadata now and back-fill keep's visit after the
+  // delete (running it before would duplicate idempotency_key under its
+  // unique index and abort the batch).
+  const collided = await db.prepare(`
+    SELECT visit_date, picked_up_by_phone, volunteer_id, updated_by, bag_received, idempotency_key
+    FROM visits WHERE family_id = ?
+    AND visit_date IN (SELECT visit_date FROM visits WHERE family_id = ?)
+  `).bind(discardId, keepId).all<{
+    visit_date: string; picked_up_by_phone: string | null; volunteer_id: string | null;
+    updated_by: string | null; bag_received: number; idempotency_key: string | null;
+  }>();
+
   const auditId = crypto.randomUUID().replace(/-/g, '');
   const auditChanges = JSON.stringify({
     _action: 'merged duplicate family',
@@ -97,14 +110,21 @@ export async function mergeFamilies(
       WHERE family_id = ?
       AND visit_date NOT IN (SELECT visit_date FROM visits WHERE family_id = ?)
     `).bind(keepId, discardId, keepId),
-    // Same-date leftovers are about to be deleted — first propagate a positive
-    // bag_received onto keep's visit for that date so bag data can't be lost.
-    db.prepare(`
-      UPDATE visits SET bag_received = 1
-      WHERE family_id = ? AND bag_received = 0
-      AND visit_date IN (SELECT visit_date FROM visits WHERE family_id = ? AND bag_received = 1)
-    `).bind(keepId, discardId),
     db.prepare(`DELETE FROM visits WHERE family_id = ?`).bind(discardId),
+    // Back-fill metadata from the deleted same-date visits onto keep's visit
+    // for that date: null fields adopt the discarded value, bag_received ORs.
+    ...(collided.results ?? []).map(v => db.prepare(`
+      UPDATE visits SET
+        picked_up_by_phone = COALESCE(picked_up_by_phone, ?),
+        volunteer_id = COALESCE(volunteer_id, ?),
+        updated_by = COALESCE(updated_by, ?),
+        idempotency_key = COALESCE(idempotency_key, ?),
+        bag_received = CASE WHEN bag_received = 1 OR ? = 1 THEN 1 ELSE 0 END
+      WHERE family_id = ? AND visit_date = ?
+    `).bind(
+      v.picked_up_by_phone, v.volunteer_id, v.updated_by, v.idempotency_key,
+      v.bag_received, keepId, v.visit_date
+    )),
     // Move proxies whose phone isn't already on keep; leftovers are dupes
     db.prepare(`
       UPDATE proxies SET family_id = ?

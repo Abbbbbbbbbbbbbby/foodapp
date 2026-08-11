@@ -203,4 +203,26 @@ describe('flushQueue — review-round regressions', () => {
     expect(result.flushed).toBe(2);
     expect(await getPending()).toHaveLength(0);
   });
+
+  it('a 4xx on the CATCH-UP bag PATCH is classified as bag-only, not whole-submission', async () => {
+    const { setItemBag, getDeadLetters: getDLs } = await import('../../src/pwa/lib/offline');
+    const queueId = await queueItem({ type: 'family', payload: FAMILY_PAYLOAD }, 'key-race-4xx');
+
+    const flushP = flushQueue(async (url, _body, method) => {
+      if (method === 'PATCH') throw new FakeApiError(422, 'bag rejected');
+      if (url === '/api/visits') {
+        await setItemBag(queueId, true); // lands mid-sync → catch-up path
+        return { id: 'visit-cu' };
+      }
+      return { id: 'fam-cu' };
+    });
+    const result = await flushP;
+
+    expect(result.deadLettered).toBe(1);
+    const dls = await getDLs();
+    expect(dls).toHaveLength(1);
+    // The annotated bag-only record — NOT a generic whole-submission failure
+    expect(dls[0].errorMessage).toContain('family and visit SAVED');
+    expect(await getPending()).toHaveLength(0);
+  });
 });

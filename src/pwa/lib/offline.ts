@@ -225,6 +225,19 @@ function isApiError(err: unknown): err is { status: number; message: string } {
   );
 }
 
+// Single classification point for the post-sync bag PATCH: a non-401 4xx means
+// the family/visit ARE saved and only the bag flag was rejected.
+async function patchBagClassified(apiFn: ApiFn, visitId: string): Promise<void> {
+  try {
+    await apiFn(`/api/visits/${visitId}/bag`, { bag_received: true }, 'PATCH');
+  } catch (err) {
+    if (isApiError(err) && err.status >= 400 && err.status < 500 && err.status !== 401) {
+      throw new BagPatchError(err.status, err.message);
+    }
+    throw err;
+  }
+}
+
 // Exported so it can be unit-tested with an injected API function
 export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<{ visitId?: string }> {
   const key = item.idempotencyKey ?? item.id;
@@ -264,14 +277,7 @@ export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<{
   // a 4xx here means the DATA saved and only the bag flag was rejected, which
   // must not be recorded as a whole-submission failure.
   if (item.bag && visitId) {
-    try {
-      await apiFn(`/api/visits/${visitId}/bag`, { bag_received: true }, 'PATCH');
-    } catch (err) {
-      if (isApiError(err) && err.status >= 400 && err.status < 500 && err.status !== 401) {
-        throw new BagPatchError(err.status, err.message);
-      }
-      throw err;
-    }
+    await patchBagClassified(apiFn, visitId);
   }
   return { visitId };
 }
@@ -302,16 +308,27 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
     const items = await getPending();
     for (const snapshot of items) {
       // Re-read just before syncing: setItemBag (or any update) landing after
-      // the getPending snapshot must not be lost to a stale copy.
-      const item = (await getItem(snapshot.id).catch(() => undefined)) ?? snapshot;
+      // the getPending snapshot must not be lost to a stale copy. A failed
+      // re-read is NOT a license to use stale data — skip and retry later.
+      let item: PendingItem;
+      try {
+        const fresh = await getItem(snapshot.id);
+        if (!fresh) continue; // removed by a concurrent actor — nothing to sync
+        item = fresh;
+      } catch {
+        result.errors++;
+        continue;
+      }
       try {
         const { visitId } = await syncQueuedItem(item, apiFn);
         // A bag set WHILE this item was syncing would vanish with removeItem —
-        // re-read once more and catch it up before removal.
+        // re-read once more and catch it up before removal. If this re-read
+        // fails we must NOT remove the item (a late bag flag could exist);
+        // the item retries next flush — replay is idempotent server-side.
         if (visitId) {
-          const fresh = await getItem(item.id).catch(() => undefined);
+          const fresh = await getItem(item.id);
           if (fresh?.bag && !item.bag) {
-            await apiFn(`/api/visits/${visitId}/bag`, { bag_received: true }, 'PATCH');
+            await patchBagClassified(apiFn, visitId);
           }
         }
         await removeItem(item.id);

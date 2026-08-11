@@ -170,3 +170,54 @@ describe('mergeFamilies — review-round regressions', () => {
     expect(kept!.bag_received).toBe(1); // bag data survived the same-date dedup
   });
 });
+
+describe('mergeFamilies — same-date metadata preservation (probe round 2)', () => {
+  beforeEach(async () => {
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM duplicate_flags`),
+      env.DB.prepare(`DELETE FROM visits`),
+      env.DB.prepare(`DELETE FROM proxies`),
+      env.DB.prepare(`DELETE FROM families`),
+      env.DB.prepare(`DELETE FROM record_changes`),
+    ]);
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, name, phone, role, active, self_registered) VALUES (?, 'Merge Tester', '4805550000', 'admin', 1, 0)`
+    ).bind(USER_ID).run();
+  });
+
+  it('back-fills picked_up_by_phone, volunteer_id, and idempotency_key from the discarded same-date visit', async () => {
+    await insertFamily('fam-keep', 'A', '4805551111');
+    await insertFamily('fam-drop', 'B', '4805552222');
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+    await insertVisit('v-keep', 'fam-keep', '2026-08-02', { bag_received: 0 });
+    await insertVisit('v-drop', 'fam-drop', '2026-08-02', {
+      bag_received: 1, picked_up_by_phone: '4805559876', volunteer_id: USER_ID, idempotency_key: 'k-meta',
+    });
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const kept = await env.DB.prepare(
+      `SELECT picked_up_by_phone, volunteer_id, idempotency_key, bag_received FROM visits WHERE id = 'v-keep'`
+    ).first<{ picked_up_by_phone: string | null; volunteer_id: string | null; idempotency_key: string | null; bag_received: number }>();
+    expect(kept!.picked_up_by_phone).toBe('4805559876');
+    expect(kept!.volunteer_id).toBe(USER_ID);
+    expect(kept!.idempotency_key).toBe('k-meta'); // replay of the old submission dedupes
+    expect(kept!.bag_received).toBe(1);
+  });
+
+  it('does not overwrite keep-side values that already exist', async () => {
+    await insertFamily('fam-keep', 'A', '4805551111');
+    await insertFamily('fam-drop', 'B', '4805552222');
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+    await insertVisit('v-keep', 'fam-keep', '2026-08-02', { picked_up_by_phone: '4805550001', idempotency_key: 'k-keep' });
+    await insertVisit('v-drop', 'fam-drop', '2026-08-02', { picked_up_by_phone: '4805559876', idempotency_key: 'k-drop' });
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const kept = await env.DB.prepare(
+      `SELECT picked_up_by_phone, idempotency_key FROM visits WHERE id = 'v-keep'`
+    ).first<{ picked_up_by_phone: string; idempotency_key: string }>();
+    expect(kept!.picked_up_by_phone).toBe('4805550001');
+    expect(kept!.idempotency_key).toBe('k-keep');
+  });
+});
