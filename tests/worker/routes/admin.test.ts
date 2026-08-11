@@ -167,3 +167,53 @@ describe('DELETE /api/admin/users/:id', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('DELETE /api/admin/users/:id — FK-referenced users (review round)', () => {
+  it('deletes a user referenced by families.updated_by, visits.updated_by, and duplicate_flags.reviewed_by', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u9', 'Referenced', '4805550009', 'staff');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by, updated_by) VALUES ('famA', 'Fam A', 'u9', 'u9')`).run();
+    await db.prepare(`INSERT INTO families (id, name) VALUES ('famB', 'Fam B')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, volunteer_id, updated_by) VALUES ('vA', 'famA', '2026-08-01', 'u9', 'u9')`).run();
+    await db.prepare(`INSERT INTO duplicate_flags (id, family_a_id, family_b_id, reason, status, reviewed_by) VALUES ('dfA', 'famA', 'famB', 'phone', 'dismissed', 'u9')`).run();
+    await db.prepare(`INSERT INTO otp_codes (id, phone, code, expires_at) VALUES ('otpA', '4805550009', '123456', datetime('now', '+10 minutes'))`).run();
+
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await SELF.fetch('https://example.com/api/admin/users/u9', {
+      method: 'DELETE',
+      headers: authHeader(token),
+    });
+    expect(res.status).toBe(200);
+
+    expect(await db.prepare(`SELECT id FROM users WHERE id = 'u9'`).first()).toBeNull();
+    const fam = await db.prepare(`SELECT created_by, updated_by FROM families WHERE id = 'famA'`).first<{ created_by: string | null; updated_by: string | null }>();
+    expect(fam!.created_by).toBeNull();
+    expect(fam!.updated_by).toBeNull();
+    const visit = await db.prepare(`SELECT volunteer_id, updated_by FROM visits WHERE id = 'vA'`).first<{ volunteer_id: string | null; updated_by: string | null }>();
+    expect(visit!.volunteer_id).toBeNull();
+    expect(visit!.updated_by).toBeNull();
+    const flag = await db.prepare(`SELECT reviewed_by FROM duplicate_flags WHERE id = 'dfA'`).first<{ reviewed_by: string | null }>();
+    expect(flag!.reviewed_by).toBeNull();
+    expect(await db.prepare(`SELECT id FROM otp_codes WHERE id = 'otpA'`).first()).toBeNull();
+  });
+
+  it('still blocks deleting the last admin, without corrupting references', async () => {
+    await seedUser('a1', 'Admin One', '4805550000', 'admin');
+    await seedUser('a2', 'Admin Two', '4805550002', 'admin');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`UPDATE users SET active = 0 WHERE id = 'a2'`).run();
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('famG', 'Guard Fam', 'a1')`).run();
+
+    const token = await makeToken('a2', '4805550002', 'admin');
+    const res = await SELF.fetch('https://example.com/api/admin/users/a1', {
+      method: 'DELETE',
+      headers: authHeader(token),
+    });
+    expect(res.status).toBe(400);
+    // Guard rejection left the reference intact — no orphaned attribution
+    const fam = await db.prepare(`SELECT created_by FROM families WHERE id = 'famG'`).first<{ created_by: string | null }>();
+    expect(fam!.created_by).toBe('a1');
+    expect(await db.prepare(`SELECT id FROM users WHERE id = 'a1'`).first()).not.toBeNull();
+  });
+});

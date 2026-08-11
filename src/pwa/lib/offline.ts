@@ -106,6 +106,16 @@ export async function getPending(): Promise<PendingItem[]> {
   });
 }
 
+export async function getItem(id: string): Promise<PendingItem | undefined> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).get(id);
+    req.onsuccess = () => resolve(req.result as PendingItem | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
 export async function getPendingCount(): Promise<number> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -216,7 +226,7 @@ function isApiError(err: unknown): err is { status: number; message: string } {
 }
 
 // Exported so it can be unit-tested with an injected API function
-export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<void> {
+export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<{ visitId?: string }> {
   const key = item.idempotencyKey ?? item.id;
   let visitId: string | undefined;
   if (item.type === 'visit') {
@@ -263,6 +273,7 @@ export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<v
       throw err;
     }
   }
+  return { visitId };
 }
 
 export interface FlushResult {
@@ -272,18 +283,37 @@ export interface FlushResult {
   needsReLogin: boolean;  // a 401 was received — caller should redirect to login
 }
 
-// In-flight guard: prevents mount and 'online' event from overlapping
+// In-flight guard: prevents mount and 'online' event from overlapping.
+// A trigger that arrives mid-flush sets rerunRequested so the active flush
+// runs a trailing pass instead of the trigger being dropped.
 let flushing = false;
+let rerunRequested = false;
 
 export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
-  if (flushing) return { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false };
+  if (flushing) {
+    rerunRequested = true;
+    return { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false };
+  }
   flushing = true;
   const result: FlushResult = { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false };
   try {
+   do {
+    rerunRequested = false;
     const items = await getPending();
-    for (const item of items) {
+    for (const snapshot of items) {
+      // Re-read just before syncing: setItemBag (or any update) landing after
+      // the getPending snapshot must not be lost to a stale copy.
+      const item = (await getItem(snapshot.id).catch(() => undefined)) ?? snapshot;
       try {
-        await syncQueuedItem(item, apiFn);
+        const { visitId } = await syncQueuedItem(item, apiFn);
+        // A bag set WHILE this item was syncing would vanish with removeItem —
+        // re-read once more and catch it up before removal.
+        if (visitId) {
+          const fresh = await getItem(item.id).catch(() => undefined);
+          if (fresh?.bag && !item.bag) {
+            await apiFn(`/api/visits/${visitId}/bag`, { bag_received: true }, 'PATCH');
+          }
+        }
         await removeItem(item.id);
         result.flushed++;
       } catch (err) {
@@ -332,8 +362,10 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
         }
       }
     }
+   } while (rerunRequested);
   } finally {
     flushing = false;
+    rerunRequested = false;
   }
   return result;
 }

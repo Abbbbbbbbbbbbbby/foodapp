@@ -140,3 +140,33 @@ describe('checkForDuplicates', () => {
     expect(flags.results![0]).toMatchObject({ family_a_id: 'fam-a', family_b_id: 'fam-b', reason: 'phone' });
   });
 });
+
+describe('mergeFamilies — review-round regressions', () => {
+  beforeEach(async () => {
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM duplicate_flags`),
+      env.DB.prepare(`DELETE FROM visits`),
+      env.DB.prepare(`DELETE FROM proxies`),
+      env.DB.prepare(`DELETE FROM families`),
+      env.DB.prepare(`DELETE FROM record_changes`),
+    ]);
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, name, phone, role, active, self_registered) VALUES (?, 'Merge Tester', '4805550000', 'admin', 1, 0)`
+    ).bind(USER_ID).run();
+  });
+
+  it('same-date merge propagates bag_received=1 from the discarded visit', async () => {
+    await insertFamily('fam-keep', 'A', '4805551111');
+    await insertFamily('fam-drop', 'B', '4805552222');
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+    await insertVisit('v-keep', 'fam-keep', '2026-08-01', { bag_received: 0 });
+    await insertVisit('v-drop', 'fam-drop', '2026-08-01', { bag_received: 1 });
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const kept = await env.DB.prepare(
+      `SELECT bag_received FROM visits WHERE id = 'v-keep'`
+    ).first<{ bag_received: number }>();
+    expect(kept!.bag_received).toBe(1); // bag data survived the same-date dedup
+  });
+});

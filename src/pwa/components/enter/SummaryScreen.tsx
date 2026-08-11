@@ -31,13 +31,18 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     () => new Set(needBag.map((_, i) => i))
   );
   const [marking, setMarking] = useState(false);
-  const [bagsSaved, setBagsSaved] = useState(false);
+  // Indices (into needBag) whose bag status was successfully recorded, and how
+  // many of those rode a still-pending queue item. Per-family so a partial
+  // failure keeps ONLY the failed families visible for retry.
+  const [savedIdx, setSavedIdx] = useState<Set<number>>(new Set());
   const [savedPending, setSavedPending] = useState(0);
   const [bagError, setBagError] = useState<string | null>(null);
 
   const distCount = distributionCount(families);
   const hasLarge = families.some(f => (f.num_people ?? 0) > 5);
-  const bagCount = bagsSaved ? 0 : needBag.length;
+  const remainingIdx = needBag.map((_, i) => i).filter(i => !savedIdx.has(i));
+  const bagsSaved = savedIdx.size > 0;
+  const bagCount = remainingIdx.length;
 
   function toggle(i: number) {
     setSelected(prev => {
@@ -50,39 +55,43 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
   async function handleSaveBags() {
     setBagError(null);
     setMarking(true);
-    const chosen = needBag.filter((_, i) => selected.has(i));
-    const synced = chosen.filter(f => f.visitId);
-    const queued = chosen.filter(f => !f.visitId && f.queueId);
-    const unreachable = chosen.filter(f => !f.visitId && !f.queueId);
+    const chosen = remainingIdx.filter(i => selected.has(i)).map(i => ({ i, f: needBag[i] }));
+    const synced = chosen.filter(({ f }) => f.visitId);
+    const queued = chosen.filter(({ f }) => !f.visitId && f.queueId);
+    const unreachable = chosen.filter(({ f }) => !f.visitId && !f.queueId);
     // Settle per family: one failure must not block or misreport the others.
     const results = await Promise.allSettled([
-      ...synced.map(f => api.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true })),
+      ...synced.map(({ f }) => api.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true })),
       // Offline submissions: record the bag on the queued item — the flush
       // applies it to the visit after sync.
-      ...queued.map(f => setItemBag(f.queueId!, true)),
+      ...queued.map(({ f }) => setItemBag(f.queueId!, true)),
     ]);
     const chosenOrdered = [...synced, ...queued];
     const failed: string[] = [];
     let alreadySynced = 0;
-    results.forEach((r, i) => {
-      if (r.status === 'rejected') {
-        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        // The queue item synced between reaching this screen and tapping save:
-        // the visit IS saved — the bag flag just can't ride the queue anymore.
-        if (msg.includes('already synced') || msg.includes('not found')) alreadySynced++;
-        else failed.push(`${chosenOrdered[i].name}: ${msg}`);
+    const newlySaved: number[] = [];
+    let newlyPending = 0;
+    results.forEach((r, k) => {
+      if (r.status === 'fulfilled') {
+        newlySaved.push(chosenOrdered[k].i);
+        if (k >= synced.length) newlyPending++;
+        return;
       }
+      const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      // The queue item synced between reaching this screen and tapping save:
+      // the visit IS saved — the bag flag just can't ride the queue anymore.
+      if (msg.includes('already synced') || msg.includes('not found')) alreadySynced++;
+      else failed.push(`${chosenOrdered[k].f.name}: ${msg}`);
     });
-    const okCount = results.filter(r => r.status === 'fulfilled').length;
-    if (okCount > 0) setBagsSaved(true);
-    setSavedPending(queued.length - results.slice(synced.length).filter(r => r.status === 'rejected').length);
+    setSavedIdx(prev => new Set([...prev, ...newlySaved]));
+    setSavedPending(prev => prev + newlyPending);
     const problems: string[] = [];
     if (alreadySynced > 0) {
       problems.push(
         `${alreadySynced} family record(s) finished syncing just now — the check-in IS saved, but the bag must be marked by staff from View Records.`
       );
     }
-    if (failed.length > 0) problems.push(`Failed: ${failed.join('; ')} — check connection and retry.`);
+    if (failed.length > 0) problems.push(`Failed: ${failed.join('; ')} — those families remain listed, check connection and retry.`);
     if (unreachable.length > 0) {
       problems.push(`${unreachable.length} record(s) could not be updated (the visit did not save) — note those manually.`);
     }
@@ -147,7 +156,7 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
         </span>
       </div>
 
-      {needBag.length > 0 && !bagsSaved && (
+      {remainingIdx.length > 0 && (
         <div style={{ marginTop: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '16px' }}>
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
             <input
@@ -167,7 +176,7 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
               <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>
                 Which families received a bag? / ¿Qué familias recibieron una bolsa?
               </p>
-              {needBag.map((f, i) => (
+              {remainingIdx.map(i => { const f = needBag[i]; return (
                 <label key={`${f.id || f.queueId || i}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
@@ -181,16 +190,16 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
                     {!f.visitId && <span style={{ color: 'var(--text-muted)', fontSize: 12 }}> (pending sync)</span>}
                   </span>
                 </label>
-              ))}
+              ); })}
               <button
                 className="btn-secondary btn-large"
                 style={{ marginTop: 8 }}
                 onClick={handleSaveBags}
-                disabled={marking || selected.size === 0}
+                disabled={marking || remainingIdx.filter(i => selected.has(i)).length === 0}
               >
                 {marking
                   ? 'Saving... / Guardando...'
-                  : `Save bags (${selected.size}) / Guardar bolsas (${selected.size})`}
+                  : `Save bags (${remainingIdx.filter(i => selected.has(i)).length}) / Guardar bolsas (${remainingIdx.filter(i => selected.has(i)).length})`}
               </button>
             </div>
           )}

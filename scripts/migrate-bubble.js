@@ -16,6 +16,12 @@ export function normalizePhone(phone) {
   return digits.length === 10 ? digits : null;
 }
 
+// Mirror of src/worker/db.ts normalizeName: accent-fold + lowercase so
+// imported rows are reachable by the runtime's folded search.
+export function normalizeName(s) {
+  return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
 // Tracks phones dropped by normalizePhone so the summary can report them
 // instead of silently importing unfindable families.
 export function auditPhone(phone, droppedList, context) {
@@ -143,8 +149,8 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
     const key = `${f.name}|${f.phone ?? ''}`;
     familyIdMap.set(key, fid);
     lines.push(
-      `INSERT OR IGNORE INTO families (id, name, phone, created_at, updated_at) VALUES ` +
-      `(${sq(fid)}, ${sq(f.name)}, ${sq(f.phone)}, ${sq(now)}, ${sq(now)});`
+      `INSERT OR IGNORE INTO families (id, name, name_normalized, phone, created_at, updated_at) VALUES ` +
+      `(${sq(fid)}, ${sq(f.name)}, ${sq(normalizeName(f.name))}, ${sq(f.phone)}, ${sq(now)}, ${sq(now)});`
     );
     familyCount++;
 

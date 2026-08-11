@@ -152,26 +152,29 @@ async function handleDeleteUser(
     }
   }
 
-  // Delete first (with last-admin guard) so a rejected guard doesn't corrupt FK references
-  const isLastAdminGuarded = user.role === 'admin' && user.active === 1;
-  const deleteWhere = isLastAdminGuarded
-    ? `id = ? AND (role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?) > 0)`
-    : `id = ?`;
-  const deleteArgs = isLastAdminGuarded ? [id, id] : [id];
-  const deleteResult = await env.DB.prepare(`DELETE FROM users WHERE ${deleteWhere}`).bind(...deleteArgs).run();
+  // One atomic batch. Every statement carries the SAME last-admin guard
+  // predicate as the DELETE, so on a guard rejection the whole batch no-ops
+  // (no orphaned reference-clears), while on success the clears run BEFORE
+  // the DELETE so D1's foreign-key enforcement accepts it. The guard reads
+  // only from users, which nothing here mutates before the DELETE, so the
+  // predicate is stable across the batch.
+  const GUARD = `(SELECT role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?1) > 0 FROM users WHERE id = ?1)`;
+  const results = await env.DB.batch([
+    env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE families SET updated_by = NULL WHERE updated_by = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE visits SET updated_by = NULL WHERE updated_by = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE duplicate_flags SET reviewed_by = NULL WHERE reviewed_by = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`DELETE FROM otp_codes WHERE phone = ?2 AND ${GUARD}`).bind(id, user.phone),
+    env.DB.prepare(`DELETE FROM users WHERE id = ?1 AND ${GUARD}`).bind(id),
+  ]);
 
-  if (isLastAdminGuarded && deleteResult.meta.rows_written === 0) {
+  const deleteResult = results[results.length - 1];
+  if (deleteResult.meta.rows_written === 0) {
+    // Pre-checks passed but the guarded delete matched nothing: lost the
+    // concurrent last-admin race.
     return Response.json({ error: 'Cannot delete the last admin' }, { status: 400 });
   }
-
-  // Cascade FK cleanup only after the delete succeeded
-  await env.DB.batch([
-    env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?`).bind(id),
-    env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?`).bind(id),
-    // Phone captured BEFORE the user row was deleted — a subquery here would
-    // match nothing now that the row is gone.
-    env.DB.prepare(`DELETE FROM otp_codes WHERE phone = ?`).bind(user.phone),
-  ]);
 
   return Response.json({ ok: true });
 }

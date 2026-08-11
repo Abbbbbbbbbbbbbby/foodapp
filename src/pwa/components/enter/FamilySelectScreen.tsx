@@ -65,6 +65,7 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
     // Persist the pickup authorization so this family appears automatically
     // next time (idempotent server-side). Requires the pickup person's phone
     // as the proxy key; without one the family is still added to THIS pickup.
+    let persistError: string | null = null;
     if (pickupPhone) {
       try {
         await api.post(`/api/families/${fam.id}/proxies`, {
@@ -72,19 +73,21 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
           proxy_phone: pickupPhone,
         });
       } catch (e) {
-        // Non-fatal: this pickup proceeds either way; surface so the volunteer
-        // knows the shortcut won't exist next time.
-        setAddError(e instanceof ApiError
-          ? `Added for today, but couldn't save for next time: ${e.message}`
-          : 'Added for today, but couldn\'t save for next time (offline). It will need adding again.');
+        // Non-fatal: this pickup proceeds either way — but the panel must stay
+        // open so the volunteer actually SEES that the save-for-next-time part
+        // failed (closing it would hide the only place the error renders).
+        persistError = e instanceof ApiError
+          ? `${fam.name} was added for today, but couldn't be saved for next time: ${e.message}`
+          : `${fam.name} was added for today, but couldn't be saved for next time (offline). It will need adding again on the next visit.`;
       }
     }
     setExtra(prev => (prev.some(f => f.id === fam.id) ? prev : [...prev, fam]));
     setSelected(prev => new Set(prev).add(fam.id));
-    setAdding(false);
     setAddQuery('');
     setAddResults(null);
     setAddBusy(false);
+    setAddError(persistError);
+    if (!persistError) setAdding(false); // keep the panel (and the message) open on failure
   }
 
   return (

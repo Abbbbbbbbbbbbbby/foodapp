@@ -150,3 +150,57 @@ describe('flushQueue — dead-letter contract (durable IDB)', () => {
     expect(calls[1].body.idempotency_key).toBe('key-ok-visit');
   });
 });
+
+describe('flushQueue — review-round regressions', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it('a bag set during an active flush is still applied (fresh re-read before removal)', async () => {
+    const { setItemBag } = await import('../../src/pwa/lib/offline');
+    const queueId = await queueItem({ type: 'family', payload: FAMILY_PAYLOAD }, 'key-race');
+
+    const calls: Array<{ url: string; method?: string }> = [];
+    let releaseVisit!: () => void;
+    const visitGate = new Promise<void>(r => { releaseVisit = r; });
+
+    const flushP = flushQueue(async (url, _body, method) => {
+      calls.push({ url, method });
+      if (url === '/api/visits') {
+        // Simulate the volunteer tapping "Save bags" while this item syncs
+        await setItemBag(queueId, true);
+        releaseVisit();
+        return { id: 'visit-race' };
+      }
+      return { id: 'fam-race' };
+    });
+
+    await visitGate;
+    const result = await flushP;
+
+    expect(result.flushed).toBe(1);
+    expect(calls.some(c => c.url === '/api/visits/visit-race/bag' && c.method === 'PATCH')).toBe(true);
+    expect(await getPending()).toHaveLength(0);
+  });
+
+  it('an online trigger during an active flush schedules a trailing pass', async () => {
+    await queueItem({ type: 'family', payload: { data: { name: 'First' }, proxyData: null } }, 'k-first');
+
+    let queuedSecond = false;
+    const flushP = flushQueue(async (url) => {
+      if (!queuedSecond && url === '/api/families') {
+        queuedSecond = true;
+        // Second item lands mid-flush; the overlapping trigger must not be dropped
+        await queueItem({ type: 'family', payload: { data: { name: 'Second' }, proxyData: null } }, 'k-second');
+        const overlapping = await flushQueue(async () => ({ id: 'x' }));
+        expect(overlapping.flushed).toBe(0); // guard returns immediately...
+      }
+      return { id: 'fam-' + Math.random().toString(36).slice(2) };
+    });
+
+    const result = await flushP;
+    // ...but the first flush runs a trailing pass and drains the second item.
+    expect(result.flushed).toBe(2);
+    expect(await getPending()).toHaveLength(0);
+  });
+});

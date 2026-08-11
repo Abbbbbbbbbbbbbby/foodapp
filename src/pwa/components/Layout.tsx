@@ -109,11 +109,30 @@ export default function Layout() {
             <div style={{ marginTop: 6 }}>
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
                 {deadLetters.map(dl => (
-                  <li key={dl.id}>
+                  <li key={dl.id} style={{ marginBottom: 6 }}>
                     {dl.label} — {new Date(dl.timestamp).toLocaleString()} — server said: {dl.errorStatus} {dl.errorMessage}
+                    {/* Full stored submission — this is the recoverable copy; a
+                        supervisor re-enters from it (or exports it) before dismissing. */}
+                    <pre style={{ margin: '4px 0 0', padding: 6, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'rgba(0,0,0,0.15)', borderRadius: 4, maxHeight: 120, overflowY: 'auto' }}>
+                      {JSON.stringify(dl.payload, null, 1)}
+                    </pre>
                   </li>
                 ))}
               </ul>
+              <button
+                className="btn-ghost"
+                style={{ marginTop: 6, fontSize: 12, marginRight: 8 }}
+                onClick={() => {
+                  const blob = new Blob([JSON.stringify(deadLetters, null, 2)], { type: 'application/json' });
+                  const a = document.createElement('a');
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `unsaved-entries-${new Date().toISOString().slice(0, 10)}.json`;
+                  a.click();
+                  URL.revokeObjectURL(a.href);
+                }}
+              >
+                Download copy / Descargar copia
+              </button>
               <button className="btn-ghost" style={{ marginTop: 6, fontSize: 12 }} onClick={handleAcknowledgeDeadLetters}>
                 Acknowledge and dismiss / Confirmar y descartar
               </button>

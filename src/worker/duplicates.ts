@@ -97,6 +97,13 @@ export async function mergeFamilies(
       WHERE family_id = ?
       AND visit_date NOT IN (SELECT visit_date FROM visits WHERE family_id = ?)
     `).bind(keepId, discardId, keepId),
+    // Same-date leftovers are about to be deleted — first propagate a positive
+    // bag_received onto keep's visit for that date so bag data can't be lost.
+    db.prepare(`
+      UPDATE visits SET bag_received = 1
+      WHERE family_id = ? AND bag_received = 0
+      AND visit_date IN (SELECT visit_date FROM visits WHERE family_id = ? AND bag_received = 1)
+    `).bind(keepId, discardId),
     db.prepare(`DELETE FROM visits WHERE family_id = ?`).bind(discardId),
     // Move proxies whose phone isn't already on keep; leftovers are dupes
     db.prepare(`
