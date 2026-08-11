@@ -274,7 +274,7 @@ async function handlePatchFamily(
         current.phone as string,
         current.language as string | null,
         current.name as string
-      ).catch(() => { /* best-effort */ })
+      ).catch((err) => console.error('messageeverywhere subscribe failed:', err))
     );
   }
 

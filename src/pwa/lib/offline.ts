@@ -171,6 +171,20 @@ export async function getDeadLetters(): Promise<DeadLetterEntry[]> {
   });
 }
 
+// Delete only the given entries — acknowledging must not destroy entries
+// that arrived after the banner rendered and were never shown.
+export async function deleteDeadLetters(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DL_STORE, 'readwrite');
+    const store = tx.objectStore(DL_STORE);
+    for (const id of ids) store.delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export async function clearDeadLetters(): Promise<void> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -182,6 +196,15 @@ export async function clearDeadLetters(): Promise<void> {
 }
 
 export type ApiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') => Promise<unknown>;
+
+// Thrown when the family/visit synced but the follow-up bag PATCH was
+// rejected: the submission itself is SAVED, only the bag flag is not.
+export class BagPatchError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = 'BagPatchError';
+  }
+}
 
 // Duck-typed check for ApiError (avoids importing api.ts into this module)
 function isApiError(err: unknown): err is { status: number; message: string } {
@@ -227,9 +250,18 @@ export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<v
     visitId = visit?.id;
   }
   // Bag allocated while the submission was offline: apply it to the synced
-  // visit. Idempotent server-side; a failure here throws and the item retries.
+  // visit. Network/5xx failures throw and retry the whole item (idempotent);
+  // a 4xx here means the DATA saved and only the bag flag was rejected, which
+  // must not be recorded as a whole-submission failure.
   if (item.bag && visitId) {
-    await apiFn(`/api/visits/${visitId}/bag`, { bag_received: true }, 'PATCH');
+    try {
+      await apiFn(`/api/visits/${visitId}/bag`, { bag_received: true }, 'PATCH');
+    } catch (err) {
+      if (isApiError(err) && err.status >= 400 && err.status < 500 && err.status !== 401) {
+        throw new BagPatchError(err.status, err.message);
+      }
+      throw err;
+    }
   }
 }
 
@@ -255,7 +287,23 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
         await removeItem(item.id);
         result.flushed++;
       } catch (err) {
-        if (isApiError(err)) {
+        if (err instanceof BagPatchError) {
+          // Family and visit ARE saved — dead-letter an annotated bag-only
+          // record so recovery is "fix the bag flag", not "re-enter the family"
+          // (re-entry would duplicate what already saved).
+          const bagItem = { ...item, payload: item.payload };
+          try {
+            await addDeadLetter(
+              bagItem, err.status,
+              `Bag flag only — the family and visit SAVED. Do not re-enter; mark the bag from View Records. (${err.message})`
+            );
+          } catch {
+            result.errors++;
+            continue;
+          }
+          try { await removeItem(item.id); } catch { /* retried next flush */ }
+          result.deadLettered++;
+        } else if (isApiError(err)) {
           if (err.status === 401) {
             result.needsReLogin = true;
             // Don't dead-letter: the item may succeed after re-login

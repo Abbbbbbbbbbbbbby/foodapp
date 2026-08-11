@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, clearAuth, getToken } from '../store/auth';
-import { getPendingCount, flushQueue, getDeadLetters, clearDeadLetters } from '../lib/offline';
+import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters } from '../lib/offline';
 import type { DeadLetterEntry } from '../lib/offline';
 import { api } from '../lib/api';
 
@@ -50,6 +50,10 @@ export default function Layout() {
     const doFlush = async () => {
       try {
         const result = await flushQueue(apiFn);
+        if (result.errors > 0) {
+          // Transient failures stay queued; make the condition tail-able.
+          console.warn(`offline sync: ${result.errors} item(s) failed transiently and will retry`);
+        }
         // Refresh dead-letter entries from the durable store before any navigation
         if (result.deadLettered > 0) {
           getDeadLetters().then(setDeadLetters).catch(() => {});
@@ -67,9 +71,12 @@ export default function Layout() {
 
   async function handleAcknowledgeDeadLetters() {
     try {
-      await clearDeadLetters();
-      setDeadLetters([]);
-      setDlExpanded(false);
+      // Delete only the entries currently shown; anything that landed after
+      // this render stays and re-renders the banner.
+      await deleteDeadLetters(deadLetters.map(dl => dl.id));
+      const remaining = await getDeadLetters();
+      setDeadLetters(remaining);
+      if (remaining.length === 0) setDlExpanded(false);
     } catch { /* keep the banner if the clear failed */ }
   }
 

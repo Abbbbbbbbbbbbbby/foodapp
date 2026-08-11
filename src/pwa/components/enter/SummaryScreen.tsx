@@ -54,27 +54,40 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     const synced = chosen.filter(f => f.visitId);
     const queued = chosen.filter(f => !f.visitId && f.queueId);
     const unreachable = chosen.filter(f => !f.visitId && !f.queueId);
-    try {
-      await Promise.all([
-        ...synced.map(f => api.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true })),
-        // Offline submissions: record the bag on the queued item — the flush
-        // applies it to the visit after sync.
-        ...queued.map(f => setItemBag(f.queueId!, true)),
-      ]);
-      if (synced.length > 0 || queued.length > 0) setBagsSaved(true);
-      setSavedPending(queued.length);
-      if (unreachable.length > 0) {
-        setBagError(
-          `${unreachable.length} record(s) could not be updated (the visit did not save) — note those manually.`
-        );
+    // Settle per family: one failure must not block or misreport the others.
+    const results = await Promise.allSettled([
+      ...synced.map(f => api.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true })),
+      // Offline submissions: record the bag on the queued item — the flush
+      // applies it to the visit after sync.
+      ...queued.map(f => setItemBag(f.queueId!, true)),
+    ]);
+    const chosenOrdered = [...synced, ...queued];
+    const failed: string[] = [];
+    let alreadySynced = 0;
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        // The queue item synced between reaching this screen and tapping save:
+        // the visit IS saved — the bag flag just can't ride the queue anymore.
+        if (msg.includes('already synced') || msg.includes('not found')) alreadySynced++;
+        else failed.push(`${chosenOrdered[i].name}: ${msg}`);
       }
-    } catch (err) {
-      setBagError(
-        err instanceof Error ? err.message : 'Failed to save — check your connection and try again.'
+    });
+    const okCount = results.filter(r => r.status === 'fulfilled').length;
+    if (okCount > 0) setBagsSaved(true);
+    setSavedPending(queued.length - results.slice(synced.length).filter(r => r.status === 'rejected').length);
+    const problems: string[] = [];
+    if (alreadySynced > 0) {
+      problems.push(
+        `${alreadySynced} family record(s) finished syncing just now — the check-in IS saved, but the bag must be marked by staff from View Records.`
       );
-    } finally {
-      setMarking(false);
     }
+    if (failed.length > 0) problems.push(`Failed: ${failed.join('; ')} — check connection and retry.`);
+    if (unreachable.length > 0) {
+      problems.push(`${unreachable.length} record(s) could not be updated (the visit did not save) — note those manually.`);
+    }
+    setBagError(problems.length > 0 ? problems.join(' ') : null);
+    setMarking(false);
   }
 
   const card: React.CSSProperties = {

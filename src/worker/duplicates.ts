@@ -72,11 +72,18 @@ export async function mergeFamilies(
   const vals: unknown[] = NULLABLE_FIELDS.map(f => discard[f] ?? null);
   vals.push(keepId);
 
+  // Enumerate every flag row the batch will delete (their NOT NULL FK forces
+  // it) so the audit record preserves what was collaterally removed.
+  const collateral = await db.prepare(
+    `SELECT id FROM duplicate_flags WHERE (family_a_id = ? OR family_b_id = ?) AND id != ?`
+  ).bind(discardId, discardId, flagId).all<{ id: string }>();
+
   const auditId = crypto.randomUUID().replace(/-/g, '');
   const auditChanges = JSON.stringify({
     _action: 'merged duplicate family',
     merged_from: { id: discardId, name: discard.name, phone: discard.phone },
     flag_id: flagId,
+    collateral_flags_removed: (collateral.results ?? []).map(r => r.id),
   });
 
   await db.batch([

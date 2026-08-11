@@ -58,6 +58,10 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
   }
 
   async function handleAddFamily(fam: FamilySearchResult) {
+    // Guard double-taps during the awaited POST and dedupe by id — a repeated
+    // add would put the family in the pickup twice and log two visits.
+    if (addBusy || extra.some(f => f.id === fam.id)) return;
+    setAddBusy(true);
     // Persist the pickup authorization so this family appears automatically
     // next time (idempotent server-side). Requires the pickup person's phone
     // as the proxy key; without one the family is still added to THIS pickup.
@@ -75,11 +79,12 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
           : 'Added for today, but couldn\'t save for next time (offline). It will need adding again.');
       }
     }
-    setExtra(prev => [...prev, fam]);
+    setExtra(prev => (prev.some(f => f.id === fam.id) ? prev : [...prev, fam]));
     setSelected(prev => new Set(prev).add(fam.id));
     setAdding(false);
     setAddQuery('');
     setAddResults(null);
+    setAddBusy(false);
   }
 
   return (

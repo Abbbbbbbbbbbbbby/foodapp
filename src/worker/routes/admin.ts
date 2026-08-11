@@ -83,8 +83,8 @@ async function handleUpdateUser(
   }
 
   const user = await env.DB.prepare(
-    `SELECT id, role, active FROM users WHERE id = ?`
-  ).bind(id).first<{ id: string; role: string; active: number }>();
+    `SELECT id, role, active, phone FROM users WHERE id = ?`
+  ).bind(id).first<{ id: string; role: string; active: number; phone: string }>();
   if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
 
   // Block self-demotion and self-deactivation
@@ -139,8 +139,8 @@ async function handleDeleteUser(
   }
 
   const user = await env.DB.prepare(
-    `SELECT id, role, active FROM users WHERE id = ?`
-  ).bind(id).first<{ id: string; role: string; active: number }>();
+    `SELECT id, role, active, phone FROM users WHERE id = ?`
+  ).bind(id).first<{ id: string; role: string; active: number; phone: string }>();
   if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
 
   if (user.role === 'admin' && user.active === 1) {
@@ -168,7 +168,9 @@ async function handleDeleteUser(
   await env.DB.batch([
     env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?`).bind(id),
     env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?`).bind(id),
-    env.DB.prepare(`DELETE FROM otp_codes WHERE phone = (SELECT phone FROM users WHERE id = ?)`).bind(id),
+    // Phone captured BEFORE the user row was deleted — a subquery here would
+    // match nothing now that the row is gone.
+    env.DB.prepare(`DELETE FROM otp_codes WHERE phone = ?`).bind(user.phone),
   ]);
 
   return Response.json({ ok: true });

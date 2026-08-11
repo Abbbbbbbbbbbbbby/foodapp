@@ -68,15 +68,25 @@ async function handleAddProxy(request: Request, env: Env, familyId: string): Pro
   const family = await env.DB.prepare(`SELECT 1 FROM families WHERE id = ?`).bind(familyId).first();
   if (!family) return Response.json({ error: 'Family not found' }, { status: 404 });
 
-  const proxyPhone = normalizePhone(body.proxy_phone ?? null);
+  const rawPhone = body.proxy_phone ?? null;
+  const proxyPhone = normalizePhone(rawPhone);
+  if (rawPhone !== null && String(rawPhone).trim() !== '' && proxyPhone === null) {
+    return Response.json({ error: 'proxy_phone must be a 10-digit phone number' }, { status: 400 });
+  }
   const existing = await env.DB.prepare(
     `SELECT 1 FROM proxies WHERE family_id = ? AND proxy_phone IS ? LIMIT 1`
   ).bind(familyId, proxyPhone).first();
   if (!existing) {
     const proxyId = crypto.randomUUID().replace(/-/g, '');
-    await env.DB.prepare(
-      `INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
-    ).bind(proxyId, familyId, proxyName, proxyPhone).run();
+    try {
+      await env.DB.prepare(
+        `INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
+      ).bind(proxyId, familyId, proxyName, proxyPhone).run();
+    } catch (err) {
+      // Concurrent add of the same (family, phone): the unique index makes
+      // this an idempotent no-op, not an error.
+      if (!(err instanceof Error && err.message.includes('UNIQUE'))) throw err;
+    }
   }
   return Response.json({ ok: true });
 }
@@ -169,14 +179,14 @@ async function handleCreate(request: Request, env: Env, execCtx: ExecutionContex
   if (!wasReplay && data.want_text_updates && data.phone && env.MESSAGE_EVERYWHERE_API_KEY) {
     execCtx.waitUntil(
       subscribeRecipient(env.MESSAGE_EVERYWHERE_API_KEY, data.phone, data.language, data.name)
-        .catch(() => { /* best-effort */ })
+        .catch((err) => console.error('messageeverywhere subscribe failed:', err))
     );
   }
 
   if (!wasReplay) {
     execCtx.waitUntil(
       checkForDuplicates(env.DB, id, data.name, data.phone)
-        .catch(() => { /* best-effort */ })
+        .catch((err) => console.error('duplicate detection failed:', err))
     );
   }
 
