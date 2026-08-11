@@ -54,7 +54,7 @@ async function handleMarkBag(request: Request, env: Env, visitId: string): Promi
   const result = await env.DB.prepare(
     'UPDATE visits SET bag_received = ? WHERE id = ?'
   ).bind(bagReceived, visitId).run();
-  if (result.meta.rows_written === 0) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (result.meta.changes === 0) return Response.json({ error: 'Not found' }, { status: 404 });
   return Response.json({ ok: true });
 }
 
