@@ -354,7 +354,9 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
             result.errors++;
             continue;
           }
-          try { await removeItem(item.id); } catch { /* retried next flush */ }
+          // errors++ on a stuck removal so the retry timer fires (put() by
+          // item id keeps the re-dead-letter an overwrite, not a duplicate).
+          try { await removeItem(item.id); } catch { result.errors++; }
           result.deadLettered++;
         } else if (isApiError(err)) {
           if (err.status === 401) {

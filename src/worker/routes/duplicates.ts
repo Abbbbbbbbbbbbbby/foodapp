@@ -105,7 +105,19 @@ async function handleMerge(
   // (their NOT NULL FK blocks the family delete), delete the family, and
   // write the merge to record_changes. Flags referencing only the keep
   // family remain pending and stay reviewable.
-  await mergeFamilies(env.DB, keep_id, discardId, ctx.userId, flagId);
+  try {
+    await mergeFamilies(env.DB, keep_id, discardId, ctx.userId, flagId);
+  } catch (err) {
+    if (err instanceof Error && err.message === 'Family not found') {
+      // Concurrent resolution: another admin merged/deleted one of these
+      // families between the flag read and the batch.
+      return Response.json(
+        { error: 'This flag was resolved by another admin — refresh the list' },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
 
   return Response.json({ ok: true });
 }

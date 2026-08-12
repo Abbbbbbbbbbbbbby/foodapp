@@ -73,14 +73,12 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
     // next time (idempotent server-side). Requires the pickup person's phone
     // as the proxy key; without one the family is still added to THIS pickup.
     let persistError: string | null = null;
-    if (pickupPhone && !pickupName.trim()) {
-      // Phone-only lookup with no own family: there's no name to key the
-      // authorization on — the server requires one. Add for today and say so.
-      persistError = `${fam.name} was added for today, but couldn't be saved for next time (no pickup name on file). It will need adding again.`;
-    } else if (pickupPhone) {
+    if (pickupPhone) {
       try {
+        // Name may be empty on a phone-only lookup — the phone is the
+        // functional key, so the authorization persists either way.
         await api.post(`/api/families/${fam.id}/proxies`, {
-          proxy_name: pickupName,
+          proxy_name: pickupName.trim() || null,
           proxy_phone: pickupPhone,
         });
       } catch (e) {

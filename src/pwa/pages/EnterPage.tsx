@@ -29,7 +29,7 @@ export default function EnterPage() {
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
   // Accumulates visit IDs for the log-visit (existing family) flow
-  const pendingVisitIds = useRef<{ visitId: string | null; queueId: string | null }[]>([]);
+  const pendingVisitIds = useRef<{ visitId: string | null; queueId: string | null; visitKey: string }[]>([]);
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
@@ -149,7 +149,7 @@ export default function EnterPage() {
         return;
       }
     }
-    pendingVisitIds.current.push({ visitId, queueId });
+    pendingVisitIds.current.push({ visitId, queueId, visitKey: visitIdemKey });
     if (current + 1 < families.length) {
       setView({ type: 'log-visit', families, current: current + 1 });
     } else {
@@ -164,6 +164,7 @@ export default function EnterPage() {
           bag_received: null,
           visitId: visitRefs[i]?.visitId ?? null,
           queueId: visitRefs[i]?.queueId ?? null,
+          visitKey: visitRefs[i]?.visitKey ?? null,
         })),
       });
     }
@@ -228,7 +229,7 @@ export default function EnterPage() {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
       }
-      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId: null, queueId: familyQueueId });
+      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId: null, queueId: familyQueueId, visitKey: `${familyIdemKey}-visit` });
       advanceWizard(familyIndex, total);
       return;
     }
@@ -259,7 +260,7 @@ export default function EnterPage() {
       }
     }
 
-    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId, queueId: visitQueueId });
+    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId, queueId: visitQueueId, visitKey: visitIdemKey });
     advanceWizard(familyIndex, total, visitError);
   }
 
@@ -342,8 +343,8 @@ export default function EnterPage() {
           familyIndex={0}
           total={1}
           initialData={{ name: view.prefillName }}
-          proxyData={view.returnTo.pickupPhone && view.returnTo.pickupName.trim()
-            ? { proxy_name: view.returnTo.pickupName, proxy_phone: view.returnTo.pickupPhone }
+          proxyData={view.returnTo.pickupPhone
+            ? { proxy_name: view.returnTo.pickupName.trim() || null, proxy_phone: view.returnTo.pickupPhone }
             : null}
           onComplete={handleInlineRegisterComplete}
           onBack={() => {

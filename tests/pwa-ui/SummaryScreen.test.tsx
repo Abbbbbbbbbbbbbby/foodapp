@@ -15,7 +15,7 @@ import { api } from '../../src/pwa/lib/api';
 import { setItemBag } from '../../src/pwa/lib/offline';
 
 const fam = (over: Partial<SummaryFamily>): SummaryFamily => ({
-  id: 'f1', name: 'Fam', num_people: 3, bag_received: null, visitId: 'v1', queueId: null, ...over,
+  id: 'f1', name: 'Fam', num_people: 3, bag_received: null, visitId: 'v1', queueId: null, visitKey: 'vk-1', ...over,
 });
 
 describe('SummaryScreen bag picklist', () => {
@@ -73,10 +73,30 @@ describe('SummaryScreen bag picklist', () => {
     expect(screen.queryByText('Fine Family')).not.toBeInTheDocument();
   });
 
-  it('already-synced queue rejection shows the check-in-IS-saved guidance', async () => {
+  it('already-synced rejection AUTO-RECOVERS via key resolution when possible', async () => {
     vi.mocked(setItemBag).mockRejectedValue(new Error('Queued item not found — it may have already synced'));
+    vi.mocked(api.get).mockResolvedValue({ id: 'v-recovered' });
+    vi.mocked(api.patch).mockResolvedValue({});
     const user = userEvent.setup();
-    render(<SummaryScreen families={[fam({ id: '', name: 'RacedFam', visitId: null, queueId: 'q-gone' })]} onNext={() => {}} />);
+    render(<SummaryScreen families={[fam({ id: '', name: 'RacedFam', visitId: null, queueId: 'q-gone', visitKey: 'vk-race' })]} onNext={() => {}} />);
+
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /Save bags/ }));
+
+    await waitFor(() => {
+      expect(api.get).toHaveBeenCalledWith('/api/visits/resolve/vk-race');
+      expect(api.patch).toHaveBeenCalledWith('/api/visits/v-recovered/bag', { bag_received: true });
+    });
+    // Fully recovered: success, no staff-guidance warning
+    expect(screen.getByText(/Recorded/)).toBeInTheDocument();
+    expect(screen.queryByText(/check-in IS saved/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to staff guidance when key resolution fails', async () => {
+    vi.mocked(setItemBag).mockRejectedValue(new Error('Queued item not found — it may have already synced'));
+    vi.mocked(api.get).mockRejectedValue(new Error('Not found'));
+    const user = userEvent.setup();
+    render(<SummaryScreen families={[fam({ id: '', name: 'RacedFam', visitId: null, queueId: 'q-gone', visitKey: 'vk-race' })]} onNext={() => {}} />);
 
     await user.click(screen.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: /Save bags/ }));

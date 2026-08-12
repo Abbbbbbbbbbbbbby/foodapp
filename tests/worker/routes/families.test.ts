@@ -234,14 +234,20 @@ describe('POST /api/families/:id/proxies', () => {
     expect(body.proxy.some(f => f.id === famId)).toBe(true);
   });
 
-  it('400s without proxy_name and 404s for a missing family', async () => {
+  it('persists a phone-only authorization with NULL name (issue #7: appears next time) and 404s for a missing family', async () => {
     const famId = await createFamily('Validation Family');
     const noName = await workerExports.default.fetch(`https://x/api/families/${famId}/proxies`, {
       method: 'POST',
       headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({ proxy_phone: '4805550001' }),
     });
-    expect(noName.status).toBe(400);
+    expect(noName.status).toBe(200);
+    // The functional requirement: this family now surfaces on the phone's pickups
+    const pickup = await workerExports.default.fetch('https://x/api/families/pickup?phone=4805550001', {
+      headers: { Authorization: authHeader },
+    });
+    const body = await pickup.json() as { proxy: Array<{ id: string }> };
+    expect(body.proxy.some(f => f.id === famId)).toBe(true);
     const missing = await workerExports.default.fetch('https://x/api/families/ffffffffffffffff/proxies', {
       method: 'POST',
       headers: { Authorization: authHeader, 'Content-Type': 'application/json' },

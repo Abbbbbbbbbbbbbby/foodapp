@@ -58,12 +58,15 @@ export async function handleFamilyRoutes(
 async function handleAddProxy(request: Request, env: Env, familyId: string): Promise<Response> {
   const authCtx = await getAuthContext(request, env);
   if (!authCtx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  let body: { proxy_name?: string; proxy_phone?: string | null };
+  let body: { proxy_name?: string | null; proxy_phone?: string | null };
   try { body = await request.json() as typeof body; }
   catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
 
-  const proxyName = body.proxy_name?.trim();
-  if (!proxyName) return Response.json({ error: 'proxy_name is required' }, { status: 400 });
+  // proxy_name is display metadata; the PHONE is what future pickups match
+  // on (getFamiliesForPickup keys on proxy_phone). A phone-only pickup with
+  // no name on file must still persist so the family appears automatically
+  // next time (issue #7 requirement).
+  const proxyName = body.proxy_name?.trim() || null;
 
   const family = await env.DB.prepare(`SELECT 1 FROM families WHERE id = ?`).bind(familyId).first();
   if (!family) return Response.json({ error: 'Family not found' }, { status: 404 });
@@ -125,7 +128,7 @@ async function handleGet(request: Request, env: Env, id: string): Promise<Respon
 async function handleCreate(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  let body: Partial<NewFamily> & { idempotency_key?: string; proxy?: { proxy_name: string; proxy_phone: string | null } };
+  let body: Partial<NewFamily> & { idempotency_key?: string; proxy?: { proxy_name: string | null; proxy_phone: string | null } };
   try {
     body = await request.json();
   } catch {

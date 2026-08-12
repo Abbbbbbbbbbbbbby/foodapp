@@ -119,3 +119,33 @@ describe('GET /api/visits', () => {
     expect(Array.isArray(data.visits)).toBe(true);
   });
 });
+
+describe('GET /api/visits/resolve/:key (bag recovery)', () => {
+  it('resolves a live visit by idempotency key', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT OR IGNORE INTO families (id, name) VALUES ('rf1', 'Resolve Fam')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, idempotency_key) VALUES ('rv1', 'rf1', '2026-08-12', 'resolve-key-1')`).run();
+    const res = await workerExports.default.fetch('https://x/api/visits/resolve/resolve-key-1', {
+      headers: { Authorization: authHeader },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { id: string }).id).toBe('rv1');
+  });
+
+  it('resolves through a merge alias and 404s unknown keys', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT OR IGNORE INTO families (id, name) VALUES ('rf2', 'Resolve Fam 2')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('rv2', 'rf2', '2026-08-12')`).run();
+    await db.prepare(`INSERT INTO merged_keys (idempotency_key, kind, target_id) VALUES ('aliased-key', 'visit', 'rv2')`).run();
+
+    const aliased = await workerExports.default.fetch('https://x/api/visits/resolve/aliased-key', {
+      headers: { Authorization: authHeader },
+    });
+    expect(((await aliased.json()) as { id: string }).id).toBe('rv2');
+
+    const missing = await workerExports.default.fetch('https://x/api/visits/resolve/no-such-key', {
+      headers: { Authorization: authHeader },
+    });
+    expect(missing.status).toBe(404);
+  });
+});

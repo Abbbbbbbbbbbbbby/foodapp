@@ -8,7 +8,8 @@ export interface SummaryFamily {
   num_people: number | null;
   bag_received: boolean | null;
   visitId: string | null;
-  queueId: string | null; // offline queue entry id when the submission hasn't synced yet
+  queueId: string | null;  // offline queue entry id when the submission hasn't synced yet
+  visitKey: string | null; // visit idempotency key — lets the bag be recovered after a mid-flow sync
 }
 
 interface SummaryScreenProps {
@@ -68,6 +69,7 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     ]);
     const chosenOrdered = [...synced, ...queued];
     const failed: string[] = [];
+    const recoveries: { i: number; f: SummaryFamily }[] = [];
     let alreadySynced = 0;
     let recordGone = 0;
     const newlySaved: number[] = [];
@@ -81,10 +83,9 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
       const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
       const lower = msg.toLowerCase(); // API messages vary in case ('Not found')
       if (lower.includes('already synced')) {
-        // Queue item synced mid-flow: the check-in IS saved; retrying here can
-        // never succeed, so resolve it out of the picklist with guidance.
-        alreadySynced++;
-        newlySaved.push(chosenOrdered[k].i);
+        // Queue item synced mid-flow. Recover automatically: resolve the visit
+        // by its idempotency key and PATCH the bag directly.
+        recoveries.push(chosenOrdered[k]);
       } else if (lower.includes('not found')) {
         // The visit was removed server-side — a retry is permanently futile.
         recordGone++;
@@ -93,6 +94,19 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
         failed.push(`${chosenOrdered[k].f.name}: ${msg}`);
       }
     });
+    // Second pass: recover bags whose queue items synced mid-flow
+    for (const { i, f } of recoveries) {
+      try {
+        if (!f.visitKey) throw new Error('no key');
+        const { id: visitId } = await api.get<{ id: string }>(`/api/visits/resolve/${encodeURIComponent(f.visitKey)}`);
+        await api.patch(`/api/visits/${visitId}/bag`, { bag_received: true });
+        newlySaved.push(i); // recovered — fully saved, no guidance needed
+      } catch {
+        // Couldn't recover automatically — fall back to the staff guidance
+        alreadySynced++;
+        newlySaved.push(i);
+      }
+    }
     setSavedIdx(prev => new Set([...prev, ...newlySaved]));
     setSavedPending(prev => prev + newlyPending);
     const problems: string[] = [];
