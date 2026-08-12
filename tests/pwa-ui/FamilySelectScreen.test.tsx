@@ -15,7 +15,7 @@ const result = (id: string, name: string): FamilySearchResult => ({
   id, name, phone: null, num_people: 2, last_visit_date: null,
 } as unknown as FamilySearchResult);
 
-function renderScreen(onConfirm = vi.fn()) {
+function renderScreen(onConfirm = vi.fn(), onRegisterNew = vi.fn()) {
   render(
     <FamilySelectScreen
       own={result('own1', 'Own Family')}
@@ -23,10 +23,11 @@ function renderScreen(onConfirm = vi.fn()) {
       pickupName="Pickup Person"
       pickupPhone="4805550001"
       onConfirm={onConfirm}
+      onRegisterNew={onRegisterNew}
       onBack={() => {}}
     />
   );
-  return onConfirm;
+  return { onConfirm, onRegisterNew };
 }
 
 describe('FamilySelectScreen add-another-family', () => {
@@ -36,7 +37,7 @@ describe('FamilySelectScreen add-another-family', () => {
     vi.mocked(api.get).mockResolvedValue({ results: [result('extra1', 'Neighbor Family')] });
     vi.mocked(api.post).mockResolvedValue({ ok: true });
     const user = userEvent.setup();
-    const onConfirm = renderScreen();
+    const { onConfirm } = renderScreen();
 
     await user.click(screen.getByRole('button', { name: /Add another family/ }));
     await user.type(screen.getByPlaceholderText(/Family name/), 'Neighbor');
@@ -90,7 +91,7 @@ describe('FamilySelectScreen add-another-family', () => {
     let release!: () => void;
     vi.mocked(api.post).mockImplementation(() => new Promise(r => { release = () => r({ ok: true }); }));
     const user = userEvent.setup();
-    const onConfirm = renderScreen();
+    const { onConfirm } = renderScreen();
 
     await user.click(screen.getByRole('button', { name: /Add another family/ }));
     await user.type(screen.getByPlaceholderText(/Family name/), 'Dup');
@@ -104,5 +105,47 @@ describe('FamilySelectScreen add-another-family', () => {
     await user.click(screen.getByRole('button', { name: /Confirm/ }));
     const selected = onConfirm.mock.calls[0][0] as { id: string }[];
     expect(selected.filter(f => f.id === 'dup1')).toHaveLength(1);
+  });
+});
+
+describe('inline registration launch (probe round 6)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('no-match offers Register-now and passes the query plus current selection', async () => {
+    vi.mocked(api.get).mockResolvedValue({ results: [] });
+    const user = userEvent.setup();
+    const { onRegisterNew } = renderScreen();
+
+    // Build up selection state first so we can prove it survives
+    await user.click(screen.getByText('Own Family'));
+    await user.click(screen.getByRole('button', { name: /Add another family/ }));
+    await user.type(screen.getByPlaceholderText(/Family name/), 'Brand New');
+    await user.click(screen.getByRole('button', { name: /Search \/ Buscar/ }));
+
+    await user.click(await screen.findByRole('button', { name: /Register them now/ }));
+    expect(onRegisterNew).toHaveBeenCalledWith('Brand New', {
+      extra: [],
+      selectedIds: ['own1'],
+    });
+  });
+
+  it('rehydrates extra families and selection after the round-trip', () => {
+    render(
+      <FamilySelectScreen
+        own={result('own1', 'Own Family')}
+        proxy={[]}
+        pickupName="Pickup Person"
+        pickupPhone="4805550001"
+        initialExtra={[result('reg9', 'Freshly Registered')]}
+        initialSelected={['own1', 'reg9']}
+        notice="Test notice text"
+        onConfirm={vi.fn()}
+        onRegisterNew={vi.fn()}
+        onBack={() => {}}
+      />
+    );
+    expect(screen.getByText('Freshly Registered')).toBeInTheDocument();
+    expect(screen.getByText('2 selected / seleccionadas')).toBeInTheDocument();
+    expect(screen.getByText('Test notice text')).toBeInTheDocument();
   });
 });

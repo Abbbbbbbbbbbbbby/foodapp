@@ -7,14 +7,21 @@ interface FamilySelectScreenProps {
   proxy: FamilySearchResult[];
   pickupName: string;
   pickupPhone: string | null;
+  // Rehydration after an inline registration round-trip
+  initialExtra?: FamilySearchResult[];
+  initialSelected?: string[];
+  notice?: string;
   onConfirm: (selected: FamilySearchResult[]) => void;
+  // Launch the registration wizard for a family the search can't find,
+  // carrying the current selection so it survives the round-trip.
+  onRegisterNew: (query: string, keep: { extra: FamilySearchResult[]; selectedIds: string[] }) => void;
   onBack: () => void;
 }
 
-export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone, onConfirm, onBack }: FamilySelectScreenProps) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone, initialExtra, initialSelected, notice, onConfirm, onRegisterNew, onBack }: FamilySelectScreenProps) {
+  const [selected, setSelected] = useState<Set<string>>(new Set(initialSelected ?? []));
   // Families added at the window that weren't already proxy-linked
-  const [extra, setExtra] = useState<FamilySearchResult[]>([]);
+  const [extra, setExtra] = useState<FamilySearchResult[]>(initialExtra ?? []);
   const [adding, setAdding] = useState(false);
   const [addQuery, setAddQuery] = useState('');
   const [addResults, setAddResults] = useState<FamilySearchResult[] | null>(null);
@@ -66,7 +73,11 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
     // next time (idempotent server-side). Requires the pickup person's phone
     // as the proxy key; without one the family is still added to THIS pickup.
     let persistError: string | null = null;
-    if (pickupPhone) {
+    if (pickupPhone && !pickupName.trim()) {
+      // Phone-only lookup with no own family: there's no name to key the
+      // authorization on — the server requires one. Add for today and say so.
+      persistError = `${fam.name} was added for today, but couldn't be saved for next time (no pickup name on file). It will need adding again.`;
+    } else if (pickupPhone) {
       try {
         await api.post(`/api/families/${fam.id}/proxies`, {
           proxy_name: pickupName,
@@ -96,6 +107,11 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
         <button className="btn-ghost" style={{ marginRight: 12 }} onClick={onBack}>← Back</button>
         <h2>Select families / Seleccionar familias</h2>
       </div>
+      {notice && (
+        <p style={{ fontSize: 13, padding: '8px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 8 }}>
+          {notice}
+        </p>
+      )}
       <p className="selection-count">{selected.size} selected / seleccionadas</p>
       {all.map(({ family, label }) => (
         <button
@@ -137,10 +153,18 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
             </button>
           </div>
           {addResults !== null && addResults.length === 0 && (
-            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 8 }}>
-              No match found. Finish this pickup, then register them as a new family. /
-              No encontrada. Termine esta recogida y regístrela como familia nueva.
-            </p>
+            <div style={{ marginTop: 8 }}>
+              <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                No match found. / No encontrada.
+              </p>
+              <button
+                className="btn-secondary"
+                style={{ marginTop: 6 }}
+                onClick={() => onRegisterNew(addQuery.trim(), { extra, selectedIds: [...selected] })}
+              >
+                Register them now / Registrarla ahora
+              </button>
+            </div>
           )}
           {addResults !== null && addResults.map(r => (
             <button key={r.id} className="family-card" style={{ marginTop: 8 }} onClick={() => handleAddFamily(r)}>

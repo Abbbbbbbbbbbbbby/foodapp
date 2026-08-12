@@ -331,7 +331,13 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
             await patchBagClassified(apiFn, visitId);
           }
         }
-        await removeItem(item.id);
+        try {
+          await removeItem(item.id);
+        } catch {
+          // Synced but stuck in the queue: count as an error so the caller's
+          // retry timer fires and the (idempotent) replay re-attempts removal.
+          result.errors++;
+        }
         result.flushed++;
       } catch (err) {
         if (err instanceof BagPatchError) {
@@ -367,7 +373,8 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
             }
             // If this remove fails the item retries next flush and re-dead-
             // letters; put() by item id makes that overwrite, not duplicate.
-            try { await removeItem(item.id); } catch { /* retried next flush */ }
+            // errors++ ensures the retry timer actually fires.
+            try { await removeItem(item.id); } catch { result.errors++; }
             result.deadLettered++;
           } else {
             // 5xx: transient server error — keep in queue
