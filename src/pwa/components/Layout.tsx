@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, clearAuth, getToken } from '../store/auth';
-import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters } from '../lib/offline';
+import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters, adoptForeignItems } from '../lib/offline';
 import type { DeadLetterEntry } from '../lib/offline';
-import { api } from '../lib/api';
+import { apiWithToken } from '../lib/api';
 
 interface NavItem {
   label: string;
@@ -30,6 +30,7 @@ export default function Layout() {
   const [sessionExpired, setSessionExpired] = useState(false);
   const [syncBroken, setSyncBroken] = useState(false);
   const [foreignCount, setForeignCount] = useState(0);
+  const [adoptArmed, setAdoptArmed] = useState(false);
 
   useEffect(() => {
     function refresh() {
@@ -46,19 +47,29 @@ export default function Layout() {
   }, []);
 
   useEffect(() => {
-    const apiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') =>
-      method === 'PATCH'
-        ? api.patch<unknown>(url, body as Record<string, unknown>)
-        : api.post<unknown>(url, body as Record<string, unknown>);
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
     const doFlush = async () => {
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = undefined; }
       try {
+        // Pin the token for the WHOLE flush: one queued submission spans
+        // several requests, and reading the live token per request would let
+        // a mid-flush account switch split it across two identities.
+        const pinned = apiWithToken(getToken());
+        const apiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') =>
+          method === 'PATCH'
+            ? pinned.patch<unknown>(url, body as Record<string, unknown>)
+            : pinned.post<unknown>(url, body as Record<string, unknown>);
         const result = await flushQueue(apiFn, user.id);
-        // A skipped result means another flush was already in flight — it says
-        // nothing about queue health, so it must not clear warning banners.
-        if (result.skipped) return;
+        // A skipped result means another flush was already in flight — it
+        // says nothing about queue health, so it must not clear warning
+        // banners. The in-flight flush may belong to an UNMOUNTED Layout
+        // whose setState is dead, so re-check shortly: THIS component must
+        // be the one that surfaces the real results.
+        if (result.skipped) {
+          if (!disposed) retryTimer = setTimeout(doFlush, 5_000);
+          return;
+        }
         setSyncBroken(false);
         setForeignCount(result.foreignItems);
         if (result.errors > 0) {
@@ -67,15 +78,15 @@ export default function Layout() {
           // failure while the browser STAYS online needs a scheduled retry.
           if (!disposed) retryTimer = setTimeout(doFlush, 30_000);
         }
-        // Refresh dead-letter entries from the durable store
-        if (result.deadLettered > 0) {
-          getDeadLetters().then(setDeadLetters).catch((err) => {
-            // Items were JUST permanently dead-lettered; failing to show the
-            // banner would read as "synced". Surface the degraded state.
-            console.error('failed to load dead-letter entries after dead-lettering:', err);
-            setSyncBroken(true);
-          });
-        }
+        // Refresh dead letters UNCONDITIONALLY: entries may have been written
+        // by an earlier flush whose component unmounted before rendering them,
+        // so this flush's own deadLettered count can't gate the read.
+        getDeadLetters().then(setDeadLetters).catch((err) => {
+          // Failing to show just-dead-lettered entries would read as
+          // "synced". Surface the degraded state.
+          console.error('failed to load dead-letter entries after flush:', err);
+          setSyncBroken(true);
+        });
         if (result.needsReLogin) {
           // Never yank mid-work: a stale queued item's 401 used to clearAuth
           // and redirect from any page, losing in-progress entry (issue #6).
@@ -118,6 +129,19 @@ export default function Layout() {
     } catch { /* keep the banner if the clear failed */ }
   }
 
+  async function handleAdoptForeign() {
+    try {
+      await adoptForeignItems(user.id);
+      setForeignCount(0);
+      setAdoptArmed(false);
+      // adoptForeignItems dispatched offlinecountchange, which schedules the
+      // flush that syncs the adopted entries under this account.
+    } catch (err) {
+      console.error('failed to adopt held entries:', err);
+      setSyncBroken(true);
+    }
+  }
+
   async function handleLogout() {
     try {
       const token = getToken();
@@ -155,7 +179,24 @@ export default function Layout() {
       {foreignCount > 0 && (
         <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
           <p style={{ margin: 0 }}>
-            {foreignCount} entr{foreignCount === 1 ? 'y' : 'ies'} from a different account {foreignCount === 1 ? 'is' : 'are'} waiting — that person must sign in on this device to sync them.
+            {foreignCount} entr{foreignCount === 1 ? 'y' : 'ies'} from a different account {foreignCount === 1 ? 'is' : 'are'} waiting — that person should sign in on this device to sync them.
+            {/* Recovery path when the owner CAN'T sign in again (deactivated
+                account): deliberately re-attribute to the current user. Two
+                clicks, because it trades attribution accuracy for the data. */}
+            {!adoptArmed ? (
+              <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => setAdoptArmed(true)}>
+                Can't sign in? Sync under my account… / ¿No puede? Sincronizar en mi cuenta…
+              </button>
+            ) : (
+              <>
+                <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={handleAdoptForeign}>
+                  Confirm: record {foreignCount === 1 ? 'this entry' : 'these entries'} as mine / Confirmar
+                </button>
+                <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => setAdoptArmed(false)}>
+                  Cancel / Cancelar
+                </button>
+              </>
+            )}
           </p>
         </div>
       )}

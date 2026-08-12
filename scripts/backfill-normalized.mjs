@@ -31,7 +31,17 @@ if (process.argv[1].endsWith('backfill-normalized.mjs')) {
     const norm = normalizeName(row.name).replace(/'/g, "''");
     const res = d1(`UPDATE families SET name_normalized = '${norm}' WHERE id = '${row.id}' AND name_normalized IS NULL`);
     // Count actual writes, not attempts — a concurrently-filled row no-ops.
-    updated += res.meta?.changes ?? res.meta?.rows_written ?? 0;
+    // Fail loud if wrangler's --json meta shape ever drifts: reporting
+    // "backfilled 0" after real writes would send the operator down a
+    // wrong-diagnosis path.
+    const meta = res.meta ?? {};
+    if (meta.changes === undefined && meta.rows_written === undefined) {
+      throw new Error('wrangler --json meta lacks changes/rows_written — output format changed; cannot verify writes');
+    }
+    updated += meta.changes ?? meta.rows_written;
   }
-  console.log(`backfilled ${updated} row(s)`);
+  // Ground truth beats per-statement meta: report what actually remains.
+  const remaining = d1(`SELECT COUNT(*) AS n FROM families WHERE name_normalized IS NULL`).results[0].n;
+  console.log(`backfilled ${updated} row(s); ${remaining} row(s) still NULL (expect 0)`);
+  if (remaining > 0) process.exitCode = 1;
 }

@@ -65,14 +65,14 @@ async function handleMarkBag(request: Request, env: Env, visitId: string): Promi
     env.DB.prepare(
       'UPDATE visits SET bag_received = ?, updated_by = ? WHERE id = ?'
     ).bind(bagReceived, ctx.userId, visitId),
+    // Conditional on the visit existing, so a missing visit writes NO audit
+    // row — atomic in one batch, no compensating cleanup to fail.
     env.DB.prepare(
-      `INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, 'visits', ?, ?, ?)`
-    ).bind(changeId, visitId, ctx.userId, JSON.stringify({ bag_received: { new: body.bag_received } })),
+      `INSERT INTO record_changes (id, table_name, record_id, changed_by, changes)
+       SELECT ?, 'visits', ?, ?, ? WHERE EXISTS (SELECT 1 FROM visits WHERE id = ?)`
+    ).bind(changeId, visitId, ctx.userId, JSON.stringify({ bag_received: { new: body.bag_received } }), visitId),
   ]);
   if (results[0].meta.changes === 0) {
-    // The audit row for a missing visit is unavoidable noise inside a batch;
-    // remove it so history stays truthful.
-    await env.DB.prepare(`DELETE FROM record_changes WHERE id = ?`).bind(changeId).run();
     return Response.json({ error: 'Not found' }, { status: 404 });
   }
   return Response.json({ ok: true });

@@ -32,8 +32,8 @@ jobs:
       - name: Worker tests
         run: npx vitest run
 
-      - name: PWA unit tests
-        run: npx vitest run --config vitest.pwa.config.ts
+      - name: PWA unit tests (with enforced coverage floor)
+        run: npm run test:pwa:coverage
 
       - name: PWA component tests
         run: npm run test:ui

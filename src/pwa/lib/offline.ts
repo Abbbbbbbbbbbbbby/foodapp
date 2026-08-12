@@ -146,6 +146,25 @@ export async function getPendingCount(): Promise<number> {
   });
 }
 
+// Recovery for held entries whose owner can no longer sign in (deactivated
+// or deleted account): explicitly re-attribute every foreign pending item to
+// the given user so the next flush syncs them under that account. This is a
+// deliberate human action behind a banner button — never automatic — because
+// it trades attribution accuracy for not losing the data.
+export async function adoptForeignItems(currentUserId: string): Promise<number> {
+  const items = await getPending();
+  const foreign = items.filter(i => i.queuedByUserId && i.queuedByUserId !== currentUserId);
+  if (foreign.length === 0) return 0;
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    for (const item of foreign) store.put({ ...item, queuedByUserId: currentUserId });
+    tx.oncomplete = () => { dispatchCountChange(); resolve(foreign.length); };
+    rejectOnFailure(tx, reject);
+  });
+}
+
 export async function removeItem(id: string): Promise<void> {
   const db = await openDb();
   return new Promise((resolve, reject) => {

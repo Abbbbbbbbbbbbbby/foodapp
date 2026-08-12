@@ -284,3 +284,34 @@ describe('flushQueue — in-flight guard (issue #6 re-review)', () => {
     expect(result.flushed).toBe(1);
   });
 });
+
+describe('adoptForeignItems — stranded-entry recovery (deactivated owner)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it("re-attributes another user's held items so they flush under the adopter", async () => {
+    const { adoptForeignItems } = await import('../../src/pwa/lib/offline');
+    await queueItem({ type: 'family', payload: { data: { name: 'Stranded' }, proxyData: null } }, 'k-stranded', 'deactivated-user');
+    await queueItem({ type: 'family', payload: { data: { name: 'Mine' }, proxyData: null } }, 'k-mine2', 'user-a');
+
+    // Held while attributed to someone else…
+    const before = await flushQueue(async () => ({ id: 'x' }), 'user-a');
+    expect(before.foreignItems).toBe(1);
+    expect(await getPending()).toHaveLength(1);
+
+    // …adopted (explicit user action), then flushes under the adopter.
+    const adopted = await adoptForeignItems('user-a');
+    expect(adopted).toBe(1);
+    const after = await flushQueue(async () => ({ id: 'x' }), 'user-a');
+    expect(after.flushed).toBe(1);
+    expect(after.foreignItems).toBe(0);
+    expect(await getPending()).toHaveLength(0);
+  });
+
+  it('adopting with no foreign items is a no-op', async () => {
+    const { adoptForeignItems } = await import('../../src/pwa/lib/offline');
+    await queueItem({ type: 'family', payload: { data: { name: 'Own' }, proxyData: null } }, 'k-own', 'user-a');
+    expect(await adoptForeignItems('user-a')).toBe(0);
+  });
+});

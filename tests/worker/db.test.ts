@@ -223,6 +223,15 @@ describe('searchFamilies — broadened fuzzy matching (issue #6)', () => {
     expect(results.some(r => r.name === 'Smith Family')).toBe(true);
   });
 
+  it('finds a LEADING-pair transposition (Msith → Smith): candidate pull must not require the typo bigram', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Smith Family' });
+    // 'msith' contains no contiguous 'ms' match in 'smith family' — the
+    // transposed-bigram candidate needle is what makes this reachable.
+    const results = await searchFamilies(db, { name: 'Msith' });
+    expect(results.some(r => r.name === 'Smith Family')).toBe(true);
+  });
+
   it('finds a family by a NON-first token (last-name search)', async () => {
     const db = (env as unknown as Env).DB;
     await insertFamily(db, { ...baseFamily(), name: 'Jose Garcia' });
@@ -252,15 +261,20 @@ describe('searchFamilies — broadened fuzzy matching (issue #6)', () => {
       }));
     }
     await stmt.bind('f'.repeat(32), 'Martinez Family', 'martinez family').run();
+    // Last-name-only variant: 'jose martinez' does NOT start with 'ma', so
+    // only the any-token-start rank tier keeps it inside the cap.
+    await stmt.bind('e'.repeat(32), 'Jose Martinez', 'jose martinez').run();
 
     // Exact token: ranked into the cap by the full-token substring tier.
     const exact = await searchFamilies(db, { name: 'Martinez' });
     expect(exact.some(r => r.name === 'Martinez Family')).toBe(true);
+    expect(exact.some(r => r.name === 'Jose Martinez')).toBe(true);
 
-    // Misspelled token: no substring match, but the bigram-prefix tier still
-    // ranks 'ma...'-starting names above the mid-word decoys.
+    // Misspelled token: no substring match, but the token-start tier still
+    // ranks both above the mid-word decoys.
     const fuzzy = await searchFamilies(db, { name: 'Martines' });
     expect(fuzzy.some(r => r.name === 'Martinez Family')).toBe(true);
+    expect(fuzzy.some(r => r.name === 'Jose Martinez')).toBe(true);
   });
 
   it('applies the tighter distance threshold to short tokens', async () => {

@@ -295,6 +295,8 @@ async function handleImport(
           const visitStmts: D1PreparedStatement[] = [];
           for (const visitDate of row.visits) {
             if (!visitDate || existingDates.has(visitDate)) continue;
+            // Also dedupes a date repeated WITHIN this row.
+            existingDates.add(visitDate);
             const vid = crypto.randomUUID().replace(/-/g, '');
             visitStmts.push(
               env.DB.prepare(
@@ -314,10 +316,21 @@ async function handleImport(
       // row's bubble_id so future re-imports dedup on the primary key.
       if (row.bubble_id && !bubbleHit && !bubbleToId.has(row.bubble_id)) {
         try {
-          await env.DB.prepare(
+          const adoption = await env.DB.prepare(
             `UPDATE families SET bubble_id = ? WHERE id = ? AND bubble_id IS NULL`
           ).bind(row.bubble_id, familyId).run();
-          bubbleToId.set(row.bubble_id, familyId);
+          if (adoption.meta.changes === 1) {
+            bubbleToId.set(row.bubble_id, familyId);
+          } else {
+            // The family already carries a DIFFERENT bubble_id: two source
+            // records claim one family. Report it — silently discarding the
+            // mapping makes future re-imports fall back to weak keys and
+            // eventually mint the duplicate this dedup exists to prevent.
+            errors.push({
+              name: row.name,
+              error: `bubble_id ${row.bubble_id} not adopted: family ${familyId} already has a different bubble_id`,
+            });
+          }
         } catch (e) {
           errors.push({ name: row.name, error: e instanceof Error ? e.message : 'Unknown error' });
         }
@@ -362,8 +375,11 @@ async function handleImport(
         ),
       ];
 
+      const rowDates = new Set<string>();
       for (const visitDate of (row.visits ?? [])) {
-        if (!visitDate) continue;
+        // A date repeated within one source row must create ONE visit.
+        if (!visitDate || rowDates.has(visitDate)) continue;
+        rowDates.add(visitDate);
         const vid = crypto.randomUUID().replace(/-/g, '');
         stmts.push(
           env.DB.prepare(

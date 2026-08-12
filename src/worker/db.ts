@@ -193,25 +193,41 @@ export async function searchFamilies(
     // the Levenshtein filter to see real candidates, and the dataset is a
     // few thousand rows, so LIMIT 300 stays cheap.
     const normToken = normalizeName(token);
-    const needle = escapeLike(normToken.slice(0, 2));
+    const bigram = normToken.slice(0, 2);
+    // Candidate reachability: requiring the typo's LEADING bigram to appear
+    // contiguously makes common edits unreachable ('Msith' contains no 'sm').
+    // Pull candidates on any of: the leading bigram, its transposition, and
+    // the second bigram (survives a first-character edit).
+    const bigrams = new Set([bigram]);
+    if (bigram.length === 2) {
+      bigrams.add(bigram[1] + bigram[0]);
+      if (normToken.length >= 3) bigrams.add(normToken.slice(1, 3));
+    }
+    const needles = [...bigrams].map(escapeLike);
     const fullNeedle = escapeLike(normToken);
+    const NORM = `COALESCE(f.name_normalized, LOWER(f.name))`;
     // The cap must keep the BEST candidates, not an arbitrary scan-order 300:
     // a common bigram ('ma') can match most of the table, and an unranked
     // LIMIT could truncate the exact family being checked in. Rank exact-token
-    // substrings first (near-certain Levenshtein survivors), then bigram-prefix
-    // names, then recency.
+    // substrings first (near-certain Levenshtein survivors), then names where
+    // ANY token starts with the bigram (last-name searches like 'Martines' →
+    // 'Jose Martinez'), then recency.
     const likeResults = await db.prepare(`
       SELECT f.*, MAX(v.visit_date) as last_visit_date
       FROM families f
       LEFT JOIN visits v ON v.family_id = f.id
-      WHERE COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\'
+      WHERE ${needles.map(() => `${NORM} LIKE ? ESCAPE '\\'`).join(' OR ')}
       GROUP BY f.id
       ORDER BY
-        (COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\') DESC,
-        (COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\') DESC,
+        (${NORM} LIKE ? ESCAPE '\\') DESC,
+        (${NORM} LIKE ? ESCAPE '\\' OR ${NORM} LIKE ? ESCAPE '\\') DESC,
         last_visit_date DESC
       LIMIT 300
-    `).bind(`%${needle}%`, `%${fullNeedle}%`, `${needle}%`).all<Record<string, unknown>>();
+    `).bind(
+      ...needles.map(n => `%${n}%`),
+      `%${fullNeedle}%`,
+      `${escapeLike(bigram)}%`, `% ${escapeLike(bigram)}%`,
+    ).all<Record<string, unknown>>();
 
     const nameRows = (likeResults.results ?? [])
       .map(r => mapRow(r) as FamilySearchResult)

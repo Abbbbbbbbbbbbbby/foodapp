@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
-    include: ['tests/pwa-ui/**/*.test.tsx'],
+    include: ['tests/pwa-ui/**/*.test.{ts,tsx}'],
     setupFiles: ['./tests/pwa-ui/setup.ts'],
     globals: false,
   },

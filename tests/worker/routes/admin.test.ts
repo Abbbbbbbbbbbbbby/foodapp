@@ -298,4 +298,57 @@ describe('POST /api/admin/import — bubble_id idempotency (issue #6)', () => {
     ).all<{ visit_date: string }>();
     expect((visits.results ?? []).map(v => v.visit_date)).toEqual(['2026-07-01', '2026-08-05']);
   });
+
+  it('reports a conflicting bubble_id instead of silently discarding it', async () => {
+    await seedUser('imp-admin3', 'Importer Three', '4805550090', 'admin');
+    const token = await makeToken('imp-admin3', '4805550090', 'admin');
+    const db = (env as unknown as Env).DB;
+    // Family already claimed by bubble_id B1, reachable by phone.
+    await db.prepare(
+      `INSERT INTO families (id, name, phone, bubble_id) VALUES ('conFam', 'Conflict Fam', '4805556666', 'bub-B1')`
+    ).run();
+
+    // A second source record with the SAME phone but a DIFFERENT bubble_id.
+    const res = await workerExports.default.fetch('https://example.com/api/admin/import', {
+      method: 'POST', headers: authHeader(token),
+      body: JSON.stringify({
+        families: [{ bubble_id: 'bub-B2', name: 'Conflict Fam', phone: '480-555-6666', visits: [] }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { errors: { error: string }[] };
+    expect(body.errors.some(e => e.error.includes('bub-B2') && e.error.includes('different bubble_id'))).toBe(true);
+    // And the stored mapping is untouched.
+    const fam = await db.prepare(`SELECT bubble_id FROM families WHERE id = 'conFam'`).first<{ bubble_id: string }>();
+    expect(fam!.bubble_id).toBe('bub-B1');
+  });
+
+  it('a visit date repeated within one source row creates exactly one visit', async () => {
+    await seedUser('imp-admin4', 'Importer Four', '4805550091', 'admin');
+    const token = await makeToken('imp-admin4', '4805550091', 'admin');
+    const db = (env as unknown as Env).DB;
+
+    // New-family branch: duplicate date in one row.
+    const res = await workerExports.default.fetch('https://example.com/api/admin/import', {
+      method: 'POST', headers: authHeader(token),
+      body: JSON.stringify({
+        families: [{ bubble_id: 'bub-dup', name: 'Dup Dates Fam', phone: null, visits: ['2026-08-10', '2026-08-10'] }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const famId = (await db.prepare(`SELECT id FROM families WHERE bubble_id = 'bub-dup'`).first<{ id: string }>())!.id;
+    let visits = await db.prepare(`SELECT COUNT(*) AS n FROM visits WHERE family_id = ?`).bind(famId).first<{ n: number }>();
+    expect(visits!.n).toBe(1);
+
+    // Existing-family branch: re-import with a NEW date repeated twice.
+    const res2 = await workerExports.default.fetch('https://example.com/api/admin/import', {
+      method: 'POST', headers: authHeader(token),
+      body: JSON.stringify({
+        families: [{ bubble_id: 'bub-dup', name: 'Dup Dates Fam', phone: null, visits: ['2026-08-11', '2026-08-11'] }],
+      }),
+    });
+    expect(res2.status).toBe(200);
+    visits = await db.prepare(`SELECT COUNT(*) AS n FROM visits WHERE family_id = ?`).bind(famId).first<{ n: number }>();
+    expect(visits!.n).toBe(2); // one per distinct date, not three
+  });
 });

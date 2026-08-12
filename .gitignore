@@ -42,3 +42,7 @@ coverage/
 # playwright
 test-results/
 playwright-report/
+
+coverage/
+
+coverage/

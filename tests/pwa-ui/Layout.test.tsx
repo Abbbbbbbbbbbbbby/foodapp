@@ -8,6 +8,7 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   flushQueue: vi.fn(async () => ({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 })),
   getDeadLetters: vi.fn(async () => []),
   deleteDeadLetters: vi.fn(async () => undefined),
+  adoptForeignItems: vi.fn(async () => 0),
 }));
 vi.mock('../../src/pwa/store/auth', () => ({
   getUser: () => ({ id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' }),
@@ -16,11 +17,13 @@ vi.mock('../../src/pwa/store/auth', () => ({
 }));
 vi.mock('../../src/pwa/lib/api', () => ({
   api: { post: vi.fn(), patch: vi.fn(), get: vi.fn() },
+  apiWithToken: vi.fn(() => ({ post: vi.fn(), patch: vi.fn() })),
   ApiError: class ApiError extends Error { constructor(public status: number, message: string) { super(message); } },
 }));
 
 import Layout from '../../src/pwa/components/Layout';
-import { getDeadLetters, deleteDeadLetters, flushQueue } from '../../src/pwa/lib/offline';
+import { getDeadLetters, deleteDeadLetters, flushQueue, adoptForeignItems } from '../../src/pwa/lib/offline';
+import { apiWithToken } from '../../src/pwa/lib/api';
 import type { DeadLetterEntry } from '../../src/pwa/lib/offline';
 
 const dl = (id: string, label: string): DeadLetterEntry => ({
@@ -66,8 +69,9 @@ describe('Layout dead-letter banner', () => {
 
   it('acknowledge deletes ONLY the displayed entries and keeps late arrivals', async () => {
     vi.mocked(getDeadLetters)
-      .mockResolvedValueOnce([dl('d1', 'Shown Family')])       // mount
-      .mockResolvedValueOnce([dl('d2', 'Late Family')]);        // re-read after acknowledge
+      .mockResolvedValueOnce([dl('d1', 'Shown Family')])       // mount load
+      .mockResolvedValueOnce([dl('d1', 'Shown Family')])       // post-flush unconditional refresh
+      .mockResolvedValue([dl('d2', 'Late Family')]);            // re-read after acknowledge
     const user = userEvent.setup();
     renderLayout();
 
@@ -101,6 +105,31 @@ describe('Layout session and sync banners (issue #6)', () => {
     renderLayout();
 
     expect(await screen.findByText(/2 entries from a different account/)).toBeInTheDocument();
+  });
+
+  it('held entries can be deliberately adopted (two clicks) when the owner cannot sign in', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    vi.mocked(flushQueue).mockResolvedValue({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 2 });
+    const user = userEvent.setup();
+    renderLayout();
+
+    await screen.findByText(/2 entries from a different account/);
+    // First click only ARMS — no adoption yet.
+    await user.click(screen.getByRole('button', { name: /Sync under my account/ }));
+    expect(adoptForeignItems).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /Confirm: record these entries as mine/ }));
+    await waitFor(() => expect(adoptForeignItems).toHaveBeenCalledWith('u1'));
+    expect(screen.queryByText(/2 entries from a different account/)).not.toBeInTheDocument();
+  });
+
+  it('pins the flush identity: apiWithToken is called with the token captured at flush start', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    vi.mocked(flushQueue).mockResolvedValue({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 });
+    renderLayout();
+
+    await screen.findByText('HOME CONTENT');
+    await waitFor(() => expect(apiWithToken).toHaveBeenCalledWith('tok'));
   });
 
   it('a flush exception shows the sync-unavailable banner', async () => {
