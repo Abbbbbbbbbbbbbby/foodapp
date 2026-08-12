@@ -23,6 +23,12 @@ jobs:
       - name: Build PWA (required by worker tests)
         run: npm run build
 
+      - name: Worker typecheck
+        run: npx tsc --noEmit
+
+      - name: PWA typecheck
+        run: npx tsc --noEmit -p src/pwa/tsconfig.json
+
       - name: Worker tests
         run: npx vitest run
 
