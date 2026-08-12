@@ -90,3 +90,49 @@ describe('mapYesNo', () => {
     expect(mapYesNo(null)).toBeNull();
   });
 });
+
+describe('generateMigration pipeline', () => {
+  const bubbleData = { user_types: { t1: { name: 'user' }, t2: { name: 'family_data' } } };
+  const csv = [
+    '"Name","Phone","Proxy","ProxyPhone"',
+    '"García Family","(480) 555-1234","Helper Uno","480-555-9999"',
+    '"Short Phone Fam","555-12","",""',
+    '"No Phone Fam","","",""',
+    '"","4805550000","",""',  // nameless row — dropped
+  ].join('\n');
+
+  it('emits families with accent-folded name_normalized', async () => {
+    const { generateMigration } = await import('../../scripts/migrate-bubble.js');
+    const out = generateMigration(bubbleData, csv);
+    const famLine = out.lines.find(l => l.includes("'García Family'"));
+    expect(famLine).toBeTruthy();
+    expect(famLine).toContain("'garcia family'"); // NFD-folded, lowercased
+    expect(famLine).toContain("'4805551234'");    // normalized phone
+  });
+
+  it('reports dropped phones with context instead of silently nulling', async () => {
+    const { generateMigration } = await import('../../scripts/migrate-bubble.js');
+    const out = generateMigration(bubbleData, csv);
+    expect(out.droppedPhones.length).toBe(1);
+    expect(out.droppedPhones[0].raw).toBe('555-12');
+    expect(out.droppedPhones[0].context).toContain('Short Phone Fam');
+  });
+
+  it('counts match emitted rows; nameless rows are excluded', async () => {
+    const { generateMigration } = await import('../../scripts/migrate-bubble.js');
+    const out = generateMigration(bubbleData, csv);
+    expect(out.familyCount).toBe(3);
+    expect(out.proxyCount).toBe(1);
+    expect(out.userCount).toBe(1);
+    const insertCount = out.lines.filter(l => l.includes('INSERT OR IGNORE INTO families')).length;
+    expect(insertCount).toBe(3);
+  });
+
+  it('wraps everything in a transaction with a summary trailer', async () => {
+    const { generateMigration } = await import('../../scripts/migrate-bubble.js');
+    const out = generateMigration(bubbleData, csv);
+    expect(out.lines[1]).toBe('BEGIN TRANSACTION;');
+    expect(out.lines).toContain('COMMIT;');
+    expect(out.lines[out.lines.length - 1]).toContain('-- Summary: 1 users, 3 families');
+  });
+});

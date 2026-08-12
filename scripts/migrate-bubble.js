@@ -87,14 +87,10 @@ function mapIncomeUnit(bubbleUnit) {
   return 'yearly';
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
-  const bubblePath = `${process.env.HOME}/Downloads/food-data.bubble`;
-  const outPath = './migrations/migrated-data.sql';
-
-  console.log(`Reading ${bubblePath}...`);
-  const raw = readFileSync(bubblePath, 'utf8');
-  const data = JSON.parse(raw);
-
+// Pure pipeline: takes the parsed Bubble export and raw CSV text, returns the
+// SQL lines, counts, and dropped-phone report. Exported for fixture testing —
+// the argv main block below only does I/O around this.
+export function generateMigration(data, csvRaw) {
   const userTypes = data.user_types ?? {};
   const lines = [];
   const now = new Date().toISOString();
@@ -123,9 +119,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   }
 
   let csvFamilies = [];
-  try {
-    const csvPath = `${process.env.HOME}/Downloads/appdata20260213.csv`;
-    const csvRaw = readFileSync(csvPath, 'utf8');
+  if (csvRaw) {
     const csvLines = csvRaw.trim().split('\n').slice(1);
     csvFamilies = csvLines
       .map(l => {
@@ -138,9 +132,6 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
         };
       })
       .filter(f => f.name);
-    console.log(`Loaded ${csvFamilies.length} families from CSV`);
-  } catch (e) {
-    console.warn('Could not read CSV:', e.message);
   }
 
   const familyIdMap = new Map();
@@ -168,6 +159,27 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   lines.push('COMMIT;');
   lines.push('');
   lines.push(`-- Summary: ${userCount} users, ${familyCount} families, ${visitCount} visits, ${proxyCount} proxies`);
+
+  return { lines, userCount, familyCount, visitCount, proxyCount, droppedPhones };
+}
+
+if (process.argv[1] === new URL(import.meta.url).pathname) {
+  const bubblePath = `${process.env.HOME}/Downloads/food-data.bubble`;
+  const outPath = './migrations/migrated-data.sql';
+
+  console.log(`Reading ${bubblePath}...`);
+  const raw = readFileSync(bubblePath, 'utf8');
+  const data = JSON.parse(raw);
+
+  let csvRaw = null;
+  try {
+    csvRaw = readFileSync(`${process.env.HOME}/Downloads/appdata20260213.csv`, 'utf8');
+  } catch (e) {
+    console.warn('Could not read CSV:', e.message);
+  }
+
+  const { lines, userCount, familyCount, visitCount, proxyCount, droppedPhones } = generateMigration(data, csvRaw);
+  if (csvRaw) console.log(`Loaded ${familyCount} families from CSV`);
 
   writeFileSync(outPath, lines.join('\n'));
   console.log(`Wrote ${lines.length} SQL lines to ${outPath}`);
