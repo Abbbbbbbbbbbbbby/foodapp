@@ -16,6 +16,8 @@ import schema5 from '../../migrations/0005_records_audit.sql?raw';
 import schema6 from '../../migrations/0006_duplicate_flags.sql?raw';
 // @ts-expect-error - Vite ?raw import
 import schema7 from '../../migrations/0007_merged_keys.sql?raw';
+// @ts-expect-error - Vite ?raw import
+import schema8 from '../../migrations/0008_bubble_id.sql?raw';
 
 function applySchema(sql: string): string[] {
   return (sql as string)
@@ -26,7 +28,7 @@ function applySchema(sql: string): string[] {
 
 beforeAll(async () => {
   const db = (env as unknown as Env).DB;
-  for (const stmt of [...applySchema(schema1), ...applySchema(schema2), ...applySchema(schema3), ...applySchema(schema4), ...applySchema(schema5), ...applySchema(schema6), ...applySchema(schema7)]) {
+  for (const stmt of [...applySchema(schema1), ...applySchema(schema2), ...applySchema(schema3), ...applySchema(schema4), ...applySchema(schema5), ...applySchema(schema6), ...applySchema(schema7), ...applySchema(schema8)]) {
     await db.prepare(stmt).run();
   }
 });

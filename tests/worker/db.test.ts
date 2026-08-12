@@ -204,3 +204,36 @@ describe('insertVisit + getVisitsByFamily', () => {
     expect(visits[0].visit_date).toBe('2026-05-20');
   });
 });
+
+function baseFamily() {
+  return {
+    name: 'X', phone: null, address: null, zip_code: null, date_of_birth: null,
+    language: null, ethnicity: null, hispanic: null, ami_bracket: null, num_people: null,
+    num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+    health_insurance: null, snap_benefits: null, receives_texts: null, want_text_updates: null,
+    id_confirmed: null, bag_received: null, first_visit_date: null, created_by: null,
+  };
+}
+
+describe('searchFamilies — broadened fuzzy matching (issue #6)', () => {
+  it('finds a transposed first name (Smiht → Smith)', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Smith Family' });
+    const results = await searchFamilies(db, { name: 'Smiht' });
+    expect(results.some(r => r.name === 'Smith Family')).toBe(true);
+  });
+
+  it('finds a family by a NON-first token (last-name search)', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Jose Garcia' });
+    const results = await searchFamilies(db, { name: 'Garcia' });
+    expect(results.some(r => r.name === 'Jose Garcia')).toBe(true);
+  });
+
+  it('still excludes clearly unrelated names', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Zhang Wei' });
+    const results = await searchFamilies(db, { name: 'Garcia' });
+    expect(results.some(r => r.name === 'Zhang Wei')).toBe(false);
+  });
+});

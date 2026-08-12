@@ -186,27 +186,30 @@ export async function searchFamilies(
 
   if (name && name.trim().length >= 2) {
     const token = name.trim().split(/\s+/)[0];
-    const rawPrefix = token.slice(0, Math.min(4, token.length));
-    // Normalize the prefix so it matches the stored name_normalized column.
-    // For rows where name_normalized is NULL (pre-migration), fall back to
-    // LOWER(name) which handles ASCII names; non-ASCII old rows rely on the
-    // Levenshtein post-filter.
-    const prefix = escapeLike(normalizeName(rawPrefix));
+    // Broad candidate pull, precise post-ranking (per the design spec): an
+    // anchored 4-char prefix rejected transpositions ('Smiht'→'Smith') and
+    // any non-first-token match ('Garcia' couldn't find 'Jose Garcia').
+    // Anywhere-substring on the first two characters is forgiving enough for
+    // the Levenshtein filter to see real candidates, and the dataset is a
+    // few thousand rows, so LIMIT 300 stays cheap.
+    const normToken = normalizeName(token);
+    const needle = escapeLike(normToken.slice(0, 2));
     const likeResults = await db.prepare(`
       SELECT f.*, MAX(v.visit_date) as last_visit_date
       FROM families f
       LEFT JOIN visits v ON v.family_id = f.id
       WHERE COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\'
       GROUP BY f.id
-      LIMIT 100
-    `).bind(`${prefix}%`).all<Record<string, unknown>>();
+      LIMIT 300
+    `).bind(`%${needle}%`).all<Record<string, unknown>>();
 
     const nameRows = (likeResults.results ?? [])
       .map(r => mapRow(r) as FamilySearchResult)
       .filter(r => {
-        const storedFirst = normalizeName(r.name.split(/\s+/)[0]);
-        const searchToken = normalizeName(token);
-        return levenshtein(storedFirst, searchToken) <= 3;
+        // Match against EVERY token of the stored name, so a last-name
+        // search finds full-name records.
+        const storedTokens = normalizeName(r.name).split(/\s+/);
+        return storedTokens.some(t => levenshtein(t, normToken) <= (normToken.length <= 4 ? 2 : 3));
       });
 
     const existing = new Set(rows.map(r => r.id));

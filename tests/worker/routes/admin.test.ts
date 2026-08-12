@@ -202,22 +202,60 @@ describe('DELETE /api/admin/users/:id — FK-referenced users (review round)', (
     expect(await db.prepare(`SELECT id FROM otp_codes WHERE id = 'otpA'`).first()).toBeNull();
   });
 
-  it('still blocks deleting the last admin, without corrupting references', async () => {
+  it('a deactivated admin token can no longer act at all (401)', async () => {
     await seedUser('a1', 'Admin One', '4805550000', 'admin');
     await seedUser('a2', 'Admin Two', '4805550002', 'admin');
     const db = (env as unknown as Env).DB;
-    await db.prepare(`UPDATE users SET active = 0 WHERE id = 'a2'`).run();
-    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('famG', 'Guard Fam', 'a1')`).run();
-
     const token = await makeToken('a2', '4805550002', 'admin');
+    await db.prepare(`UPDATE users SET active = 0 WHERE id = 'a2'`).run();
+
     const res = await workerExports.default.fetch('https://example.com/api/admin/users/a1', {
       method: 'DELETE',
       headers: authHeader(token),
     });
-    expect(res.status).toBe(400);
-    // Guard rejection left the reference intact — no orphaned attribution
-    const fam = await db.prepare(`SELECT created_by FROM families WHERE id = 'famG'`).first<{ created_by: string | null }>();
-    expect(fam!.created_by).toBe('a1');
+    expect(res.status).toBe(401); // deactivation ends access immediately
     expect(await db.prepare(`SELECT id FROM users WHERE id = 'a1'`).first()).not.toBeNull();
+  });
+
+  it('the SQL race guard no-ops the whole batch when the target is the last active admin', async () => {
+    // The endpoint path to this 400 requires the concurrent race (an active
+    // admin actor always counts as "another admin"), so pin the guard at the
+    // statement level: same predicate the route uses.
+    await seedUser('a1', 'Last Admin', '4805550000', 'admin');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('famG', 'Guard Fam', 'a1')`).run();
+
+    const GUARD = `(SELECT role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?1) > 0 FROM users WHERE id = ?1)`;
+    const results = await db.batch([
+      db.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?1 AND ${GUARD}`).bind('a1'),
+      db.prepare(`DELETE FROM users WHERE id = ?1 AND ${GUARD}`).bind('a1'),
+    ]);
+    expect(results[1].meta.rows_written).toBe(0); // delete blocked
+    const fam = await db.prepare(`SELECT created_by FROM families WHERE id = 'famG'`).first<{ created_by: string | null }>();
+    expect(fam!.created_by).toBe('a1'); // reference untouched — batch no-oped together
+  });
+});
+
+describe('POST /api/admin/import — bubble_id idempotency (issue #6)', () => {
+  it('re-running the same import is a no-op even for phoneless families', async () => {
+    await seedUser('imp-admin', 'Importer', '4805550088', 'admin');
+    const token = await makeToken('imp-admin', '4805550088', 'admin');
+    const db = (env as unknown as Env).DB;
+    const payload = JSON.stringify({
+      families: [
+        { bubble_id: 'bub-1', name: 'Phoneless Fam', phone: null, visits: ['2026-08-01'] },
+        { bubble_id: 'bub-2', name: 'Phoned Fam', phone: '480-555-7777', visits: [] },
+      ],
+    });
+    for (let i = 0; i < 2; i++) {
+      const res = await workerExports.default.fetch('https://example.com/api/admin/import', {
+        method: 'POST', headers: authHeader(token), body: payload,
+      });
+      expect(res.status).toBe(200);
+    }
+    const fams = await db.prepare(`SELECT COUNT(*) AS n FROM families WHERE bubble_id IN ('bub-1','bub-2')`).first<{ n: number }>();
+    expect(fams!.n).toBe(2); // not 4
+    const visits = await db.prepare(`SELECT COUNT(*) AS n FROM visits WHERE visit_date = '2026-08-01'`).first<{ n: number }>();
+    expect(visits!.n).toBe(1); // visit not duplicated either
   });
 });

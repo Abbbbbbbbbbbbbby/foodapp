@@ -51,15 +51,30 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
 async function handleMarkBag(request: Request, env: Env, visitId: string): Promise<Response> {
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  let body: { bag_received?: boolean };
+  let body: { bag_received?: unknown };
   try { body = await request.json(); } catch {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 });
   }
+  // Explicit boolean required: an empty body must not silently UN-mark a bag.
+  if (typeof body.bag_received !== 'boolean') {
+    return Response.json({ error: 'bag_received must be a boolean' }, { status: 400 });
+  }
   const bagReceived = body.bag_received ? 1 : 0;
-  const result = await env.DB.prepare(
-    'UPDATE visits SET bag_received = ? WHERE id = ?'
-  ).bind(bagReceived, visitId).run();
-  if (result.meta.changes === 0) return Response.json({ error: 'Not found' }, { status: 404 });
+  const changeId = crypto.randomUUID().replace(/-/g, '');
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      'UPDATE visits SET bag_received = ?, updated_by = ? WHERE id = ?'
+    ).bind(bagReceived, ctx.userId, visitId),
+    env.DB.prepare(
+      `INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, 'visits', ?, ?, ?)`
+    ).bind(changeId, visitId, ctx.userId, JSON.stringify({ bag_received: { new: body.bag_received } })),
+  ]);
+  if (results[0].meta.changes === 0) {
+    // The audit row for a missing visit is unavoidable noise inside a batch;
+    // remove it so history stays truthful.
+    await env.DB.prepare(`DELETE FROM record_changes WHERE id = ?`).bind(changeId).run();
+    return Response.json({ error: 'Not found' }, { status: 404 });
+  }
   return Response.json({ ok: true });
 }
 

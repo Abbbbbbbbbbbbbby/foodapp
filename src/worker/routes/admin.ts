@@ -233,6 +233,15 @@ async function handleImport(
   );
   const existingPhones = new Set(phoneToId.keys());
 
+  // Primary dedup key: the stable Bubble source id — makes re-running the
+  // same import a no-op for every row, phone or no phone (issue #6 item 3).
+  const bubbleRows = await env.DB.prepare(
+    `SELECT id, bubble_id FROM families WHERE bubble_id IS NOT NULL`
+  ).all<{ id: string; bubble_id: string }>();
+  const bubbleToId = new Map<string, string>(
+    (bubbleRows.results ?? []).map(r => [r.bubble_id, r.id])
+  );
+
   // For families with no phone, dedup by normalized name to prevent
   // re-importing the same phoneless family on subsequent CSV runs
   const noPhoneNameRows = await env.DB.prepare(
@@ -257,9 +266,10 @@ async function handleImport(
       continue;
     }
 
-    if (phone && existingPhones.has(phone)) {
+    const bubbleHit = row.bubble_id ? bubbleToId.get(row.bubble_id) : undefined;
+    if (bubbleHit || (phone && existingPhones.has(phone))) {
       // Family exists — add any new visits rather than skipping
-      const familyId = phoneToId.get(phone);
+      const familyId = bubbleHit ?? (phone ? phoneToId.get(phone) : undefined);
       if (familyId && row.visits?.length) {
         try {
           const existing = await env.DB.prepare(
@@ -295,14 +305,14 @@ async function handleImport(
       const stmts: D1PreparedStatement[] = [
         env.DB.prepare(`
           INSERT INTO families (
-            id, name, name_normalized, phone, address, zip_code, date_of_birth,
+            id, name, name_normalized, bubble_id, phone, address, zip_code, date_of_birth,
             language, ethnicity, hispanic, ami_bracket, num_people,
             num_children_under_18, num_children_under_5, num_with_diabetes,
             health_insurance, snap_benefits, receives_texts, want_text_updates,
             id_confirmed, bag_received, first_visit_date,
             created_by, created_at, updated_at
           ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?, ?,
@@ -311,15 +321,16 @@ async function handleImport(
           )
         `).bind(
           id, row.name.trim(), normalizeName(row.name.trim()),
-          phone, row.address, row.zip_code, row.date_of_birth,
-          row.language, row.ethnicity, row.hispanic, row.ami_bracket, row.num_people,
-          row.num_children_under_18, row.num_children_under_5, row.num_with_diabetes,
-          row.health_insurance, row.snap_benefits,
+          row.bubble_id ?? null,
+          phone, row.address ?? null, row.zip_code ?? null, row.date_of_birth ?? null,
+          row.language ?? null, row.ethnicity ?? null, row.hispanic ?? null, row.ami_bracket ?? null, row.num_people ?? null,
+          row.num_children_under_18 ?? null, row.num_children_under_5 ?? null, row.num_with_diabetes ?? null,
+          row.health_insurance ?? null, row.snap_benefits ?? null,
           row.receives_texts === true ? 1 : row.receives_texts === false ? 0 : null,
           row.want_text_updates === true ? 1 : row.want_text_updates === false ? 0 : null,
           row.id_confirmed === true ? 1 : row.id_confirmed === false ? 0 : null,
           row.bag_received === true ? 1 : row.bag_received === false ? 0 : null,
-          row.first_visit_date,
+          row.first_visit_date ?? null,
           ctx.userId, now, now
         ),
       ];

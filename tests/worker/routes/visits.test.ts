@@ -149,3 +149,33 @@ describe('GET /api/visits/resolve/:key (bag recovery)', () => {
     expect(missing.status).toBe(404);
   });
 });
+
+describe('PATCH /api/visits/:id/bag — contract hardening (issue #6)', () => {
+  it('rejects a missing/non-boolean bag_received instead of silently un-marking', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT OR IGNORE INTO families (id, name) VALUES ('bagf1', 'Bag Fam')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, bag_received) VALUES ('bagv1', 'bagf1', '2026-08-12', 1)`).run();
+    const res = await workerExports.default.fetch('https://x/api/visits/bagv1/bag', {
+      method: 'PATCH', headers: { Authorization: authHeader, 'Content-Type': 'application/json' }, body: '{}',
+    });
+    expect(res.status).toBe(400);
+    const v = await db.prepare(`SELECT bag_received FROM visits WHERE id = 'bagv1'`).first<{ bag_received: number }>();
+    expect(v!.bag_received).toBe(1); // unchanged
+  });
+
+  it('writes an audit row and updated_by on success', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT OR IGNORE INTO families (id, name) VALUES ('bagf2', 'Bag Fam 2')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, bag_received) VALUES ('bagv2', 'bagf2', '2026-08-12', 0)`).run();
+    const res = await workerExports.default.fetch('https://x/api/visits/bagv2/bag', {
+      method: 'PATCH', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bag_received: true }),
+    });
+    expect(res.status).toBe(200);
+    const v = await db.prepare(`SELECT bag_received, updated_by FROM visits WHERE id = 'bagv2'`).first<{ bag_received: number; updated_by: string | null }>();
+    expect(v!.bag_received).toBe(1);
+    expect(v!.updated_by).not.toBeNull();
+    const audit = await db.prepare(`SELECT changes FROM record_changes WHERE table_name = 'visits' AND record_id = 'bagv2'`).first<{ changes: string }>();
+    expect(audit).not.toBeNull();
+  });
+});
