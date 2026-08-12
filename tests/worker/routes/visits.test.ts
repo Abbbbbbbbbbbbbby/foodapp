@@ -178,4 +178,19 @@ describe('PATCH /api/visits/:id/bag — contract hardening (issue #6)', () => {
     const audit = await db.prepare(`SELECT changes FROM record_changes WHERE table_name = 'visits' AND record_id = 'bagv2'`).first<{ changes: string }>();
     expect(audit).not.toBeNull();
   });
+
+  it('404s a nonexistent visit and leaves NO phantom audit row', async () => {
+    const db = env.DB;
+    const res = await workerExports.default.fetch('https://x/api/visits/no-such-visit/bag', {
+      method: 'PATCH', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bag_received: true }),
+    });
+    expect(res.status).toBe(404);
+    // The batch unavoidably inserts the audit row; the compensating delete
+    // must remove it or history accumulates changes for untouched visits.
+    const phantom = await db.prepare(
+      `SELECT COUNT(*) AS n FROM record_changes WHERE table_name = 'visits' AND record_id = 'no-such-visit'`
+    ).first<{ n: number }>();
+    expect(phantom!.n).toBe(0);
+  });
 });

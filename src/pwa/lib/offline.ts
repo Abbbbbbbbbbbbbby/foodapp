@@ -56,6 +56,14 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+// Write transactions can terminate via the abort event WITHOUT a preceding
+// error event (commit-time quota failure, browser storage eviction). Both
+// paths must reject, or the caller's await hangs forever.
+function rejectOnFailure(tx: IDBTransaction, reject: (err: unknown) => void) {
+  tx.onerror = () => reject(tx.error);
+  tx.onabort = () => reject(tx.error ?? new Error('offline storage transaction aborted'));
+}
+
 function dispatchCountChange() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('offlinecountchange'));
@@ -77,7 +85,7 @@ export async function queueItem(
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).add({ ...item, id, idempotencyKey: key, createdAt: Date.now(), queuedByUserId });
     tx.oncomplete = () => { dispatchCountChange(); resolve(id); };
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -95,7 +103,7 @@ export async function setItemBag(id: string, bag: boolean): Promise<void> {
       store.put({ ...item, bag });
     };
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -144,7 +152,7 @@ export async function removeItem(id: string): Promise<void> {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).delete(id);
     tx.oncomplete = () => { dispatchCountChange(); resolve(); };
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -170,7 +178,7 @@ async function addDeadLetter(item: PendingItem, errorStatus: number, errorMessag
     // duplicating the entry.
     tx.objectStore(DL_STORE).put(entry);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -203,7 +211,7 @@ export async function deleteDeadLetters(ids: string[]): Promise<void> {
     const store = tx.objectStore(DL_STORE);
     for (const id of ids) store.delete(id);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -213,7 +221,7 @@ export async function clearDeadLetters(): Promise<void> {
     const tx = db.transaction(DL_STORE, 'readwrite');
     tx.objectStore(DL_STORE).clear();
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -300,6 +308,8 @@ export interface FlushResult {
   deadLettered: number;   // permanent 4xx failures — removed from queue
   needsReLogin: boolean;  // a 401 was received — caller should prompt re-login
   foreignItems: number;   // queued by a DIFFERENT user — held until they sign in
+  skipped?: true;         // another flush was in flight — NOT a clean result;
+                          // callers must not clear warning state based on it
 }
 
 // In-flight guard: prevents mount and 'online' event from overlapping.
@@ -311,7 +321,7 @@ let rerunRequested = false;
 export async function flushQueue(apiFn: ApiFn, currentUserId?: string): Promise<FlushResult> {
   if (flushing) {
     rerunRequested = true;
-    return { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 };
+    return { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0, skipped: true };
   }
   flushing = true;
   const result: FlushResult = { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 };

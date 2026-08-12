@@ -259,3 +259,28 @@ describe('flushQueue — shared-device attribution (issue #6)', () => {
     expect(result.foreignItems).toBe(0);
   });
 });
+
+describe('flushQueue — in-flight guard (issue #6 re-review)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it('a concurrent call returns skipped:true, distinguishable from a clean flush', async () => {
+    await queueItem({ type: 'family', payload: { data: { name: 'Slow' }, proxyData: null } }, 'k-slow');
+
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const first = flushQueue(async () => { await gate; return { id: 'x' }; });
+
+    // While the first flush is blocked mid-item, a second trigger must not
+    // report "queue is clean" — callers would clear warning banners on that.
+    const second = await flushQueue(async () => ({ id: 'x' }));
+    expect(second.skipped).toBe(true);
+    expect(second.flushed).toBe(0);
+
+    release();
+    const result = await first;
+    expect(result.skipped).toBeUndefined(); // a real flush is never marked skipped
+    expect(result.flushed).toBe(1);
+  });
+});

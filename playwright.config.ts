@@ -14,7 +14,9 @@ export default defineConfig({
   webServer: {
     command: 'npm run e2e:server',
     url: 'http://127.0.0.1:8787/api/health',
-    reuseExistingServer: true,
+    // Never reuse in CI: a leftover server on :8787 would skip the build AND
+    // the migrations, silently running the smoke against stale code.
+    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
 });

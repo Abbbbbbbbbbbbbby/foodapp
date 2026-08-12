@@ -194,14 +194,24 @@ export async function searchFamilies(
     // few thousand rows, so LIMIT 300 stays cheap.
     const normToken = normalizeName(token);
     const needle = escapeLike(normToken.slice(0, 2));
+    const fullNeedle = escapeLike(normToken);
+    // The cap must keep the BEST candidates, not an arbitrary scan-order 300:
+    // a common bigram ('ma') can match most of the table, and an unranked
+    // LIMIT could truncate the exact family being checked in. Rank exact-token
+    // substrings first (near-certain Levenshtein survivors), then bigram-prefix
+    // names, then recency.
     const likeResults = await db.prepare(`
       SELECT f.*, MAX(v.visit_date) as last_visit_date
       FROM families f
       LEFT JOIN visits v ON v.family_id = f.id
       WHERE COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\'
       GROUP BY f.id
+      ORDER BY
+        (COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\') DESC,
+        (COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\') DESC,
+        last_visit_date DESC
       LIMIT 300
-    `).bind(`%${needle}%`).all<Record<string, unknown>>();
+    `).bind(`%${needle}%`, `%${fullNeedle}%`, `${needle}%`).all<Record<string, unknown>>();
 
     const nameRows = (likeResults.results ?? [])
       .map(r => mapRow(r) as FamilySearchResult)

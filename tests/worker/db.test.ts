@@ -236,4 +236,44 @@ describe('searchFamilies — broadened fuzzy matching (issue #6)', () => {
     const results = await searchFamilies(db, { name: 'Garcia' });
     expect(results.some(r => r.name === 'Zhang Wei')).toBe(false);
   });
+
+  it('finds the real match even when the bigram matches more than the 300-row cap', async () => {
+    const db = (env as unknown as Env).DB;
+    // 305 decoys all containing the bigram 'ma' (but not starting with it).
+    // Ids are pinned so every decoy sorts BEFORE the target: the unranked
+    // query emitted rows in id order, so truncation deterministically
+    // returned only decoys and dropped the family being checked in.
+    const stmt = db.prepare('INSERT INTO families (id, name, name_normalized) VALUES (?, ?, ?)');
+    for (let batch = 0; batch < 5; batch++) {
+      await db.batch(Array.from({ length: 61 }, (_, i) => {
+        const n = batch * 61 + i;
+        const id = `${String(n).padStart(4, '0')}${'0'.repeat(28)}`;
+        return stmt.bind(id, `Amanda D${n}`, `amanda d${n}`);
+      }));
+    }
+    await stmt.bind('f'.repeat(32), 'Martinez Family', 'martinez family').run();
+
+    // Exact token: ranked into the cap by the full-token substring tier.
+    const exact = await searchFamilies(db, { name: 'Martinez' });
+    expect(exact.some(r => r.name === 'Martinez Family')).toBe(true);
+
+    // Misspelled token: no substring match, but the bigram-prefix tier still
+    // ranks 'ma...'-starting names above the mid-word decoys.
+    const fuzzy = await searchFamilies(db, { name: 'Martines' });
+    expect(fuzzy.some(r => r.name === 'Martinez Family')).toBe(true);
+  });
+
+  it('applies the tighter distance threshold to short tokens', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Monaxyz Family' });
+    await insertFamily(db, { ...baseFamily(), name: 'Monaxyzq Family' });
+
+    // 4-char token → threshold 2: distance-3 'monaxyz' must NOT match.
+    const short = await searchFamilies(db, { name: 'Mona' });
+    expect(short.some(r => r.name === 'Monaxyz Family')).toBe(false);
+
+    // 5-char token → threshold 3: distance-3 'monaxyzq' MUST match.
+    const long = await searchFamilies(db, { name: 'Monax' });
+    expect(long.some(r => r.name === 'Monaxyzq Family')).toBe(true);
+  });
 });

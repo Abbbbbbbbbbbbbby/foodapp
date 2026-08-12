@@ -4,7 +4,9 @@ import { test, expect, type Page } from '@playwright/test';
 // check in a new family through all 11 wizard steps → mark a bag → next car.
 // The OTP is read back through the ENVIRONMENT=test-only endpoint.
 
-const PHONE = '4805551212';
+// Unique per run: with reuseExistingServer the local D1 persists across
+// runs, and re-registering a fixed phone issues no fresh OTP.
+const PHONE = `480${String(Date.now() % 10_000_000).padStart(7, '0')}`;
 
 async function otpFor(page: Page, phone: string): Promise<string> {
   const res = await page.request.get(`/api/test/latest-otp/${phone}`);
@@ -35,8 +37,16 @@ test('register, check in a new family, and record a bag', async ({ page }) => {
   await page.getByRole('textbox').first().fill(familyName);
   await page.getByRole('button', { name: /Search \/ Buscar/ }).click();
 
+  // Fresh DB (CI): no results → straight to the how-many step. Reused local
+  // DB: earlier runs' E2E families fuzzy-match, so take the results screen's
+  // "Register as new" escape hatch first.
+  const registerNew = page.getByRole('button', { name: /Register as new|Registrar como nuevo/i });
+  const howMany1 = page.getByRole('button', { name: /^1$/ });
+  await registerNew.or(howMany1).first().waitFor();
+  if (await registerNew.isVisible()) await registerNew.click();
+
   // How many families → 1
-  await page.getByRole('button', { name: /^1$/ }).click();
+  await howMany1.click();
   // Proxy question → no designated person
   await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
 

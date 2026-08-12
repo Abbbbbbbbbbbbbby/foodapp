@@ -56,6 +56,9 @@ export default function Layout() {
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = undefined; }
       try {
         const result = await flushQueue(apiFn, user.id);
+        // A skipped result means another flush was already in flight — it says
+        // nothing about queue health, so it must not clear warning banners.
+        if (result.skipped) return;
         setSyncBroken(false);
         setForeignCount(result.foreignItems);
         if (result.errors > 0) {
@@ -66,7 +69,12 @@ export default function Layout() {
         }
         // Refresh dead-letter entries from the durable store
         if (result.deadLettered > 0) {
-          getDeadLetters().then(setDeadLetters).catch(() => {});
+          getDeadLetters().then(setDeadLetters).catch((err) => {
+            // Items were JUST permanently dead-lettered; failing to show the
+            // banner would read as "synced". Surface the degraded state.
+            console.error('failed to load dead-letter entries after dead-lettering:', err);
+            setSyncBroken(true);
+          });
         }
         if (result.needsReLogin) {
           // Never yank mid-work: a stale queued item's 401 used to clearAuth

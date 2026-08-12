@@ -4,6 +4,10 @@ const NAV_TIMEOUT_MS = 4000;
 const PRECACHE_URLS = []; // __PRECACHE_URLS__
 
 self.addEventListener('install', e => {
+  // addAll is deliberately atomic: if any asset fails, the whole install
+  // fails and the PREVIOUS worker keeps serving. A partial precache would
+  // white-screen offline navigations, which is worse than staying on the
+  // old version until the next successful install.
   e.waitUntil(
     caches.open(CACHE).then(c => c.addAll(['/', ...PRECACHE_URLS])).then(() => self.skipWaiting())
   );

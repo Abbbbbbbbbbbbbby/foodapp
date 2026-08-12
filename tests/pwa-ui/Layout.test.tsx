@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -109,5 +109,34 @@ describe('Layout session and sync banners (issue #6)', () => {
     renderLayout();
 
     expect(await screen.findByText(/Offline sync is unavailable/)).toBeInTheDocument();
+  });
+
+  it('a failed dead-letter read right after dead-lettering surfaces as sync-broken', async () => {
+    // Items were JUST permanently dead-lettered; if the banner refresh read
+    // fails silently, the volunteer's only signal reads as "it synced".
+    vi.mocked(getDeadLetters)
+      .mockResolvedValueOnce([])                        // mount load
+      .mockRejectedValue(new Error('IDB read failed')); // post-flush refresh
+    vi.mocked(flushQueue).mockResolvedValue({ flushed: 0, errors: 0, deadLettered: 1, needsReLogin: false, foreignItems: 0 });
+    renderLayout();
+
+    expect(await screen.findByText(/Offline sync is unavailable/)).toBeInTheDocument();
+  });
+
+  it('a skipped (in-flight) flush result does NOT clear existing warning banners', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    vi.mocked(flushQueue)
+      .mockRejectedValueOnce(new Error('IDB broken'))  // mount: banner appears
+      .mockResolvedValue({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0, skipped: true });
+    renderLayout();
+
+    expect(await screen.findByText(/Offline sync is unavailable/)).toBeInTheDocument();
+
+    // A later trigger whose flush was skipped says nothing about queue
+    // health — the banner must survive it.
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    expect(screen.getByText(/Offline sync is unavailable/)).toBeInTheDocument();
   });
 });
