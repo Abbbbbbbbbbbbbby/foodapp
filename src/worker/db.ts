@@ -183,7 +183,9 @@ export async function searchFamilies(
   if (name && name.trim().length >= 2) {
     const token = name.trim().split(/\s+/)[0];
     const normToken = normalizeName(token);
-    const threshold = normToken.length <= 4 ? 2 : 3;
+    const normFull = normalizeName(name.trim());
+    const tokenThreshold = normToken.length <= 4 ? 2 : 3;
+    const fullThreshold = normFull.length <= 4 ? 2 : 3;
 
     // Levenshtein over EVERY stored name, no SQL prefilter. Earlier versions
     // prefiltered with LIKE needles (prefix, then bigram variants), and every
@@ -197,33 +199,44 @@ export async function searchFamilies(
       `SELECT id, COALESCE(name_normalized, LOWER(name)) AS norm FROM families`
     ).all<{ id: string; norm: string }>();
 
-    const matches: { id: string; dist: number }[] = [];
+    const matches: { id: string; tokenDist: number; fullDist: number }[] = [];
     for (const r of allNames.results ?? []) {
       // Match against EVERY token of the stored name, so a last-name
       // search finds full-name records.
-      let best = Infinity;
+      let tokenDist = Infinity;
       for (const t of r.norm.split(/\s+/)) {
         const d = levenshtein(t, normToken);
-        if (d < best) best = d;
+        if (d < tokenDist) tokenDist = d;
       }
-      if (best <= threshold) matches.push({ id: r.id, dist: best });
+      // Also score the WHOLE query against the WHOLE stored name: a
+      // multi-token query ('Maria Target') must rank its exact/near-exact
+      // full match above the crowd of families sharing the first token.
+      const fullDist = levenshtein(r.norm, normFull);
+      if (tokenDist <= tokenThreshold || fullDist <= fullThreshold) {
+        matches.push({ id: r.id, tokenDist, fullDist });
+      }
     }
-    // Closest first; cap the detail fetch well below D1's bind-parameter
-    // limit. Real match sets are tiny — the cap only guards degenerate
-    // two-letter searches.
-    matches.sort((a, b) => a.dist - b.dist);
-    const ids = matches.slice(0, 90).map(m => m.id);
+    // Rank BEFORE any cap, full-query distance first: exact multi-token
+    // matches survive no matter how many families share the first token
+    // (100 'Maria …' rows must never crowd out 'Maria Target').
+    matches.sort((a, b) => (a.fullDist - b.fullDist) || (a.tokenDist - b.tokenDist));
+    // Fetch details for ALL ranked matches up to a response ceiling, in
+    // chunks under D1's per-statement bind-parameter limit. The ceiling only
+    // trims degenerate 1-2 char queries, and ranking guarantees anything it
+    // trims scored worse than 270 closer names.
+    const ids = matches.slice(0, 270).map(m => m.id);
 
-    let nameRows: FamilySearchResult[] = [];
-    if (ids.length > 0) {
+    const nameRows: FamilySearchResult[] = [];
+    for (let i = 0; i < ids.length; i += 90) {
+      const chunk = ids.slice(i, i + 90);
       const detail = await db.prepare(`
         SELECT f.*, MAX(v.visit_date) as last_visit_date
         FROM families f
         LEFT JOIN visits v ON v.family_id = f.id
-        WHERE f.id IN (${ids.map(() => '?').join(',')})
+        WHERE f.id IN (${chunk.map(() => '?').join(',')})
         GROUP BY f.id
-      `).bind(...ids).all<Record<string, unknown>>();
-      nameRows = (detail.results ?? []).map(r => mapRow(r) as FamilySearchResult);
+      `).bind(...chunk).all<Record<string, unknown>>();
+      for (const r of detail.results ?? []) nameRows.push(mapRow(r) as FamilySearchResult);
     }
 
     const existing = new Set(rows.map(r => r.id));
@@ -235,10 +248,16 @@ export async function searchFamilies(
     }
 
     rows.sort((a, b) => {
-      if (a.phone === normPhone) return -1;
-      if (b.phone === normPhone) return 1;
-      return levenshtein(normalizeName(a.name), normalizeName(name)) -
-             levenshtein(normalizeName(b.name), normalizeName(name));
+      // Guarded: on a name-only search normPhone is null, and null === null
+      // would otherwise rank every phoneless row "first", garbling the sort.
+      if (normPhone) {
+        if (a.phone === normPhone) return -1;
+        if (b.phone === normPhone) return 1;
+      }
+      return (levenshtein(normalizeName(a.name), normalizeName(name)) -
+              levenshtein(normalizeName(b.name), normalizeName(name)))
+        // Equal-distance ties: most recently seen family first.
+        || (b.last_visit_date ?? '').localeCompare(a.last_visit_date ?? '');
     });
   }
 
@@ -322,6 +341,10 @@ export async function insertVisit(
 export async function getVisitsByFamily(db: D1Database, familyId: string): Promise<Visit[]> {
   const result = await db.prepare(
     `SELECT * FROM visits WHERE family_id = ? ORDER BY visit_date DESC`
-  ).bind(familyId).all<Visit>();
-  return result.results ?? [];
+  ).bind(familyId).all<Record<string, unknown>>();
+  // D1 stores booleans as 0/1 — honor the declared Visit contract, which
+  // promises bag_received: boolean to API consumers.
+  return (result.results ?? []).map(r =>
+    ({ ...r, bag_received: r.bag_received === 1 || r.bag_received === true }) as unknown as Visit
+  );
 }

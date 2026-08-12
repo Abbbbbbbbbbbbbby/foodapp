@@ -202,6 +202,12 @@ describe('insertVisit + getVisitsByFamily', () => {
     const visits = await getVisitsByFamily(db, familyId);
     expect(visits).toHaveLength(1);
     expect(visits[0].visit_date).toBe('2026-05-20');
+    // Declared contract: boolean, not D1's raw 0/1 (a browser probe
+    // received a literal 1 before this was mapped).
+    expect(visits[0].bag_received).toBe(false);
+    await db.prepare(`UPDATE visits SET bag_received = 1 WHERE family_id = ?`).bind(familyId).run();
+    const after = await getVisitsByFamily(db, familyId);
+    expect(after[0].bag_received).toBe(true);
   });
 });
 
@@ -282,6 +288,27 @@ describe('searchFamilies — broadened fuzzy matching (issue #6)', () => {
     const fuzzy = await searchFamilies(db, { name: 'Martines' });
     expect(fuzzy.some(r => r.name === 'Martinez Family')).toBe(true);
     expect(fuzzy.some(r => r.name === 'Jose Martinez')).toBe(true);
+  });
+
+  it('an exact full-name search survives 100+ families sharing the first name', async () => {
+    const db = (env as unknown as Env).DB;
+    // The common-first-name case: every decoy ties at token distance 0 for
+    // 'maria', so only full-query ranking keeps the exact match in the
+    // result set regardless of any candidate cap.
+    const stmt = db.prepare('INSERT INTO families (id, name, name_normalized) VALUES (?, ?, ?)');
+    for (let batch = 0; batch < 2; batch++) {
+      await db.batch(Array.from({ length: 55 }, (_, i) => {
+        const n = batch * 55 + i;
+        const id = `${String(n).padStart(4, '0')}${'a'.repeat(28)}`;
+        return stmt.bind(id, `Maria Decoy${n}`, `maria decoy${n}`);
+      }));
+    }
+    await stmt.bind('b'.repeat(32), 'Maria Target', 'maria target').run();
+
+    const results = await searchFamilies(db, { name: 'Maria Target' });
+    expect(results.some(r => r.name === 'Maria Target')).toBe(true);
+    // And the exact match outranks the first-name crowd.
+    expect(results[0].name).toBe('Maria Target');
   });
 
   it('applies the tighter distance threshold to short tokens', async () => {

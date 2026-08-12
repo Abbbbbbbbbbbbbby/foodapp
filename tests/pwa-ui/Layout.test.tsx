@@ -10,10 +10,14 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   deleteDeadLetters: vi.fn(async () => undefined),
   adoptForeignItems: vi.fn(async () => 0),
 }));
+const authState = vi.hoisted(() => ({
+  user: { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' } as
+    { id: string; name: string; phone: string; role: string } | null,
+}));
 vi.mock('../../src/pwa/store/auth', () => ({
-  getUser: () => ({ id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' }),
-  getAuth: () => ({ token: 'tok', user: { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' } }),
-  getToken: () => 'tok',
+  getUser: () => authState.user,
+  getAuth: () => (authState.user ? { token: 'tok', user: authState.user } : null),
+  getToken: () => (authState.user ? 'tok' : null),
   clearAuth: vi.fn(),
   AUTH_STORAGE_KEY: 'foodapp_auth',
 }));
@@ -184,5 +188,62 @@ describe('Layout session and sync banners (issue #6)', () => {
       window.dispatchEvent(new Event('online'));
     });
     expect(screen.getByText(/Offline sync is unavailable/)).toBeInTheDocument();
+  });
+});
+
+describe('Layout cross-tab account-change overlay', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authState.user = { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' };
+  });
+
+  function fireAuthStorageEvent() {
+    window.dispatchEvent(new StorageEvent('storage', { key: 'foodapp_auth' }));
+  }
+
+  it('another tab signing in as a different user blocks the tab but PRESERVES the page', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    renderLayout();
+    await screen.findByText('HOME CONTENT');
+
+    authState.user = { id: 'u2', name: 'Vol Two', phone: '4805550002', role: 'volunteer' };
+    await act(async () => { fireAuthStorageEvent(); });
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent(/signed in as Vol Two/);
+    expect(dialog).toHaveTextContent(/paused, not lost/);
+    // Draft-bearing content is still mounted underneath, NOT reloaded away.
+    expect(screen.getByText('HOME CONTENT')).toBeInTheDocument();
+    // Proceeding under the new identity requires the explicit discard button.
+    expect(screen.getByRole('button', { name: /Discard this entry and continue as Vol Two/ })).toBeInTheDocument();
+  });
+
+  it('clears automatically when the original account is restored', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    renderLayout();
+    await screen.findByText('HOME CONTENT');
+
+    authState.user = { id: 'u2', name: 'Vol Two', phone: '4805550002', role: 'volunteer' };
+    await act(async () => { fireAuthStorageEvent(); });
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+
+    // Original user signs back in on the other tab — identity reconciled.
+    authState.user = { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' };
+    await act(async () => { fireAuthStorageEvent(); });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByText('HOME CONTENT')).toBeInTheDocument();
+  });
+
+  it('a cross-tab sign-out shows the signed-out variant', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    renderLayout();
+    await screen.findByText('HOME CONTENT');
+
+    authState.user = null;
+    await act(async () => { fireAuthStorageEvent(); });
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent(/signed out in another tab/);
+    expect(screen.getByRole('button', { name: /Discard this entry and go to sign-in/ })).toBeInTheDocument();
   });
 });

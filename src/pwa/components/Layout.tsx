@@ -23,7 +23,11 @@ const NAV_ITEMS: NavItem[] = [
 export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const user = getUser()!;
+  // Mount-time identity, deliberately NOT re-read on re-render: this Layout
+  // instance belongs to whoever opened it. A live getUser() here would shift
+  // the comparison baseline the moment another tab rewrites the auth blob
+  // (and a cross-tab sign-out would make it null mid-render).
+  const [user] = useState(() => getUser()!);
   const [pendingCount, setPendingCount] = useState(0);
   const [deadLetters, setDeadLetters] = useState<DeadLetterEntry[]>([]);
   const [dlExpanded, setDlExpanded] = useState(false);
@@ -31,6 +35,8 @@ export default function Layout() {
   const [syncBroken, setSyncBroken] = useState(false);
   const [foreignCount, setForeignCount] = useState(0);
   const [adoptArmed, setAdoptArmed] = useState(false);
+  // Cross-tab identity change: 'signed-out', or the new user's name.
+  const [accountChanged, setAccountChanged] = useState<{ name: string } | 'signed-out' | null>(null);
 
   useEffect(() => {
     function refresh() {
@@ -48,13 +54,19 @@ export default function Layout() {
 
   useEffect(() => {
     // Cross-tab account changes: another tab signing in/out rewrites the
-    // shared auth blob while this tab still renders (and would act as) the
-    // old user. Reload so this tab rehydrates as whoever is actually signed
-    // in — an incoherent half-identity tab is worse than a refresh.
+    // shared auth blob while this tab still renders the old user. A hard
+    // reload here would destroy in-progress wizard entry (React state only)
+    // and could even interrupt a multi-request submission after the family
+    // POST committed but before the visit followed. Instead: block the tab
+    // with an overlay that PRESERVES the draft. It clears automatically if
+    // the original account is restored in the other tab; the only way to
+    // proceed under the new identity is an explicit discard-and-reload.
     const onStorage = (e: StorageEvent) => {
       if (e.key !== AUTH_STORAGE_KEY) return;
       const now = getUser();
-      if (!now || now.id !== user.id) window.location.reload();
+      if (!now) setAccountChanged('signed-out');
+      else if (now.id !== user.id) setAccountChanged({ name: now.name });
+      else setAccountChanged(null);
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
@@ -189,6 +201,37 @@ export default function Layout() {
 
   return (
     <div className="layout">
+      {accountChanged && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="Account changed in another tab"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.75)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+          }}
+        >
+          <div className="banner" style={{ background: '#fff', color: '#1a1a1a', borderRadius: 8, padding: 20, maxWidth: 520 }}>
+            <p style={{ marginTop: 0, fontWeight: 600 }}>
+              {accountChanged === 'signed-out'
+                ? 'This account was signed out in another tab. / Esta cuenta cerró sesión en otra pestaña.'
+                : `Another tab signed in as ${accountChanged.name}. / Otra pestaña inició sesión como ${accountChanged.name}.`}
+            </p>
+            <p>
+              Anything typed on this screen is paused, not lost. To finish this entry, sign back in as {user.name} in the other tab and this notice will clear. / Lo escrito está pausado, no perdido. Vuelva a iniciar sesión como {user.name} en la otra pestaña para continuar.
+            </p>
+            <button
+              className="btn-ghost"
+              style={{ fontSize: 13 }}
+              onClick={() => window.location.reload()}
+            >
+              {accountChanged === 'signed-out'
+                ? 'Discard this entry and go to sign-in / Descartar y salir'
+                : `Discard this entry and continue as ${accountChanged.name} / Descartar y continuar`}
+            </button>
+          </div>
+        </div>
+      )}
       {sessionExpired && (
         <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
           <p style={{ margin: 0 }}>

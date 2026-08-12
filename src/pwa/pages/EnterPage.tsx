@@ -27,6 +27,10 @@ type EnterView =
 export default function EnterPage() {
   const [view, setView] = useState<EnterView>({ type: 'lookup' });
   const [error, setError] = useState<string | null>(null);
+  // Set when a search failed for connectivity reasons: offers the offline
+  // continue path (without it, a dead network strands the volunteer at the
+  // lookup and the offline queue is unreachable).
+  const [offlineSearch, setOfflineSearch] = useState<{ name: string; phone: string | null } | null>(null);
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
   // Accumulates visit IDs for the log-visit (existing family) flow
@@ -34,6 +38,7 @@ export default function EnterPage() {
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
+    setOfflineSearch(null);
     try {
       if (phone) {
         const pickup = await api.get<{ own: FamilySearchResult | null; proxy: FamilySearchResult[] }>(
@@ -57,7 +62,14 @@ export default function EnterPage() {
         setView({ type: 'results', results, searchName: name, searchPhone: phone });
       }
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Network error. Check connection and try again.');
+      if (e instanceof ApiError) {
+        setError(e.message);
+      } else {
+        setError('Network error. Check connection and try again.');
+        // Offline is a supported mode, not a dead end: allow proceeding to
+        // register as new — the wizard queues everything for later sync.
+        setOfflineSearch({ name, phone });
+      }
     }
   }
 
@@ -85,7 +97,14 @@ export default function EnterPage() {
     // offline attribution must come from the same auth snapshot, or a
     // cross-tab account switch splits them (posted as A, queued as B).
     const auth = getAuth();
-    const pinned = apiWithToken(auth?.token ?? null);
+    if (!auth) {
+      // Should-never-happen (cross-tab sign-out racing this handler): fail
+      // loud rather than posting unauthenticated or queueing an item with no
+      // owner — unattributed items sync under whoever signs in next.
+      setError('Session ended — sign in again. Nothing was saved. / La sesión terminó — inicie sesión de nuevo. No se guardó nada.');
+      return;
+    }
+    const pinned = apiWithToken(auth.token);
     try {
       const result = await pinned.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
       // Registered online: join this pickup pre-checked. The visit is logged
@@ -108,7 +127,7 @@ export default function EnterPage() {
       // Offline: queue the family — the flush creates the family AND today's
       // visit, so it must NOT also join this pickup's log-visit loop.
       try {
-        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth?.user.id);
+        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -140,7 +159,14 @@ export default function EnterPage() {
     let visitId: string | null = null;
     let queueId: string | null = null;
     const auth = getAuth();
-    const pinned = apiWithToken(auth?.token ?? null);
+    if (!auth) {
+      // Should-never-happen (cross-tab sign-out racing this handler): fail
+      // loud rather than posting unauthenticated or queueing an item with no
+      // owner — unattributed items sync under whoever signs in next.
+      setError('Session ended — sign in again. Nothing was saved. / La sesión terminó — inicie sesión de nuevo. No se guardó nada.');
+      return;
+    }
+    const pinned = apiWithToken(auth.token);
     try {
       const result = await pinned.post<{ id: string }>('/api/visits', visitPayload);
       visitId = result.id;
@@ -151,7 +177,7 @@ export default function EnterPage() {
       }
       // Network error — queue with the same idempotency key and continue
       try {
-        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey, auth?.user.id);
+        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -219,7 +245,14 @@ export default function EnterPage() {
     // This submission spans TWO requests (family, then visit) plus offline
     // attribution — pin all of it to one auth snapshot.
     const auth = getAuth();
-    const pinned = apiWithToken(auth?.token ?? null);
+    if (!auth) {
+      // Should-never-happen (cross-tab sign-out racing this handler): fail
+      // loud rather than posting unauthenticated or queueing an item with no
+      // owner — unattributed items sync under whoever signs in next.
+      setError('Session ended — sign in again. Nothing was saved. / La sesión terminó — inicie sesión de nuevo. No se guardó nada.');
+      return;
+    }
+    const pinned = apiWithToken(auth.token);
 
     // --- POST family ---
     let familyId: string;
@@ -237,7 +270,7 @@ export default function EnterPage() {
       // Network error — queue family + visit pair together and advance
       let familyQueueId: string;
       try {
-        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth?.user.id);
+        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -266,7 +299,7 @@ export default function EnterPage() {
       } else {
         // Network — queue only the visit (family already has an id)
         try {
-          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey, auth?.user.id);
+          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey, auth.user.id);
         } catch {
           visitError = 'Visit not saved offline. Check storage permissions.';
         }
@@ -311,6 +344,21 @@ export default function EnterPage() {
   return (
     <div className="enter-page">
       {error && <p className="error banner">{error}</p>}
+      {offlineSearch && view.type === 'lookup' && (
+        <p className="banner">
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setError(null);
+              const target = offlineSearch;
+              setOfflineSearch(null);
+              setView({ type: 'how-many', searchName: target.name, searchPhone: target.phone });
+            }}
+          >
+            No connection — continue and register as new / Sin conexión — continuar y registrar como nuevo
+          </button>
+        </p>
+      )}
 
       {view.type === 'lookup' && (
         <LookupForm onSearch={handleSearch} />

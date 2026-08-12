@@ -7,6 +7,9 @@ export default defineConfig({
   testDir: 'tests/e2e',
   timeout: 60_000,
   retries: 1,
+  // Serial: the specs share one server and one D1, and parallel OTP
+  // registrations trip the global SMS rate cap.
+  workers: 1,
   use: {
     baseURL: 'http://127.0.0.1:8787',
     trace: 'retain-on-failure',

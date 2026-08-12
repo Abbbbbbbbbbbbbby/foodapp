@@ -54,6 +54,28 @@ describe('EnterPage lookup error routing', () => {
     expect(await screen.findByText(/Network error/)).toBeInTheDocument();
   });
 
+  it('a network failure offers the offline continue path into the wizard', async () => {
+    vi.mocked(api.get).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<EnterPage />);
+    await searchFor(user, 'Offline Fam');
+
+    // Without this, a dead network strands the volunteer at lookup and the
+    // offline queue is unreachable.
+    await user.click(await screen.findByRole('button', { name: /continue and register as new/i }));
+    expect((await screen.findAllByText(/How many families|¿Para cuántas familias/)).length).toBeGreaterThan(0);
+  });
+
+  it('a server rejection (not connectivity) does NOT offer the offline path', async () => {
+    vi.mocked(api.get).mockRejectedValue(new (ApiError as new (s: number, m: string) => Error)(400, 'bad query'));
+    const user = userEvent.setup();
+    render(<EnterPage />);
+    await searchFor(user, 'Garcia');
+
+    await screen.findByText(/bad query/);
+    expect(screen.queryByRole('button', { name: /continue and register as new/i })).not.toBeInTheDocument();
+  });
+
   it('no results routes to the how-many (new family) path', async () => {
     vi.mocked(api.get).mockResolvedValue({ results: [] });
     const user = userEvent.setup();

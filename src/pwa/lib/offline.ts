@@ -60,7 +60,9 @@ function openDb(): Promise<IDBDatabase> {
 // error event (commit-time quota failure, browser storage eviction). Both
 // paths must reject, or the caller's await hangs forever.
 function rejectOnFailure(tx: IDBTransaction, reject: (err: unknown) => void) {
-  tx.onerror = () => reject(tx.error);
+  // tx.error can still be null on the error arm (it's populated at abort
+  // time) — fall back so logs never read "sync unavailable: null".
+  tx.onerror = () => reject(tx.error ?? new Error('offline storage transaction failed'));
   tx.onabort = () => reject(tx.error ?? new Error('offline storage transaction aborted'));
 }
 
