@@ -38,8 +38,9 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     volunteer_id: ctx.userId,
   };
   const idempotencyKey = typeof body.idempotency_key === 'string' ? body.idempotency_key : undefined;
-  const id = await insertVisit(env.DB, data, idempotencyKey);
-  const status = idempotencyKey ? 200 : 201;
+  const { id, created } = await insertVisit(env.DB, data, idempotencyKey);
+  // 201 for a genuinely new record, 200 for any replay (live key or alias)
+  const status = created ? 201 : 200;
   return Response.json({ id }, { status });
 }
 

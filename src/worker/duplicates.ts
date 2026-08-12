@@ -83,11 +83,11 @@ export async function mergeFamilies(
   // delete (running it before would duplicate idempotency_key under its
   // unique index and abort the batch).
   const collided = await db.prepare(`
-    SELECT visit_date, picked_up_by_phone, volunteer_id, updated_by, bag_received, idempotency_key
+    SELECT id, visit_date, picked_up_by_phone, volunteer_id, updated_by, bag_received, idempotency_key
     FROM visits WHERE family_id = ?
     AND visit_date IN (SELECT visit_date FROM visits WHERE family_id = ?)
   `).bind(discardId, keepId).all<{
-    visit_date: string; picked_up_by_phone: string | null; volunteer_id: string | null;
+    id: string; visit_date: string; picked_up_by_phone: string | null; volunteer_id: string | null;
     updated_by: string | null; bag_received: number; idempotency_key: string | null;
   }>();
 
@@ -114,9 +114,14 @@ export async function mergeFamilies(
   }
   const backfills: { date: string; targetId: string; phone: string | null; vol: string | null; upd: string | null; key: string | null; bag: number }[] = [];
   const visitAliases: { key: string; targetId: string }[] = [];
+  // Aliases created by EARLIER merges may point at visit ids this merge is
+  // about to delete — they must be redirected to the new survivors, or a
+  // chained merge (A→B→C) leaves replays resolving to deleted records.
+  const visitRetargets: { deletedId: string; newTargetId: string }[] = [];
   for (const [date, rows] of byDate) {
     const target = targetByDate.get(date);
     if (!target || !rows) continue;
+    for (const r of rows) visitRetargets.push({ deletedId: r.id, newTargetId: target.id });
     const first = <T>(f: (r: NonNullable<typeof collided.results>[number]) => T | null) =>
       rows.map(f).find(v => v !== null) ?? null;
     const keys = rows.map(r => r.idempotency_key).filter((k): k is string => k !== null);
@@ -177,6 +182,14 @@ export async function mergeFamilies(
     ...visitAliases.map(a => db.prepare(
       `INSERT OR IGNORE INTO merged_keys (idempotency_key, kind, target_id) VALUES (?, 'visit', ?)`
     ).bind(a.key, a.targetId)),
+    // Chained-merge redirection: aliases from earlier merges that point at
+    // records THIS merge deletes must follow the survivors.
+    db.prepare(
+      `UPDATE merged_keys SET target_id = ? WHERE kind = 'family' AND target_id = ?`
+    ).bind(keepId, discardId),
+    ...visitRetargets.map(r => db.prepare(
+      `UPDATE merged_keys SET target_id = ? WHERE kind = 'visit' AND target_id = ?`
+    ).bind(r.newTargetId, r.deletedId)),
     // Move proxies whose phone isn't already on keep; leftovers are dupes
     db.prepare(`
       UPDATE proxies SET family_id = ?

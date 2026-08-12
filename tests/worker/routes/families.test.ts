@@ -128,8 +128,8 @@ describe('POST /api/families — idempotency', () => {
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify(body),
     });
-    expect(r1.status).toBe(200);
-    expect(r2.status).toBe(200);
+    expect(r1.status).toBe(201); // genuinely created
+    expect(r2.status).toBe(200); // idempotent replay
     const d1 = await r1.json<{ id: string }>();
     const d2 = await r2.json<{ id: string }>();
     expect(d1.id).toBe(d2.id);
@@ -248,5 +248,35 @@ describe('POST /api/families/:id/proxies', () => {
       body: JSON.stringify({ proxy_name: 'X' }),
     });
     expect(missing.status).toBe(404);
+  });
+});
+
+describe('POST /api/families — merged-key alias replay (probe round 4)', () => {
+  it('alias replay returns 200 with the survivor id and creates no duplicate flags', async () => {
+    const db = env.DB;
+    await db.prepare(`DELETE FROM merged_keys`).run();
+    await db.prepare(`DELETE FROM duplicate_flags`).run();
+    await db.prepare(
+      `INSERT INTO merged_keys (idempotency_key, kind, target_id) VALUES ('alias-key-1', 'family', ?)`
+    ).bind((await (async () => {
+      const r = await workerExports.default.fetch('https://x/api/families', {
+        method: 'POST',
+        headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Alias Survivor' }),
+      });
+      return ((await r.json()) as { id: string }).id;
+    })())).run();
+
+    const flagsBefore = await db.prepare(`SELECT COUNT(*) AS n FROM duplicate_flags`).first<{ n: number }>();
+    const res = await workerExports.default.fetch('https://x/api/families', {
+      method: 'POST',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Stale Discarded Name', idempotency_key: 'alias-key-1', proxy: { proxy_name: 'P', proxy_phone: '4805550123' } }),
+    });
+    expect(res.status).toBe(200); // replay, not creation
+    const flagsAfter = await db.prepare(`SELECT COUNT(*) AS n FROM duplicate_flags`).first<{ n: number }>();
+    expect(flagsAfter!.n).toBe(flagsBefore!.n); // no duplicate detection rerun
+    const proxies = await db.prepare(`SELECT COUNT(*) AS n FROM proxies WHERE proxy_phone = '4805550123'`).first<{ n: number }>();
+    expect(proxies!.n).toBe(0); // proxy not reprocessed on replay
   });
 });

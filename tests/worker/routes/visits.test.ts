@@ -49,8 +49,8 @@ describe('POST /api/visits — idempotency', () => {
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify(body),
     });
-    expect(r1.status).toBe(200);
-    expect(r2.status).toBe(200);
+    expect(r1.status).toBe(201); // genuinely created
+    expect(r2.status).toBe(200); // idempotent replay
     const d1 = await r1.json<{ id: string }>();
     const d2 = await r2.json<{ id: string }>();
     expect(d1.id).toBe(d2.id);

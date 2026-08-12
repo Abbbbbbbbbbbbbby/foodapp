@@ -264,7 +264,7 @@ describe('mergeFamilies — probe round 3: multi-visit collision + replay aliase
 
     await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
 
-    const replayId = await dbInsertFamily(env.DB, {
+    const { id: replayId } = await dbInsertFamily(env.DB, {
       name: 'Garcia Dup', phone: null, address: null, zip_code: null, date_of_birth: null,
       language: null, ethnicity: null, hispanic: null, ami_bracket: null, num_people: null,
       num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
@@ -287,7 +287,7 @@ describe('mergeFamilies — probe round 3: multi-visit collision + replay aliase
 
     await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
 
-    const replayId = await dbInsertVisit(env.DB, {
+    const { id: replayId } = await dbInsertVisit(env.DB, {
       family_id: 'fam-keep', visit_date: '2026-08-04', picked_up_by_phone: null,
       volunteer_id: USER_ID, bag_received: null,
     }, 'k-drop');
@@ -295,5 +295,63 @@ describe('mergeFamilies — probe round 3: multi-visit collision + replay aliase
     expect(replayId).toBe('v-keep'); // alias hit — no duplicate visit
     const count = await env.DB.prepare(`SELECT COUNT(*) AS n FROM visits`).first<{ n: number }>();
     expect(count!.n).toBe(1);
+  });
+});
+
+describe('mergeFamilies — chained merges (probe round 4)', () => {
+  beforeEach(async () => {
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM merged_keys`),
+      env.DB.prepare(`DELETE FROM duplicate_flags`),
+      env.DB.prepare(`DELETE FROM visits`),
+      env.DB.prepare(`DELETE FROM proxies`),
+      env.DB.prepare(`DELETE FROM families`),
+      env.DB.prepare(`DELETE FROM record_changes`),
+    ]);
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, name, phone, role, active, self_registered) VALUES (?, 'Merge Tester', '4805550000', 'admin', 1, 0)`
+    ).bind(USER_ID).run();
+  });
+
+  it('A→B→C: replaying A\'s family key resolves to C, not deleted B', async () => {
+    const { insertFamily: dbInsertFamily } = await import('../../src/worker/db');
+    await env.DB.prepare(`INSERT INTO families (id, name, idempotency_key) VALUES ('fam-a', 'A', 'key-a')`).run();
+    await insertFamily('fam-b', 'B', null);
+    await insertFamily('fam-c', 'C', null);
+    await insertFlag('flag-ab', 'fam-a', 'fam-b');
+    await mergeFamilies(env.DB, 'fam-b', 'fam-a', USER_ID, 'flag-ab'); // A merged into B
+    await insertFlag('flag-bc', 'fam-b', 'fam-c');
+    await mergeFamilies(env.DB, 'fam-c', 'fam-b', USER_ID, 'flag-bc'); // B merged into C
+
+    const { id: replayId, created } = await dbInsertFamily(env.DB, {
+      name: 'A', phone: null, address: null, zip_code: null, date_of_birth: null,
+      language: null, ethnicity: null, hispanic: null, ami_bracket: null, num_people: null,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null, want_text_updates: null,
+      id_confirmed: null, bag_received: null, first_visit_date: null, created_by: USER_ID,
+    }, 'key-a');
+    expect(replayId).toBe('fam-c'); // survivor, not the deleted fam-b
+    expect(created).toBe(false);
+  });
+
+  it('A→B→C: replaying A\'s collided visit key resolves to the final surviving visit', async () => {
+    const { insertVisit: dbInsertVisit } = await import('../../src/worker/db');
+    await insertFamily('fam-a', 'A', null);
+    await insertFamily('fam-b', 'B', null);
+    await insertFamily('fam-c', 'C', null);
+    await insertVisit('v-a', 'fam-a', '2026-08-05', { idempotency_key: 'vkey-a' });
+    await insertVisit('v-b', 'fam-b', '2026-08-05', { idempotency_key: 'vkey-b' });
+    await insertVisit('v-c', 'fam-c', '2026-08-05', { idempotency_key: 'vkey-c' });
+    await insertFlag('flag-ab', 'fam-a', 'fam-b');
+    await mergeFamilies(env.DB, 'fam-b', 'fam-a', USER_ID, 'flag-ab'); // v-a deleted, alias vkey-a → v-b
+    await insertFlag('flag-bc', 'fam-b', 'fam-c');
+    await mergeFamilies(env.DB, 'fam-c', 'fam-b', USER_ID, 'flag-bc'); // v-b deleted, alias must retarget to v-c
+
+    const { id: replayId, created } = await dbInsertVisit(env.DB, {
+      family_id: 'fam-c', visit_date: '2026-08-05', picked_up_by_phone: null,
+      volunteer_id: USER_ID, bag_received: null,
+    }, 'vkey-a');
+    expect(replayId).toBe('v-c'); // the FINAL survivor — a live visit the bag PATCH can hit
+    expect(created).toBe(false);
   });
 });

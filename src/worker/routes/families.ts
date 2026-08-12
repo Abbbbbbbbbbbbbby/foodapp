@@ -163,16 +163,12 @@ async function handleCreate(request: Request, env: Env, execCtx: ExecutionContex
 
   const idempotencyKey = typeof body.idempotency_key === 'string' ? body.idempotency_key : undefined;
 
-  // Check for existing record before insert so we can skip the proxy on replay
-  let wasReplay = false;
-  if (idempotencyKey) {
-    const prior = await env.DB.prepare(
-      `SELECT id FROM families WHERE idempotency_key = ?`
-    ).bind(idempotencyKey).first<{ id: string }>();
-    wasReplay = !!prior;
-  }
-
-  const id = await insertFamily(env.DB, data, idempotencyKey);
+  // insertFamily resolves BOTH live-key replays and merged-key aliases; its
+  // created flag is the single source of truth for replay detection, so alias
+  // replays no longer rerun duplicate detection, subscription, or proxy work
+  // with the stale discarded-family payload.
+  const { id, created } = await insertFamily(env.DB, data, idempotencyKey);
+  const wasReplay = !created;
 
   // waitUntil: without it the runtime may terminate these once the response
   // returns (Cloudflare documents floating promises as unreliable in Workers).
@@ -204,8 +200,8 @@ async function handleCreate(request: Request, env: Env, execCtx: ExecutionContex
       ).bind(proxyId, id, body.proxy.proxy_name, proxyPhone).run();
     }
   }
-  // 200 for idempotent replay, 201 for new creation
-  const status = idempotencyKey ? 200 : 201;
+  // 201 for a genuinely new record, 200 for any replay (live key or alias)
+  const status = created ? 201 : 200;
   return Response.json({ id }, { status });
 }
 

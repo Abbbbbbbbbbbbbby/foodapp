@@ -21,7 +21,7 @@ beforeEach(async () => {
 describe('insertFamily + getFamilyById', () => {
   it('inserts a family and retrieves it by id', async () => {
     const db = (env as unknown as Env).DB;
-    const id = await insertFamily(db, {
+    const { id } = await insertFamily(db, {
       name: 'Gonzalez Family',
       phone: '4805551234',
       address: null,
@@ -97,7 +97,7 @@ describe('getFamiliesForPickup', () => {
   it('returns own family and proxy families for a phone number', async () => {
     const db = (env as unknown as Env).DB;
 
-    const ownId = await insertFamily(db, {
+    const { id: ownId } = await insertFamily(db, {
       name: 'Mendez Family', phone: '4805559999',
       address: null, zip_code: null, date_of_birth: null, language: null,
       ethnicity: null, hispanic: null, ami_bracket: null, num_people: 3,
@@ -107,7 +107,7 @@ describe('getFamiliesForPickup', () => {
       first_visit_date: null, created_by: null,
     });
 
-    const proxyFamilyId = await insertFamily(db, {
+    const { id: proxyFamilyId } = await insertFamily(db, {
       name: 'Vargas Family', phone: '6025558888',
       address: null, zip_code: null, date_of_birth: null, language: null,
       ethnicity: null, hispanic: null, ami_bracket: null, num_people: 5,
@@ -140,8 +140,8 @@ describe('insertFamily idempotency', () => {
       snap_benefits: null, receives_texts: null, want_text_updates: null,
       id_confirmed: null, bag_received: null, first_visit_date: null, created_by: null,
     };
-    const id1 = await insertFamily(db, data, 'idem-key-001');
-    const id2 = await insertFamily(db, data, 'idem-key-001');
+    const { id: id1, created: created1 } = await insertFamily(db, data, 'idem-key-001');
+    const { id: id2, created: created2 } = await insertFamily(db, data, 'idem-key-001');
     expect(id1).toBe(id2);
   });
 
@@ -155,8 +155,8 @@ describe('insertFamily idempotency', () => {
       snap_benefits: null, receives_texts: null, want_text_updates: null,
       id_confirmed: null, bag_received: null, first_visit_date: null, created_by: null,
     };
-    const id1 = await insertFamily(db, data);
-    const id2 = await insertFamily(db, data);
+    const { id: id1 } = await insertFamily(db, data);
+    const { id: id2 } = await insertFamily(db, data);
     expect(id1).not.toBe(id2);
   });
 });
@@ -164,7 +164,7 @@ describe('insertFamily idempotency', () => {
 describe('insertVisit idempotency', () => {
   it('returns the same id when the same idempotency_key is submitted twice', async () => {
     const db = (env as unknown as Env).DB;
-    const familyId = await insertFamily(db, {
+    const { id: familyId } = await insertFamily(db, {
       name: 'Visit Idem Family', phone: null, address: null, zip_code: null,
       date_of_birth: null, language: null, ethnicity: null, hispanic: null,
       ami_bracket: null, num_people: 1, num_children_under_18: null,
@@ -173,8 +173,8 @@ describe('insertVisit idempotency', () => {
       id_confirmed: null, bag_received: null, first_visit_date: null, created_by: null,
     });
     const visitData = { family_id: familyId, visit_date: '2026-07-22', picked_up_by_phone: null, volunteer_id: null };
-    const vid1 = await insertVisit(db, visitData, 'visit-idem-001');
-    const vid2 = await insertVisit(db, visitData, 'visit-idem-001');
+    const { id: vid1 } = await insertVisit(db, visitData, 'visit-idem-001');
+    const { id: vid2 } = await insertVisit(db, visitData, 'visit-idem-001');
     expect(vid1).toBe(vid2);
   });
 });
@@ -182,7 +182,7 @@ describe('insertVisit idempotency', () => {
 describe('insertVisit + getVisitsByFamily', () => {
   it('logs a visit and retrieves it', async () => {
     const db = (env as unknown as Env).DB;
-    const familyId = await insertFamily(db, {
+    const { id: familyId } = await insertFamily(db, {
       name: 'Test Family', phone: null,
       address: null, zip_code: null, date_of_birth: null, language: null,
       ethnicity: null, hispanic: null, ami_bracket: null, num_people: 2,

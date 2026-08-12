@@ -51,20 +51,20 @@ export async function insertFamily(
   db: D1Database,
   data: NewFamily,
   idempotencyKey?: string
-): Promise<string> {
+): Promise<{ id: string; created: boolean }> {
   // Dedup: if an offline-queue replay carries the same key, return the
   // already-created record instead of inserting a duplicate.
   if (idempotencyKey) {
     const existing = await db.prepare(
       `SELECT id FROM families WHERE idempotency_key = ?`
     ).bind(idempotencyKey).first<{ id: string }>();
-    if (existing) return existing.id;
+    if (existing) return { id: existing.id, created: false };
     // The key may belong to a family that was merged away — resolve to the
     // survivor instead of re-creating the duplicate the merge eliminated.
     const alias = await db.prepare(
       `SELECT target_id FROM merged_keys WHERE idempotency_key = ? AND kind = 'family'`
     ).bind(idempotencyKey).first<{ target_id: string }>();
-    if (alias) return alias.target_id;
+    if (alias) return { id: alias.target_id, created: false };
   }
 
   const id = crypto.randomUUID().replace(/-/g, '');
@@ -102,11 +102,11 @@ export async function insertFamily(
       const existing = await db.prepare(
         `SELECT id FROM families WHERE idempotency_key = ?`
       ).bind(idempotencyKey).first<{ id: string }>();
-      if (existing) return existing.id;
+      if (existing) return { id: existing.id, created: false };
     }
     throw err;
   }
-  return id;
+  return { id, created: true };
 }
 
 export async function getFamilyById(db: D1Database, id: string): Promise<Family | null> {
@@ -264,17 +264,17 @@ export async function insertVisit(
   db: D1Database,
   data: NewVisit,
   idempotencyKey?: string
-): Promise<string> {
+): Promise<{ id: string; created: boolean }> {
   if (idempotencyKey) {
     const existing = await db.prepare(
       `SELECT id FROM visits WHERE idempotency_key = ?`
     ).bind(idempotencyKey).first<{ id: string }>();
-    if (existing) return existing.id;
+    if (existing) return { id: existing.id, created: false };
     // Key of a visit that was merged away — resolve to the surviving visit.
     const alias = await db.prepare(
       `SELECT target_id FROM merged_keys WHERE idempotency_key = ? AND kind = 'visit'`
     ).bind(idempotencyKey).first<{ target_id: string }>();
-    if (alias) return alias.target_id;
+    if (alias) return { id: alias.target_id, created: false };
   }
 
   const id = crypto.randomUUID().replace(/-/g, '');
@@ -290,11 +290,11 @@ export async function insertVisit(
       const existing = await db.prepare(
         `SELECT id FROM visits WHERE idempotency_key = ?`
       ).bind(idempotencyKey).first<{ id: string }>();
-      if (existing) return existing.id;
+      if (existing) return { id: existing.id, created: false };
     }
     throw err;
   }
-  return id;
+  return { id, created: true };
 }
 
 export async function getVisitsByFamily(db: D1Database, familyId: string): Promise<Visit[]> {
