@@ -61,8 +61,11 @@ export async function insertFamily(
     if (existing) return { id: existing.id, created: false };
     // The key may belong to a family that was merged away — resolve to the
     // survivor instead of re-creating the duplicate the merge eliminated.
+    // JOIN guards against dangling aliases (target deleted after the merge):
+    // a dangling alias must fall through to a fresh insert, not return a dead id.
     const alias = await db.prepare(
-      `SELECT target_id FROM merged_keys WHERE idempotency_key = ? AND kind = 'family'`
+      `SELECT mk.target_id FROM merged_keys mk JOIN families f ON f.id = mk.target_id
+       WHERE mk.idempotency_key = ? AND mk.kind = 'family'`
     ).bind(idempotencyKey).first<{ target_id: string }>();
     if (alias) return { id: alias.target_id, created: false };
   }
@@ -271,8 +274,10 @@ export async function insertVisit(
     ).bind(idempotencyKey).first<{ id: string }>();
     if (existing) return { id: existing.id, created: false };
     // Key of a visit that was merged away — resolve to the surviving visit.
+    // JOIN guards against dangling aliases (survivor later deleted).
     const alias = await db.prepare(
-      `SELECT target_id FROM merged_keys WHERE idempotency_key = ? AND kind = 'visit'`
+      `SELECT mk.target_id FROM merged_keys mk JOIN visits v ON v.id = mk.target_id
+       WHERE mk.idempotency_key = ? AND mk.kind = 'visit'`
     ).bind(idempotencyKey).first<{ target_id: string }>();
     if (alias) return { id: alias.target_id, created: false };
   }

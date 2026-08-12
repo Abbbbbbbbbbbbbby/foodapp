@@ -9,6 +9,9 @@ vi.mock('../../src/pwa/lib/api', () => {
 vi.mock('../../src/pwa/lib/offline', () => ({
   queueItem: vi.fn(async () => 'queue-id-1'),
   generateUUID: () => 'uuid-fixed',
+  // SummaryScreen (rendered by EnterPage's done view) imports setItemBag —
+  // the mock surface must match the real module or deeper flows throw.
+  setItemBag: vi.fn(async () => undefined),
 }));
 
 import EnterPage from '../../src/pwa/pages/EnterPage';

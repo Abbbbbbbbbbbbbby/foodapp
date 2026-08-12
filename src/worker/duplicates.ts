@@ -120,7 +120,9 @@ export async function mergeFamilies(
   const visitRetargets: { deletedId: string; newTargetId: string }[] = [];
   for (const [date, rows] of byDate) {
     const target = targetByDate.get(date);
-    if (!target || !rows) continue;
+    if (!target || !rows) {
+      throw new Error(`merge invariant broken: no keep-side target for collided date ${date}`);
+    }
     for (const r of rows) visitRetargets.push({ deletedId: r.id, newTargetId: target.id });
     const first = <T>(f: (r: NonNullable<typeof collided.results>[number]) => T | null) =>
       rows.map(f).find(v => v !== null) ?? null;

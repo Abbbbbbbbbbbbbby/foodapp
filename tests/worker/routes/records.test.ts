@@ -365,3 +365,40 @@ describe('GET /api/records/changes/:table/:id', () => {
     expect(body.changes[0].changed_by_name).toBe('Admin');
   });
 });
+
+describe('delete handlers clean merged_keys (probe round 5)', () => {
+  it('deleting a family removes its family alias AND aliases onto its cascaded visits', async () => {
+    const db = (env as unknown as Env).DB;
+    await (env as unknown as Env).DB.prepare(`INSERT OR IGNORE INTO users (id, name, phone, role, active, self_registered) VALUES ('mk-admin', 'MK Admin', '4805559990', 'admin', 1, 0)`).run();
+    const token = await makeToken('mk-admin', '4805559990', 'admin');
+    await db.prepare(`INSERT INTO families (id, name) VALUES ('mk-fam', 'MK Fam')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('mk-visit', 'mk-fam', '2026-08-12')`).run();
+    await db.prepare(`INSERT INTO merged_keys (idempotency_key, kind, target_id) VALUES ('mk-f-key', 'family', 'mk-fam')`).run();
+    await db.prepare(`INSERT INTO merged_keys (idempotency_key, kind, target_id) VALUES ('mk-v-key', 'visit', 'mk-visit')`).run();
+
+    const res = await workerExports.default.fetch('https://x/api/records/families/mk-fam', {
+      method: 'DELETE', headers: headers(token),
+    });
+    expect(res.status).toBe(200);
+
+    const remaining = await db.prepare(`SELECT COUNT(*) AS n FROM merged_keys WHERE idempotency_key IN ('mk-f-key','mk-v-key')`).first<{ n: number }>();
+    expect(remaining!.n).toBe(0);
+  });
+
+  it('deleting a visit removes aliases targeting it', async () => {
+    const db = (env as unknown as Env).DB;
+    await (env as unknown as Env).DB.prepare(`INSERT OR IGNORE INTO users (id, name, phone, role, active, self_registered) VALUES ('mk-admin', 'MK Admin', '4805559990', 'admin', 1, 0)`).run();
+    const token = await makeToken('mk-admin', '4805559990', 'admin');
+    await db.prepare(`INSERT INTO families (id, name) VALUES ('mk-fam2', 'MK Fam 2')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('mk-visit2', 'mk-fam2', '2026-08-12')`).run();
+    await db.prepare(`INSERT INTO merged_keys (idempotency_key, kind, target_id) VALUES ('mk-v2-key', 'visit', 'mk-visit2')`).run();
+
+    const res = await workerExports.default.fetch('https://x/api/records/visits/mk-visit2', {
+      method: 'DELETE', headers: headers(token),
+    });
+    expect(res.status).toBe(200);
+
+    const remaining = await db.prepare(`SELECT COUNT(*) AS n FROM merged_keys WHERE idempotency_key = 'mk-v2-key'`).first<{ n: number }>();
+    expect(remaining!.n).toBe(0);
+  });
+});

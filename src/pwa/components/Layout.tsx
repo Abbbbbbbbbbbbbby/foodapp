@@ -30,7 +30,7 @@ export default function Layout() {
 
   useEffect(() => {
     function refresh() {
-      getPendingCount().then(setPendingCount).catch(() => {});
+      getPendingCount().then(setPendingCount).catch((err) => console.error('pending-count read failed:', err));
     }
     refresh();
     window.addEventListener('offlinecountchange', refresh);
@@ -67,7 +67,10 @@ export default function Layout() {
           clearAuth();
           navigate('/login');
         }
-      } catch { /* IndexedDB unavailable — degrade silently */ }
+      } catch (err) {
+        // Broken IndexedDB (or a flush bug) must at least be tail-able.
+        console.error('offline sync unavailable:', err);
+      }
     };
     // Items queued while already online (e.g. a request that failed over live
     // wifi) get a near-term flush instead of waiting for a connectivity event.

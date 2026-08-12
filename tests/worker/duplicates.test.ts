@@ -355,3 +355,57 @@ describe('mergeFamilies — chained merges (probe round 4)', () => {
     expect(created).toBe(false);
   });
 });
+
+describe('merged_keys dangling-alias protection (probe round 5)', () => {
+  beforeEach(async () => {
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM merged_keys`),
+      env.DB.prepare(`DELETE FROM duplicate_flags`),
+      env.DB.prepare(`DELETE FROM visits`),
+      env.DB.prepare(`DELETE FROM proxies`),
+      env.DB.prepare(`DELETE FROM families`),
+      env.DB.prepare(`DELETE FROM record_changes`),
+    ]);
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, name, phone, role, active, self_registered) VALUES (?, 'Merge Tester', '4805550000', 'admin', 1, 0)`
+    ).bind(USER_ID).run();
+  });
+
+  it('a dangling family alias falls through to a fresh insert instead of returning a dead id', async () => {
+    const { insertFamily: dbInsertFamily } = await import('../../src/worker/db');
+    await insertFamily('fam-live', 'Live', '4805551111');
+    // Simulate the corruption: alias pointing at a family that no longer exists
+    await env.DB.prepare(
+      `INSERT INTO merged_keys (idempotency_key, kind, target_id) VALUES ('dangle-key', 'family', 'fam-deleted-gone')`
+    ).run();
+
+    const { id, created } = await dbInsertFamily(env.DB, {
+      name: 'Replayed Family', phone: null, address: null, zip_code: null, date_of_birth: null,
+      language: null, ethnicity: null, hispanic: null, ami_bracket: null, num_people: null,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null, want_text_updates: null,
+      id_confirmed: null, bag_received: null, first_visit_date: null, created_by: USER_ID,
+    }, 'dangle-key');
+
+    expect(created).toBe(true); // fresh insert — the data is NOT silently lost
+    const row = await env.DB.prepare(`SELECT id FROM families WHERE id = ?`).bind(id).first();
+    expect(row).not.toBeNull(); // and the returned id is a real, live record
+  });
+
+  it('a dangling visit alias falls through to a fresh insert', async () => {
+    const { insertVisit: dbInsertVisit } = await import('../../src/worker/db');
+    await insertFamily('fam-live', 'Live', '4805551111');
+    await env.DB.prepare(
+      `INSERT INTO merged_keys (idempotency_key, kind, target_id) VALUES ('dangle-vkey', 'visit', 'visit-gone')`
+    ).run();
+
+    const { id, created } = await dbInsertVisit(env.DB, {
+      family_id: 'fam-live', visit_date: '2026-08-12', picked_up_by_phone: null,
+      volunteer_id: USER_ID, bag_received: null,
+    }, 'dangle-vkey');
+
+    expect(created).toBe(true);
+    const row = await env.DB.prepare(`SELECT id FROM visits WHERE id = ?`).bind(id).first();
+    expect(row).not.toBeNull();
+  });
+});

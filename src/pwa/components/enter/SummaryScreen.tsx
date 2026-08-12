@@ -69,6 +69,7 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     const chosenOrdered = [...synced, ...queued];
     const failed: string[] = [];
     let alreadySynced = 0;
+    let recordGone = 0;
     const newlySaved: number[] = [];
     let newlyPending = 0;
     results.forEach((r, k) => {
@@ -78,10 +79,19 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
         return;
       }
       const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
-      // The queue item synced between reaching this screen and tapping save:
-      // the visit IS saved — the bag flag just can't ride the queue anymore.
-      if (msg.includes('already synced') || msg.includes('not found')) alreadySynced++;
-      else failed.push(`${chosenOrdered[k].f.name}: ${msg}`);
+      const lower = msg.toLowerCase(); // API messages vary in case ('Not found')
+      if (lower.includes('already synced')) {
+        // Queue item synced mid-flow: the check-in IS saved; retrying here can
+        // never succeed, so resolve it out of the picklist with guidance.
+        alreadySynced++;
+        newlySaved.push(chosenOrdered[k].i);
+      } else if (lower.includes('not found')) {
+        // The visit was removed server-side — a retry is permanently futile.
+        recordGone++;
+        newlySaved.push(chosenOrdered[k].i);
+      } else {
+        failed.push(`${chosenOrdered[k].f.name}: ${msg}`);
+      }
     });
     setSavedIdx(prev => new Set([...prev, ...newlySaved]));
     setSavedPending(prev => prev + newlyPending);
@@ -89,6 +99,11 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     if (alreadySynced > 0) {
       problems.push(
         `${alreadySynced} family record(s) finished syncing just now — the check-in IS saved, but the bag must be marked by staff from View Records.`
+      );
+    }
+    if (recordGone > 0) {
+      problems.push(
+        `${recordGone} visit record(s) no longer exist on the server — tell a supervisor before re-entering anything.`
       );
     }
     if (failed.length > 0) problems.push(`Failed: ${failed.join('; ')} — those families remain listed, check connection and retry.`);

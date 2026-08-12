@@ -327,6 +327,9 @@ async function handleDeleteVisit(env: Env, id: string, ctx: AuthContext): Promis
         visit_date: { old: visit.visit_date, new: null },
         family_name: { old: visit.family_name, new: null },
       })),
+    // Aliases pointing at this visit would dangle after the delete —
+    // offline replays must fall through to a fresh insert instead.
+    env.DB.prepare(`DELETE FROM merged_keys WHERE kind = 'visit' AND target_id = ?`).bind(id),
     env.DB.prepare('DELETE FROM visits WHERE id = ?').bind(id),
   ]);
   return Response.json({ ok: true });
@@ -349,6 +352,10 @@ async function handleDeleteFamily(env: Env, id: string, ctx: AuthContext): Promi
         visit_count: { old: visitCount?.n ?? 0, new: null },
       })),
     env.DB.prepare(`DELETE FROM duplicate_flags WHERE family_a_id = ? OR family_b_id = ?`).bind(id, id),
+    // Alias cleanup BEFORE the visits delete (the subquery needs the rows):
+    // family aliases and aliases onto this family's cascaded visits would
+    // dangle otherwise, sending offline replays to deleted records.
+    env.DB.prepare(`DELETE FROM merged_keys WHERE (kind = 'family' AND target_id = ?) OR (kind = 'visit' AND target_id IN (SELECT id FROM visits WHERE family_id = ?))`).bind(id, id),
     env.DB.prepare('DELETE FROM visits WHERE family_id = ?').bind(id),
     env.DB.prepare('DELETE FROM proxies WHERE family_id = ?').bind(id),
     env.DB.prepare('DELETE FROM families WHERE id = ?').bind(id),
