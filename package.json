@@ -17,7 +17,9 @@
     "pwa:dev": "vite --config src/pwa/vite.config.ts",
     "pwa:build": "vite build --config src/pwa/vite.config.ts && node scripts/inject-precache.mjs",
     "generate-types": "wrangler types",
-    "test:ui": "vitest run --config vitest.ui.config.ts"
+    "test:ui": "vitest run --config vitest.ui.config.ts",
+    "e2e:server": "npm run build && wrangler d1 migrations apply foodapp --local && wrangler dev --port 8787 --var ENVIRONMENT:test --var JWT_SECRET:e2e-local-secret --var TWILIO_ACCOUNT_SID:x --var TWILIO_AUTH_TOKEN:x --var TWILIO_PHONE_NUMBER:0000000000",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -28,6 +30,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.21.1",
     "@cloudflare/workers-types": "^5.20260811.1",
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.4",

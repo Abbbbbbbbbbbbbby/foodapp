@@ -5,6 +5,17 @@ import { getAuthContext } from '../middleware';
 import { normalizePhone } from '../db';
 import { checkOtpSendLimit, checkVerifyLimit } from '../ratelimit';
 
+// E2E-only: lets the Playwright harness read the OTP that would have gone
+// out by SMS. Gated on ENVIRONMENT === 'test' — in production the var is
+// 'production', so this branch is structurally unreachable there.
+async function handleTestLatestOtp(env: Env, phone: string): Promise<Response> {
+  const row = await env.DB.prepare(
+    `SELECT code FROM otp_codes WHERE phone = ? AND used = 0 ORDER BY created_at DESC LIMIT 1`
+  ).bind(phone).first<{ code: string }>();
+  if (!row) return Response.json({ error: 'No active code' }, { status: 404 });
+  return Response.json({ code: row.code });
+}
+
 export async function handleAuthRoutes(
   request: Request,
   env: Env,
@@ -24,6 +35,10 @@ export async function handleAuthRoutes(
   }
   if (pathname === '/api/auth/me' && request.method === 'GET') {
     return handleMe(request, env);
+  }
+  const testOtpMatch = pathname.match(/^\/api\/test\/latest-otp\/([0-9]+)$/);
+  if (testOtpMatch && request.method === 'GET' && env.ENVIRONMENT === 'test') {
+    return handleTestLatestOtp(env, testOtpMatch[1]);
   }
   return null;
 }
