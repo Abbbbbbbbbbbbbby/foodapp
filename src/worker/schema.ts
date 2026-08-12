@@ -45,6 +45,7 @@ export interface Visit {
   visit_date: string;
   picked_up_by_phone: string | null;
   volunteer_id: string | null;
+  bag_received: boolean;
   created_at: string;
 }
 
@@ -70,7 +71,7 @@ export interface Env {
 }
 
 export type NewFamily = Omit<Family, 'id' | 'created_at' | 'updated_at'>;
-export type NewVisit = Omit<Visit, 'id' | 'created_at'>;
+export type NewVisit = Omit<Visit, 'id' | 'created_at' | 'bag_received'> & { bag_received?: boolean };
 
 export type QuestionInputType =
   | 'text' | 'phone' | 'number' | 'select' | 'multiselect'

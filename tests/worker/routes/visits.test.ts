@@ -1,4 +1,4 @@
-import { env, SELF } from 'cloudflare:test';
+import { env, exports as workerExports } from 'cloudflare:workers';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { buildSession, createSession } from '../../../src/worker/auth';
 import type { Env } from '../../../src/worker/schema';
@@ -24,7 +24,7 @@ beforeAll(async () => {
 
 describe('POST /api/visits — malformed JSON', () => {
   it('returns 400 for non-JSON body', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: 'not json {{{',
@@ -38,19 +38,19 @@ describe('POST /api/visits — malformed JSON', () => {
 describe('POST /api/visits — idempotency', () => {
   it('returns the same id for the same idempotency_key', async () => {
     const key = `visit-idem-${Date.now()}`;
-    const body = { family_id: testFamilyId, idempotency_key: key };
-    const r1 = await SELF.fetch('http://example.com/api/visits', {
+    const body = { family_id: testFamilyId, idempotency_key: key, visit_date: '2026-01-01' };
+    const r1 = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify(body),
     });
-    const r2 = await SELF.fetch('http://example.com/api/visits', {
+    const r2 = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify(body),
     });
-    expect(r1.status).toBe(200);
-    expect(r2.status).toBe(200);
+    expect(r1.status).toBe(201); // genuinely created
+    expect(r2.status).toBe(200); // idempotent replay
     const d1 = await r1.json<{ id: string }>();
     const d2 = await r2.json<{ id: string }>();
     expect(d1.id).toBe(d2.id);
@@ -59,7 +59,7 @@ describe('POST /api/visits — idempotency', () => {
 
 describe('POST /api/visits', () => {
   it('returns 401 without auth', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ family_id: testFamilyId }),
@@ -68,7 +68,7 @@ describe('POST /api/visits', () => {
   });
 
   it('returns 400 without family_id', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({}),
@@ -76,11 +76,20 @@ describe('POST /api/visits', () => {
     expect(res.status).toBe(400);
   });
 
-  it('creates visit and returns id', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+  it('returns 400 without visit_date', async () => {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({ family_id: testFamilyId }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('creates visit and returns id', async () => {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ family_id: testFamilyId, visit_date: '2026-01-01' }),
     });
     expect(res.status).toBe(201);
     const data = await res.json<{ id: string }>();
@@ -90,23 +99,53 @@ describe('POST /api/visits', () => {
 
 describe('GET /api/visits', () => {
   it('returns 401 without auth', async () => {
-    const res = await SELF.fetch(`http://example.com/api/visits?familyId=${testFamilyId}`);
+    const res = await workerExports.default.fetch(`http://example.com/api/visits?familyId=${testFamilyId}`);
     expect(res.status).toBe(401);
   });
 
   it('returns 400 without familyId', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       headers: { Authorization: authHeader },
     });
     expect(res.status).toBe(400);
   });
 
   it('returns visits array', async () => {
-    const res = await SELF.fetch(`http://example.com/api/visits?familyId=${testFamilyId}`, {
+    const res = await workerExports.default.fetch(`http://example.com/api/visits?familyId=${testFamilyId}`, {
       headers: { Authorization: authHeader },
     });
     expect(res.status).toBe(200);
     const data = await res.json<{ visits: unknown[] }>();
     expect(Array.isArray(data.visits)).toBe(true);
+  });
+});
+
+describe('GET /api/visits/resolve/:key (bag recovery)', () => {
+  it('resolves a live visit by idempotency key', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT OR IGNORE INTO families (id, name) VALUES ('rf1', 'Resolve Fam')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, idempotency_key) VALUES ('rv1', 'rf1', '2026-08-12', 'resolve-key-1')`).run();
+    const res = await workerExports.default.fetch('https://x/api/visits/resolve/resolve-key-1', {
+      headers: { Authorization: authHeader },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { id: string }).id).toBe('rv1');
+  });
+
+  it('resolves through a merge alias and 404s unknown keys', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT OR IGNORE INTO families (id, name) VALUES ('rf2', 'Resolve Fam 2')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('rv2', 'rf2', '2026-08-12')`).run();
+    await db.prepare(`INSERT INTO merged_keys (idempotency_key, kind, target_id) VALUES ('aliased-key', 'visit', 'rv2')`).run();
+
+    const aliased = await workerExports.default.fetch('https://x/api/visits/resolve/aliased-key', {
+      headers: { Authorization: authHeader },
+    });
+    expect(((await aliased.json()) as { id: string }).id).toBe('rv2');
+
+    const missing = await workerExports.default.fetch('https://x/api/visits/resolve/no-such-key', {
+      headers: { Authorization: authHeader },
+    });
+    expect(missing.status).toBe(404);
   });
 });

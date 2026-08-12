@@ -14,26 +14,26 @@ export default function HowManyFamilies({ onSelect, onBack }: HowManyFamiliesPro
     const valid = !isNaN(num) && num >= 4;
     return (
       <div className="how-many">
-        <button className="btn-ghost" onClick={() => { setAskExact(false); setValue(''); }}>← Back</button>
-        <p className="question-en">How many families?</p>
-        <p className="question-es">¿Cuántas familias?</p>
+        <p className="question-en">How many families are you picking up for today?</p>
+        <p className="question-es">¿Para cuántas familias está recogiendo hoy?</p>
         <input
-          type="number"
+          type="tel"
+          inputMode="numeric"
           min={4}
           value={value}
           onChange={e => setValue(e.target.value)}
-          placeholder="Enter number"
           autoFocus
-          style={{ fontSize: 28, padding: '12px 16px', width: '100%', boxSizing: 'border-box', marginTop: 8 }}
         />
-        <button
-          className="btn-primary"
-          style={{ marginTop: 16, width: '100%', fontSize: 18, padding: '14px 0' }}
-          disabled={!valid}
-          onClick={() => onSelect(num)}
-        >
-          Continue
-        </button>
+        <div className="step-actions">
+          <button className="btn-ghost" onClick={() => { setAskExact(false); setValue(''); }}>Back / Atrás</button>
+          <button
+            className="btn-primary"
+            disabled={!valid}
+            onClick={() => onSelect(num)}
+          >
+            Next / Siguiente
+          </button>
+        </div>
       </div>
     );
   }

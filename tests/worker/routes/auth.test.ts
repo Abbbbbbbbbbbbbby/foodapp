@@ -1,4 +1,4 @@
-import { env, SELF } from 'cloudflare:test';
+import { env, exports as workerExports } from 'cloudflare:workers';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createOtp } from '../../../src/worker/otp';
 import { buildSession, createSession } from '../../../src/worker/auth';
@@ -29,7 +29,7 @@ async function makeAuthToken(userId: string, role: 'admin' | 'staff' | 'voluntee
 describe('POST /api/auth/login', () => {
   it('returns 200 when user exists', async () => {
     await seedUser('4805551234');
-    const res = await SELF.fetch('https://example.com/api/auth/login', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: '4805551234' }),
@@ -40,7 +40,7 @@ describe('POST /api/auth/login', () => {
   });
 
   it('returns 404 when user does not exist', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/login', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: '9999999999' }),
@@ -49,7 +49,7 @@ describe('POST /api/auth/login', () => {
   });
 
   it('returns 400 for a missing phone', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/login', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -60,7 +60,7 @@ describe('POST /api/auth/login', () => {
 
 describe('POST /api/auth/register', () => {
   it('creates a volunteer account and returns 200', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/register', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'Rosa Mendez', phone: '4805551234' }),
@@ -77,7 +77,7 @@ describe('POST /api/auth/register', () => {
 
   it('returns 409 when phone already registered', async () => {
     await seedUser('4805551234');
-    const res = await SELF.fetch('https://example.com/api/auth/register', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'Rosa Mendez', phone: '4805551234' }),
@@ -86,7 +86,7 @@ describe('POST /api/auth/register', () => {
   });
 
   it('returns 400 for missing name', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/register', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: '4805551234' }),
@@ -100,7 +100,7 @@ describe('POST /api/auth/verify', () => {
     const userId = await seedUser('4805551234');
     const db = (env as unknown as Env).DB;
     const code = await createOtp(db, '4805551234');
-    const res = await SELF.fetch('https://example.com/api/auth/verify', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: '4805551234', code }),
@@ -115,7 +115,7 @@ describe('POST /api/auth/verify', () => {
   it('returns 401 for an invalid code', async () => {
     await seedUser('4805551234');
     await createOtp((env as unknown as Env).DB, '4805551234');
-    const res = await SELF.fetch('https://example.com/api/auth/verify', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: '4805551234', code: '000000' }),
@@ -128,7 +128,7 @@ describe('DELETE /api/auth/logout', () => {
   it('destroys the session and returns 200', async () => {
     const userId = await seedUser('4805551234');
     const token = await makeAuthToken(userId, 'volunteer');
-    const res = await SELF.fetch('https://example.com/api/auth/logout', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/logout', {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -136,7 +136,7 @@ describe('DELETE /api/auth/logout', () => {
   });
 
   it('returns 401 when not authenticated', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/logout', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/logout', {
       method: 'DELETE',
     });
     expect(res.status).toBe(401);
@@ -145,7 +145,7 @@ describe('DELETE /api/auth/logout', () => {
 
 describe('malformed JSON — login / register / verify', () => {
   it('POST /api/auth/login returns 400 for non-JSON body', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/login', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: 'not json {{{',
@@ -156,7 +156,7 @@ describe('malformed JSON — login / register / verify', () => {
   });
 
   it('POST /api/auth/register returns 400 for non-JSON body', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/register', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: 'bad',
@@ -167,7 +167,7 @@ describe('malformed JSON — login / register / verify', () => {
   });
 
   it('POST /api/auth/verify returns 400 for non-JSON body', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/verify', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: 'bad',
@@ -183,14 +183,14 @@ describe('SMS rate limiting', () => {
     await seedUser('4805559001');
     // Exhaust the 5-per-hour limit
     for (let i = 0; i < 5; i++) {
-      const r = await SELF.fetch('https://example.com/api/auth/login', {
+      const r = await workerExports.default.fetch('https://example.com/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: '4805559001' }),
       });
       expect(r.status).toBe(200);
     }
-    const blocked = await SELF.fetch('https://example.com/api/auth/login', {
+    const blocked = await workerExports.default.fetch('https://example.com/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: '4805559001' }),
@@ -202,13 +202,13 @@ describe('SMS rate limiting', () => {
     await seedUser('4805559002');
     // Exhaust the 10-per-hour verify limit (even with wrong codes)
     for (let i = 0; i < 10; i++) {
-      await SELF.fetch('https://example.com/api/auth/verify', {
+      await workerExports.default.fetch('https://example.com/api/auth/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: '4805559002', code: '000000' }),
       });
     }
-    const blocked = await SELF.fetch('https://example.com/api/auth/verify', {
+    const blocked = await workerExports.default.fetch('https://example.com/api/auth/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: '4805559002', code: '000000' }),
@@ -221,7 +221,7 @@ describe('GET /api/auth/me', () => {
   it('returns user info for authenticated request', async () => {
     const userId = await seedUser('4805551234', 'staff');
     const token = await makeAuthToken(userId, 'staff');
-    const res = await SELF.fetch('https://example.com/api/auth/me', {
+    const res = await workerExports.default.fetch('https://example.com/api/auth/me', {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(200);
@@ -231,7 +231,7 @@ describe('GET /api/auth/me', () => {
   });
 
   it('returns 401 when not authenticated', async () => {
-    const res = await SELF.fetch('https://example.com/api/auth/me');
+    const res = await workerExports.default.fetch('https://example.com/api/auth/me');
     expect(res.status).toBe(401);
   });
 });

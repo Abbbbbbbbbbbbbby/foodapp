@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - run: npm ci
@@ -28,6 +28,9 @@ jobs:
 
       - name: PWA unit tests
         run: npx vitest run --config vitest.pwa.config.ts
+
+      - name: PWA component tests
+        run: npm run test:ui
 
       - name: Scripts tests
         run: npm run test:scripts

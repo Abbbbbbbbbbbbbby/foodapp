@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { getUser } from '../store/auth';
+import { localDateString, localMonthStart } from '../lib/date';
 
 type Role = 'admin' | 'staff' | 'volunteer';
 
@@ -64,12 +65,11 @@ type Timeframe = 'today' | 'month' | 'custom' | 'all';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localDateString();
 }
 
 function monthStart(): string {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
+  return localMonthStart();
 }
 
 function fmtDate(iso: string | null): string {
@@ -431,10 +431,20 @@ function FamilyCard({ family, role, onUpdated, onDeleted }: FamilyCardProps) {
   }
 
   async function save() {
+    if (draft.name !== undefined && !draft.name) {
+      setErr('Name cannot be empty');
+      return;
+    }
     setSaving(true); setErr(null);
+    const ENUM_FIELDS = new Set(['hispanic', 'health_insurance', 'snap_benefits', 'ami_bracket']);
+    const NUM_FIELDS = new Set(['num_people', 'num_children_under_18', 'num_children_under_5', 'num_with_diabetes']);
     const patch: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(draft)) {
-      if (v !== '' && v !== null && v !== undefined) patch[k] = v;
+      if (v === undefined) continue;
+      if (v === '' && ENUM_FIELDS.has(k)) { patch[k] = null; continue; }
+      if (v === '' && NUM_FIELDS.has(k)) { patch[k] = null; continue; }
+      if (v !== null) patch[k] = v;
+      else patch[k] = null; // explicit null clears the field
     }
     try {
       await api.patch(`/api/records/families/${family.id}`, patch);
@@ -602,19 +612,23 @@ function FamiliesTab({ role }: FamiliesTabProps) {
   const [families, setFamilies] = useState<FamilyRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const seqRef = useRef(0);
 
-  const load = useCallback(async (search: string) => {
+  const load = useCallback(async (search: string, seq: number) => {
     setLoading(true); setError(null);
     try {
       const qs = search ? '?q=' + encodeURIComponent(search) : '';
       const data = await api.get<{ families: FamilyRecord[] }>('/api/records/families' + qs);
+      if (seq !== seqRef.current) return;
       setFamilies(data.families);
     } catch (e) {
+      if (seq !== seqRef.current) return;
       setError(e instanceof Error ? e.message : 'Failed to load');
-    } finally { setLoading(false); }
+    } finally { if (seq === seqRef.current) setLoading(false); }
   }, []);
 
-  useEffect(() => { load(''); }, [load]);
+  useEffect(() => { load('', ++seqRef.current); }, [load]);
 
   function handleUpdated(id: string, patch: Partial<FamilyRecord>) {
     setFamilies(fs => fs.map(f => f.id === id ? { ...f, ...patch } : f));
@@ -623,11 +637,11 @@ function FamiliesTab({ role }: FamiliesTabProps) {
     setFamilies(fs => fs.filter(f => f.id !== id));
   }
 
-  let searchTimer: ReturnType<typeof setTimeout>;
   function handleSearch(val: string) {
     setQ(val);
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => load(val), 300);
+    const seq = ++seqRef.current;
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => load(val, seq), 300);
   }
 
   return (

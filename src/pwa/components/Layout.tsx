@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, clearAuth, getToken } from '../store/auth';
-import { getPendingCount } from '../lib/offline';
+import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters } from '../lib/offline';
+import type { DeadLetterEntry } from '../lib/offline';
+import { api } from '../lib/api';
 
 interface NavItem {
   label: string;
@@ -23,15 +25,83 @@ export default function Layout() {
   const location = useLocation();
   const user = getUser()!;
   const [pendingCount, setPendingCount] = useState(0);
+  const [deadLetters, setDeadLetters] = useState<DeadLetterEntry[]>([]);
+  const [dlExpanded, setDlExpanded] = useState(false);
 
   useEffect(() => {
     function refresh() {
-      getPendingCount().then(setPendingCount).catch(() => {});
+      getPendingCount().then(setPendingCount).catch((err) => console.error('pending-count read failed:', err));
     }
     refresh();
     window.addEventListener('offlinecountchange', refresh);
     return () => window.removeEventListener('offlinecountchange', refresh);
   }, []);
+
+  useEffect(() => {
+    // Load any persisted dead-letter entries on mount
+    getDeadLetters().then(setDeadLetters).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const apiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') =>
+      method === 'PATCH'
+        ? api.patch<unknown>(url, body as Record<string, unknown>)
+        : api.post<unknown>(url, body as Record<string, unknown>);
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    const doFlush = async () => {
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = undefined; }
+      try {
+        const result = await flushQueue(apiFn);
+        if (result.errors > 0) {
+          console.warn(`offline sync: ${result.errors} item(s) failed transiently — retrying in 30s`);
+          // Mount and 'online' are not enough: a 503 or transient fetch
+          // failure while the browser STAYS online needs a scheduled retry.
+          if (!disposed) retryTimer = setTimeout(doFlush, 30_000);
+        }
+        // Refresh dead-letter entries from the durable store before any navigation
+        if (result.deadLettered > 0) {
+          getDeadLetters().then(setDeadLetters).catch(() => {});
+        }
+        if (result.needsReLogin) {
+          clearAuth();
+          navigate('/login');
+        }
+      } catch (err) {
+        // Broken IndexedDB (or a flush bug) must at least be tail-able.
+        console.error('offline sync unavailable:', err);
+      }
+    };
+    // Items queued while already online (e.g. a request that failed over live
+    // wifi) get a near-term flush instead of waiting for a connectivity event.
+    let queuedTimer: ReturnType<typeof setTimeout> | undefined;
+    const onCountChange = () => {
+      if (navigator.onLine === false) return;
+      if (queuedTimer) clearTimeout(queuedTimer);
+      queuedTimer = setTimeout(doFlush, 5_000);
+    };
+    doFlush();
+    window.addEventListener('online', doFlush);
+    window.addEventListener('offlinecountchange', onCountChange);
+    return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (queuedTimer) clearTimeout(queuedTimer);
+      window.removeEventListener('online', doFlush);
+      window.removeEventListener('offlinecountchange', onCountChange);
+    };
+  }, [navigate]);
+
+  async function handleAcknowledgeDeadLetters() {
+    try {
+      // Delete only the entries currently shown; anything that landed after
+      // this render stays and re-renders the banner.
+      await deleteDeadLetters(deadLetters.map(dl => dl.id));
+      const remaining = await getDeadLetters();
+      setDeadLetters(remaining);
+      if (remaining.length === 0) setDlExpanded(false);
+    } catch { /* keep the banner if the clear failed */ }
+  }
 
   async function handleLogout() {
     try {
@@ -50,6 +120,49 @@ export default function Layout() {
 
   return (
     <div className="layout">
+      {deadLetters.length > 0 && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
+          <p style={{ margin: 0 }}>
+            {deadLetters.length} {deadLetters.length === 1 ? 'entry' : 'entries'} could not be saved. Show a supervisor before dismissing.
+            <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => setDlExpanded(e => !e)}>
+              {dlExpanded ? 'Hide' : 'Details'}
+            </button>
+          </p>
+          {dlExpanded && (
+            <div style={{ marginTop: 6 }}>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                {deadLetters.map(dl => (
+                  <li key={dl.id} style={{ marginBottom: 6 }}>
+                    {dl.label} — {new Date(dl.timestamp).toLocaleString()} — server said: {dl.errorStatus} {dl.errorMessage}
+                    {/* Full stored submission — this is the recoverable copy; a
+                        supervisor re-enters from it (or exports it) before dismissing. */}
+                    <pre style={{ margin: '4px 0 0', padding: 6, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'rgba(0,0,0,0.15)', borderRadius: 4, maxHeight: 120, overflowY: 'auto' }}>
+                      {JSON.stringify(dl.payload, null, 1)}
+                    </pre>
+                  </li>
+                ))}
+              </ul>
+              <button
+                className="btn-ghost"
+                style={{ marginTop: 6, fontSize: 12, marginRight: 8 }}
+                onClick={() => {
+                  const blob = new Blob([JSON.stringify(deadLetters, null, 2)], { type: 'application/json' });
+                  const a = document.createElement('a');
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `unsaved-entries-${new Date().toISOString().slice(0, 10)}.json`;
+                  a.click();
+                  URL.revokeObjectURL(a.href);
+                }}
+              >
+                Download copy / Descargar copia
+              </button>
+              <button className="btn-ghost" style={{ marginTop: 6, fontSize: 12 }} onClick={handleAcknowledgeDeadLetters}>
+                Acknowledge and dismiss / Confirmar y descartar
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <header className="header">
         <span className="header-name">{user.name}</span>
         {pendingCount > 0 && (

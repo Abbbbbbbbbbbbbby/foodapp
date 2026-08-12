@@ -8,7 +8,7 @@ import { handleRecordRoutes } from './routes/records';
 import { handleDuplicateRoutes } from './routes/duplicates';
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
@@ -23,7 +23,7 @@ export default {
       const authResponse = await handleAuthRoutes(request, env, url.pathname);
       if (authResponse) return cors(authResponse);
 
-      const familyResponse = await handleFamilyRoutes(request, env, url.pathname);
+      const familyResponse = await handleFamilyRoutes(request, env, url.pathname, execCtx);
       if (familyResponse) return cors(familyResponse);
 
       const visitResponse = await handleVisitRoutes(request, env, url.pathname);
@@ -38,7 +38,7 @@ export default {
       const duplicateResponse = await handleDuplicateRoutes(request, env, url.pathname);
       if (duplicateResponse) return cors(duplicateResponse);
 
-      const recordResponse = await handleRecordRoutes(request, env, url.pathname);
+      const recordResponse = await handleRecordRoutes(request, env, url.pathname, execCtx);
       if (recordResponse) return cors(recordResponse);
 
       // Unknown /api/* routes return JSON 404

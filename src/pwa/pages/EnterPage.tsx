@@ -1,9 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, ApiError } from '../lib/api';
-import { queueItem, flushQueue, generateUUID } from '../lib/offline';
-import { clearAuth } from '../store/auth';
+import { queueItem, generateUUID } from '../lib/offline';
+import { localDateString } from '../lib/date';
 import LookupForm from '../components/enter/LookupForm';
 import ResultsList from '../components/enter/ResultsList';
 import FamilySelectScreen from '../components/enter/FamilySelectScreen';
@@ -16,7 +15,8 @@ import SummaryScreen, { type SummaryFamily } from '../components/enter/SummarySc
 type EnterView =
   | { type: 'lookup' }
   | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null }
-  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[] }
+  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
+  | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra: FamilySearchResult[]; selectedIds: string[] } }
   | { type: 'log-visit'; families: FamilySearchResult[]; current: number }
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
   | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
@@ -24,28 +24,12 @@ type EnterView =
   | { type: 'done'; families: SummaryFamily[]; error?: string };
 
 export default function EnterPage() {
-  const navigate = useNavigate();
   const [view, setView] = useState<EnterView>({ type: 'lookup' });
   const [error, setError] = useState<string | null>(null);
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
-
-  // Flush any queued offline submissions on mount and whenever connectivity resumes
-  useEffect(() => {
-    const apiFn = (url: string, body: unknown) =>
-      api.post<unknown>(url, body as Record<string, unknown>);
-    const doFlush = async () => {
-      const result = await flushQueue(apiFn);
-      if (result.needsReLogin) {
-        clearAuth();
-        navigate('/login');
-      }
-    };
-    doFlush();
-    const onOnline = () => doFlush();
-    window.addEventListener('online', onOnline);
-    return () => window.removeEventListener('online', onOnline);
-  }, [navigate]);
+  // Accumulates visit IDs for the log-visit (existing family) flow
+  const pendingVisitIds = useRef<{ visitId: string | null; queueId: string | null; visitKey: string }[]>([]);
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
@@ -55,7 +39,7 @@ export default function EnterPage() {
           `/api/families/pickup?phone=${encodeURIComponent(phone)}`
         );
         if (pickup.own || pickup.proxy.length > 0) {
-          setView({ type: 'family-select', own: pickup.own, proxy: pickup.proxy });
+          setView({ type: 'family-select', own: pickup.own, proxy: pickup.proxy, pickupName: pickup.own?.name ?? name, pickupPhone: phone });
           return;
         }
       }
@@ -82,15 +66,59 @@ export default function EnterPage() {
         const pickup = await api.get<{ own: FamilySearchResult | null; proxy: FamilySearchResult[] }>(
           `/api/families/pickup?phone=${encodeURIComponent(result.phone)}`
         );
-        setView({ type: 'family-select', own: pickup.own ?? result, proxy: pickup.proxy });
+        setView({ type: 'family-select', own: pickup.own ?? result, proxy: pickup.proxy, pickupName: (pickup.own ?? result).name, pickupPhone: result.phone });
         return;
       } catch { /* fall through to single-family select */ }
     }
-    setView({ type: 'family-select', own: result, proxy: [] });
+    setView({ type: 'family-select', own: result, proxy: [], pickupName: result.name, pickupPhone: result.phone });
+  }
+
+  async function handleInlineRegisterComplete(data: WizardFormData, proxyData: ProxyData | null) {
+    if (view.type !== 'inline-register') return;
+    const { returnTo } = view;
+    setError(null);
+    const today = localDateString();
+    const familyPayload = { ...data, first_visit_date: today, proxy: proxyData ?? undefined };
+    const familyIdemKey = generateUUID();
+    try {
+      const result = await api.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
+      // Registered online: join this pickup pre-checked. The visit is logged
+      // with the rest of the selection through the normal log-visit loop.
+      const newFam = {
+        id: result.id, name: data.name, phone: data.phone ?? null,
+        num_people: data.num_people ?? null, last_visit_date: null,
+      } as FamilySearchResult;
+      setView({
+        type: 'family-select', own: returnTo.own, proxy: returnTo.proxy,
+        pickupName: returnTo.pickupName, pickupPhone: returnTo.pickupPhone,
+        extra: [...returnTo.extra, newFam],
+        selectedIds: [...returnTo.selectedIds, result.id],
+      });
+    } catch (e) {
+      if (e instanceof ApiError) {
+        setError(e.message); // stay in the wizard so nothing entered is lost
+        return;
+      }
+      // Offline: queue the family — the flush creates the family AND today's
+      // visit, so it must NOT also join this pickup's log-visit loop.
+      try {
+        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
+      } catch {
+        setError('Unable to save offline. Check storage permissions and try again.');
+        return;
+      }
+      setView({
+        type: 'family-select', own: returnTo.own, proxy: returnTo.proxy,
+        pickupName: returnTo.pickupName, pickupPhone: returnTo.pickupPhone,
+        extra: returnTo.extra, selectedIds: returnTo.selectedIds,
+        notice: `${data.name} was saved offline — their visit for today will upload with sync. Do not select them for this pickup. / Se guardó sin conexión; su visita de hoy se subirá al sincronizar.`,
+      });
+    }
   }
 
   function handleFamilySelectConfirm(families: FamilySearchResult[]) {
     if (families.length === 0) return;
+    pendingVisitIds.current = [];
     setView({ type: 'log-visit', families, current: 0 });
   }
 
@@ -100,11 +128,14 @@ export default function EnterPage() {
     const visitIdemKey = generateUUID();
     const visitPayload = {
       family_id: familyId,
-      visit_date: new Date().toISOString().slice(0, 10),
+      visit_date: localDateString(),
       idempotency_key: visitIdemKey,
     };
+    let visitId: string | null = null;
+    let queueId: string | null = null;
     try {
-      await api.post('/api/visits', visitPayload);
+      const result = await api.post<{ id: string }>('/api/visits', visitPayload);
+      visitId = result.id;
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);
@@ -112,22 +143,28 @@ export default function EnterPage() {
       }
       // Network error — queue with the same idempotency key and continue
       try {
-        await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey);
+        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
       }
     }
+    pendingVisitIds.current.push({ visitId, queueId, visitKey: visitIdemKey });
     if (current + 1 < families.length) {
       setView({ type: 'log-visit', families, current: current + 1 });
     } else {
+      const visitRefs = pendingVisitIds.current;
+      pendingVisitIds.current = [];
       setView({
         type: 'done',
-        families: families.map(f => ({
+        families: families.map((f, i) => ({
           id: f.id,
           name: f.name,
           num_people: f.num_people,
-          bag_received: f.bag_received,
+          bag_received: null,
+          visitId: visitRefs[i]?.visitId ?? null,
+          queueId: visitRefs[i]?.queueId ?? null,
+          visitKey: visitRefs[i]?.visitKey ?? null,
         })),
       });
     }
@@ -160,7 +197,7 @@ export default function EnterPage() {
     const { familyIndex, total } = view;
     setError(null);
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateString();
     const familyPayload = {
       ...data,
       first_visit_date: today,
@@ -185,13 +222,14 @@ export default function EnterPage() {
         return; // server rejected — don't advance
       }
       // Network error — queue family + visit pair together and advance
+      let familyQueueId: string;
       try {
-        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
+        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
       }
-      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null });
+      pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId: null, queueId: familyQueueId, visitKey: `${familyIdemKey}-visit` });
       advanceWizard(familyIndex, total);
       return;
     }
@@ -202,9 +240,12 @@ export default function EnterPage() {
       visit_date: today,
       picked_up_by_phone: proxyData?.proxy_phone ?? null,
     };
+    let visitId: string | null = null;
+    let visitQueueId: string | null = null;
     let visitError: string | undefined;
     try {
-      await api.post('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
+      const visitResult = await api.post<{ id: string }>('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
+      visitId = visitResult.id;
     } catch (e) {
       if (e instanceof ApiError) {
         // Family saved — still advance but surface the error
@@ -212,14 +253,14 @@ export default function EnterPage() {
       } else {
         // Network — queue only the visit (family already has an id)
         try {
-          await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey);
+          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey);
         } catch {
           visitError = 'Visit not saved offline. Check storage permissions.';
         }
       }
     }
 
-    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null });
+    pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId, queueId: visitQueueId, visitKey: visitIdemKey });
     advanceWizard(familyIndex, total, visitError);
   }
 
@@ -277,8 +318,44 @@ export default function EnterPage() {
         <FamilySelectScreen
           own={view.own}
           proxy={view.proxy}
+          pickupName={view.pickupName}
+          pickupPhone={view.pickupPhone}
+          initialExtra={view.extra}
+          initialSelected={view.selectedIds}
+          notice={view.notice}
           onConfirm={handleFamilySelectConfirm}
+          onRegisterNew={(query, keep) => {
+            if (view.type !== 'family-select') return;
+            setView({
+              type: 'inline-register', prefillName: query,
+              returnTo: {
+                own: view.own, proxy: view.proxy,
+                pickupName: view.pickupName, pickupPhone: view.pickupPhone,
+                extra: keep.extra, selectedIds: keep.selectedIds,
+              },
+            });
+          }}
           onBack={() => setView({ type: 'lookup' })}
+        />
+      )}
+      {view.type === 'inline-register' && (
+        <Wizard
+          familyIndex={0}
+          total={1}
+          initialData={{ name: view.prefillName }}
+          proxyData={view.returnTo.pickupPhone
+            ? { proxy_name: view.returnTo.pickupName.trim() || null, proxy_phone: view.returnTo.pickupPhone }
+            : null}
+          onComplete={handleInlineRegisterComplete}
+          onBack={() => {
+            if (view.type !== 'inline-register') return;
+            const { returnTo } = view;
+            setView({
+              type: 'family-select', own: returnTo.own, proxy: returnTo.proxy,
+              pickupName: returnTo.pickupName, pickupPhone: returnTo.pickupPhone,
+              extra: returnTo.extra, selectedIds: returnTo.selectedIds,
+            });
+          }}
         />
       )}
       {view.type === 'log-visit' && (

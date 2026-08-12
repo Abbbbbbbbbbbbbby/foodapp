@@ -83,9 +83,27 @@ async function handleUpdateUser(
   }
 
   const user = await env.DB.prepare(
-    `SELECT id, role FROM users WHERE id = ?`
-  ).bind(id).first<{ id: string; role: string }>();
+    `SELECT id, role, active, phone FROM users WHERE id = ?`
+  ).bind(id).first<{ id: string; role: string; active: number; phone: string }>();
   if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  // Block self-demotion and self-deactivation
+  const wouldDemote = body.role !== undefined && body.role !== 'admin';
+  const wouldDeactivate = body.active !== undefined && !body.active;
+  if (id === ctx.userId && (wouldDemote || wouldDeactivate)) {
+    return Response.json({ error: 'Cannot demote or deactivate your own account' }, { status: 400 });
+  }
+
+  // Block removing the last active admin (pre-check + atomic WHERE guard)
+  const isRemovingAdmin = user.role === 'admin' && user.active === 1 && (wouldDemote || wouldDeactivate);
+  if (isRemovingAdmin) {
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1 AND id != ?`
+    ).bind(id).first<{ n: number }>();
+    if ((row?.n ?? 0) === 0) {
+      return Response.json({ error: 'Cannot remove the last admin' }, { status: 400 });
+    }
+  }
 
   const updates: string[] = [];
   const values: unknown[] = [];
@@ -94,9 +112,19 @@ async function handleUpdateUser(
 
   if (updates.length === 0) return Response.json({ ok: true });
 
-  await env.DB.prepare(
-    `UPDATE users SET ${updates.join(', ')} WHERE id = ?`
-  ).bind(...values, id).run();
+  // When removing admin status, add a subquery to the WHERE clause so
+  // concurrent requests that both pass the pre-check can't both succeed.
+  const whereExtra = isRemovingAdmin
+    ? ` AND (role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?) > 0)`
+    : '';
+  const bindArgs = isRemovingAdmin ? [...values, id, id] : [...values, id];
+  const result = await env.DB.prepare(
+    `UPDATE users SET ${updates.join(', ')} WHERE id = ?${whereExtra}`
+  ).bind(...bindArgs).run();
+
+  if (isRemovingAdmin && result.meta.rows_written === 0) {
+    return Response.json({ error: 'Cannot remove the last admin' }, { status: 400 });
+  }
 
   return Response.json({ ok: true });
 }
@@ -111,16 +139,42 @@ async function handleDeleteUser(
   }
 
   const user = await env.DB.prepare(
-    `SELECT id FROM users WHERE id = ?`
-  ).bind(id).first<{ id: string }>();
+    `SELECT id, role, active, phone FROM users WHERE id = ?`
+  ).bind(id).first<{ id: string; role: string; active: number; phone: string }>();
   if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
 
-  // Null out FK references before deleting so the delete doesn't violate
-  // constraints if foreign_keys pragma is on
-  await env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?`).bind(id).run();
-  await env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?`).bind(id).run();
-  await env.DB.prepare(`DELETE FROM otp_codes WHERE phone = (SELECT phone FROM users WHERE id = ?)`).bind(id).run();
-  await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(id).run();
+  if (user.role === 'admin' && user.active === 1) {
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1 AND id != ?`
+    ).bind(id).first<{ n: number }>();
+    if ((row?.n ?? 0) === 0) {
+      return Response.json({ error: 'Cannot delete the last admin' }, { status: 400 });
+    }
+  }
+
+  // One atomic batch. Every statement carries the SAME last-admin guard
+  // predicate as the DELETE, so on a guard rejection the whole batch no-ops
+  // (no orphaned reference-clears), while on success the clears run BEFORE
+  // the DELETE so D1's foreign-key enforcement accepts it. The guard reads
+  // only from users, which nothing here mutates before the DELETE, so the
+  // predicate is stable across the batch.
+  const GUARD = `(SELECT role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?1) > 0 FROM users WHERE id = ?1)`;
+  const results = await env.DB.batch([
+    env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE families SET updated_by = NULL WHERE updated_by = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE visits SET updated_by = NULL WHERE updated_by = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE duplicate_flags SET reviewed_by = NULL WHERE reviewed_by = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`DELETE FROM otp_codes WHERE phone = ?2 AND ${GUARD}`).bind(id, user.phone),
+    env.DB.prepare(`DELETE FROM users WHERE id = ?1 AND ${GUARD}`).bind(id),
+  ]);
+
+  const deleteResult = results[results.length - 1];
+  if (deleteResult.meta.rows_written === 0) {
+    // Pre-checks passed but the guarded delete matched nothing: lost the
+    // concurrent last-admin race.
+    return Response.json({ error: 'Cannot delete the last admin' }, { status: 400 });
+  }
 
   return Response.json({ ok: true });
 }
@@ -241,14 +295,14 @@ async function handleImport(
       const stmts: D1PreparedStatement[] = [
         env.DB.prepare(`
           INSERT INTO families (
-            id, name, phone, address, zip_code, date_of_birth,
+            id, name, name_normalized, phone, address, zip_code, date_of_birth,
             language, ethnicity, hispanic, ami_bracket, num_people,
             num_children_under_18, num_children_under_5, num_with_diabetes,
             health_insurance, snap_benefits, receives_texts, want_text_updates,
             id_confirmed, bag_received, first_visit_date,
             created_by, created_at, updated_at
           ) VALUES (
-            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?, ?,
@@ -256,7 +310,7 @@ async function handleImport(
             ?, ?, ?
           )
         `).bind(
-          id, row.name.trim(),
+          id, row.name.trim(), normalizeName(row.name.trim()),
           phone, row.address, row.zip_code, row.date_of_birth,
           row.language, row.ethnicity, row.hispanic, row.ami_bracket, row.num_people,
           row.num_children_under_18, row.num_children_under_5, row.num_with_diabetes,

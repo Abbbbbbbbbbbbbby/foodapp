@@ -49,6 +49,6 @@ export interface WizardFormData {
 }
 
 export interface ProxyData {
-  proxy_name: string;
+  proxy_name: string | null; // display metadata — the phone is the pickup-match key
   proxy_phone: string | null;
 }

@@ -8,17 +8,15 @@ import type { NewFamily, YesNoDeclined, AmiBracket } from '../schema';
 import { subscribeRecipient } from '../messageeverywhere';
 import { checkForDuplicates } from '../duplicates';
 
-const YES_NO_DECLINED = new Set<string>(['yes', 'no', 'declined']);
-const AMI_BRACKETS = new Set<string>(['<30%', '30-50%', '50-80%', '80-120%', '>120%', 'declined']);
+export const YES_NO_DECLINED = new Set<string>(['yes', 'no', 'declined']);
+export const AMI_BRACKETS = new Set<string>(['<30%', '30-50%', '50-80%', '80-120%', '>120%', 'declined']);
 
-function validateEnums(body: Partial<NewFamily>): string | null {
-  if (body.hispanic !== undefined && body.hispanic !== null && !YES_NO_DECLINED.has(body.hispanic))
-    return `invalid hispanic value: ${body.hispanic}`;
-  if (body.health_insurance !== undefined && body.health_insurance !== null && !YES_NO_DECLINED.has(body.health_insurance))
-    return `invalid health_insurance value: ${body.health_insurance}`;
-  if (body.snap_benefits !== undefined && body.snap_benefits !== null && !YES_NO_DECLINED.has(body.snap_benefits))
-    return `invalid snap_benefits value: ${body.snap_benefits}`;
-  if (body.ami_bracket !== undefined && body.ami_bracket !== null && !AMI_BRACKETS.has(body.ami_bracket))
+export function validateEnums(body: Record<string, unknown>): string | null {
+  const ynd = (v: unknown) => v === undefined || v === null || YES_NO_DECLINED.has(v as string);
+  if (!ynd(body.hispanic)) return `invalid hispanic value: ${body.hispanic}`;
+  if (!ynd(body.health_insurance)) return `invalid health_insurance value: ${body.health_insurance}`;
+  if (!ynd(body.snap_benefits)) return `invalid snap_benefits value: ${body.snap_benefits}`;
+  if (body.ami_bracket !== undefined && body.ami_bracket !== null && !AMI_BRACKETS.has(body.ami_bracket as string))
     return `invalid ami_bracket value: ${body.ami_bracket}`;
   if (body.language !== undefined && body.language !== null && typeof body.language !== 'string')
     return 'language must be a string';
@@ -30,7 +28,8 @@ function validateEnums(body: Partial<NewFamily>): string | null {
 export async function handleFamilyRoutes(
   request: Request,
   env: Env,
-  pathname: string
+  pathname: string,
+  execCtx: ExecutionContext
 ): Promise<Response | null> {
   if (pathname === '/api/families/search' && request.method === 'GET') {
     return handleSearch(request, env);
@@ -39,7 +38,11 @@ export async function handleFamilyRoutes(
     return handlePickup(request, env);
   }
   if (pathname === '/api/families' && request.method === 'POST') {
-    return handleCreate(request, env);
+    return handleCreate(request, env, execCtx);
+  }
+  const proxyMatch = pathname.match(/^\/api\/families\/([a-f0-9]+)\/proxies$/);
+  if (proxyMatch && request.method === 'POST') {
+    return handleAddProxy(request, env, proxyMatch[1]);
   }
   const idMatch = pathname.match(/^\/api\/families\/([a-f0-9]+)$/);
   if (idMatch) {
@@ -47,6 +50,48 @@ export async function handleFamilyRoutes(
     if (request.method === 'PATCH') return handleUpdate(request, env, idMatch[1]);
   }
   return null;
+}
+
+// Persist a pickup authorization discovered at the window ("also picking up
+// for" a family not yet linked to this person's phone). Idempotent: re-adding
+// an existing (family, phone) pair is a no-op.
+async function handleAddProxy(request: Request, env: Env, familyId: string): Promise<Response> {
+  const authCtx = await getAuthContext(request, env);
+  if (!authCtx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  let body: { proxy_name?: string | null; proxy_phone?: string | null };
+  try { body = await request.json() as typeof body; }
+  catch { return Response.json({ error: 'Invalid JSON' }, { status: 400 }); }
+
+  // proxy_name is display metadata; the PHONE is what future pickups match
+  // on (getFamiliesForPickup keys on proxy_phone). A phone-only pickup with
+  // no name on file must still persist so the family appears automatically
+  // next time (issue #7 requirement).
+  const proxyName = body.proxy_name?.trim() || null;
+
+  const family = await env.DB.prepare(`SELECT 1 FROM families WHERE id = ?`).bind(familyId).first();
+  if (!family) return Response.json({ error: 'Family not found' }, { status: 404 });
+
+  const rawPhone = body.proxy_phone ?? null;
+  const proxyPhone = normalizePhone(rawPhone);
+  if (rawPhone !== null && String(rawPhone).trim() !== '' && proxyPhone === null) {
+    return Response.json({ error: 'proxy_phone must be a 10-digit phone number' }, { status: 400 });
+  }
+  const existing = await env.DB.prepare(
+    `SELECT 1 FROM proxies WHERE family_id = ? AND proxy_phone IS ? LIMIT 1`
+  ).bind(familyId, proxyPhone).first();
+  if (!existing) {
+    const proxyId = crypto.randomUUID().replace(/-/g, '');
+    try {
+      await env.DB.prepare(
+        `INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
+      ).bind(proxyId, familyId, proxyName, proxyPhone).run();
+    } catch (err) {
+      // Concurrent add of the same (family, phone): the unique index makes
+      // this an idempotent no-op, not an error.
+      if (!(err instanceof Error && err.message.includes('UNIQUE'))) throw err;
+    }
+  }
+  return Response.json({ ok: true });
 }
 
 async function handleSearch(request: Request, env: Env): Promise<Response> {
@@ -80,10 +125,10 @@ async function handleGet(request: Request, env: Env, id: string): Promise<Respon
   return Response.json(family);
 }
 
-async function handleCreate(request: Request, env: Env): Promise<Response> {
+async function handleCreate(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  let body: Partial<NewFamily> & { idempotency_key?: string; proxy?: { proxy_name: string; proxy_phone: string | null } };
+  let body: Partial<NewFamily> & { idempotency_key?: string; proxy?: { proxy_name: string | null; proxy_phone: string | null } };
   try {
     body = await request.json();
   } catch {
@@ -121,25 +166,27 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
 
   const idempotencyKey = typeof body.idempotency_key === 'string' ? body.idempotency_key : undefined;
 
-  // Check for existing record before insert so we can skip the proxy on replay
-  let wasReplay = false;
-  if (idempotencyKey) {
-    const prior = await env.DB.prepare(
-      `SELECT id FROM families WHERE idempotency_key = ?`
-    ).bind(idempotencyKey).first<{ id: string }>();
-    wasReplay = !!prior;
-  }
+  // insertFamily resolves BOTH live-key replays and merged-key aliases; its
+  // created flag is the single source of truth for replay detection, so alias
+  // replays no longer rerun duplicate detection, subscription, or proxy work
+  // with the stale discarded-family payload.
+  const { id, created } = await insertFamily(env.DB, data, idempotencyKey);
+  const wasReplay = !created;
 
-  const id = await insertFamily(env.DB, data, idempotencyKey);
-
+  // waitUntil: without it the runtime may terminate these once the response
+  // returns (Cloudflare documents floating promises as unreliable in Workers).
   if (!wasReplay && data.want_text_updates && data.phone && env.MESSAGE_EVERYWHERE_API_KEY) {
-    subscribeRecipient(env.MESSAGE_EVERYWHERE_API_KEY, data.phone, data.language, data.name)
-      .catch(() => { /* best-effort */ });
+    execCtx.waitUntil(
+      subscribeRecipient(env.MESSAGE_EVERYWHERE_API_KEY, data.phone, data.language, data.name)
+        .catch((err) => console.error('messageeverywhere subscribe failed:', err))
+    );
   }
 
   if (!wasReplay) {
-    checkForDuplicates(env.DB, id, data.name, data.phone)
-      .catch(() => { /* best-effort */ });
+    execCtx.waitUntil(
+      checkForDuplicates(env.DB, id, data.name, data.phone)
+        .catch((err) => console.error('duplicate detection failed:', err))
+    );
   }
 
   if (body.proxy && !wasReplay) {
@@ -156,8 +203,8 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
       ).bind(proxyId, id, body.proxy.proxy_name, proxyPhone).run();
     }
   }
-  // 200 for idempotent replay, 201 for new creation
-  const status = idempotencyKey ? 200 : 201;
+  // 201 for a genuinely new record, 200 for any replay (live key or alias)
+  const status = created ? 201 : 200;
   return Response.json({ id }, { status });
 }
 

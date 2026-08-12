@@ -51,14 +51,23 @@ export async function insertFamily(
   db: D1Database,
   data: NewFamily,
   idempotencyKey?: string
-): Promise<string> {
+): Promise<{ id: string; created: boolean }> {
   // Dedup: if an offline-queue replay carries the same key, return the
   // already-created record instead of inserting a duplicate.
   if (idempotencyKey) {
     const existing = await db.prepare(
       `SELECT id FROM families WHERE idempotency_key = ?`
     ).bind(idempotencyKey).first<{ id: string }>();
-    if (existing) return existing.id;
+    if (existing) return { id: existing.id, created: false };
+    // The key may belong to a family that was merged away — resolve to the
+    // survivor instead of re-creating the duplicate the merge eliminated.
+    // JOIN guards against dangling aliases (target deleted after the merge):
+    // a dangling alias must fall through to a fresh insert, not return a dead id.
+    const alias = await db.prepare(
+      `SELECT mk.target_id FROM merged_keys mk JOIN families f ON f.id = mk.target_id
+       WHERE mk.idempotency_key = ? AND mk.kind = 'family'`
+    ).bind(idempotencyKey).first<{ target_id: string }>();
+    if (alias) return { id: alias.target_id, created: false };
   }
 
   const id = crypto.randomUUID().replace(/-/g, '');
@@ -66,20 +75,20 @@ export async function insertFamily(
   try {
     await db.prepare(`
       INSERT INTO families (
-        id, name, phone, address, zip_code, date_of_birth, language, ethnicity,
+        id, name, name_normalized, phone, address, zip_code, date_of_birth, language, ethnicity,
         hispanic, ami_bracket, num_people, num_children_under_18, num_children_under_5,
         num_with_diabetes, health_insurance, snap_benefits, receives_texts,
         want_text_updates, id_confirmed, bag_received, first_visit_date,
         created_by, created_at, updated_at, idempotency_key
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?
       )
     `).bind(
-      id, data.name,
+      id, data.name, normalizeName(data.name),
       normalizePhone(data.phone), data.address, data.zip_code,
       data.date_of_birth, data.language, data.ethnicity,
       data.hispanic, data.ami_bracket, data.num_people, data.num_children_under_18,
@@ -96,11 +105,11 @@ export async function insertFamily(
       const existing = await db.prepare(
         `SELECT id FROM families WHERE idempotency_key = ?`
       ).bind(idempotencyKey).first<{ id: string }>();
-      if (existing) return existing.id;
+      if (existing) return { id: existing.id, created: false };
     }
     throw err;
   }
-  return id;
+  return { id, created: true };
 }
 
 export async function getFamilyById(db: D1Database, id: string): Promise<Family | null> {
@@ -125,7 +134,13 @@ export async function updateFamily(
   const entries = Object.entries(data).filter(([k]) => UPDATABLE_FAMILY_COLUMNS.has(k));
   if (entries.length === 0) return;
 
-  const allEntries = [...entries];
+  // When updating name, also update the normalized version for search
+  const updatesName = entries.some(([k]) => k === 'name');
+  const extra: [string, unknown][] = updatesName
+    ? [['name_normalized', normalizeName(data.name as string)]]
+    : [];
+
+  const allEntries = [...entries, ...extra];
   const fields = allEntries.map(([k]) => `${k} = ?`).join(', ');
   const values = allEntries.map(([k, v]) =>
     k === 'phone' ? normalizePhone(v as string | null) : v
@@ -181,7 +196,7 @@ export async function searchFamilies(
       SELECT f.*, MAX(v.visit_date) as last_visit_date
       FROM families f
       LEFT JOIN visits v ON v.family_id = f.id
-      WHERE LOWER(f.name) LIKE ? ESCAPE '\\'
+      WHERE COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\'
       GROUP BY f.id
       LIMIT 100
     `).bind(`${prefix}%`).all<Record<string, unknown>>();
@@ -252,31 +267,39 @@ export async function insertVisit(
   db: D1Database,
   data: NewVisit,
   idempotencyKey?: string
-): Promise<string> {
+): Promise<{ id: string; created: boolean }> {
   if (idempotencyKey) {
     const existing = await db.prepare(
       `SELECT id FROM visits WHERE idempotency_key = ?`
     ).bind(idempotencyKey).first<{ id: string }>();
-    if (existing) return existing.id;
+    if (existing) return { id: existing.id, created: false };
+    // Key of a visit that was merged away — resolve to the surviving visit.
+    // JOIN guards against dangling aliases (survivor later deleted).
+    const alias = await db.prepare(
+      `SELECT mk.target_id FROM merged_keys mk JOIN visits v ON v.id = mk.target_id
+       WHERE mk.idempotency_key = ? AND mk.kind = 'visit'`
+    ).bind(idempotencyKey).first<{ target_id: string }>();
+    if (alias) return { id: alias.target_id, created: false };
   }
 
   const id = crypto.randomUUID().replace(/-/g, '');
   const now = new Date().toISOString();
+  const bagReceived = data.bag_received ? 1 : 0;
   try {
     await db.prepare(`
-      INSERT INTO visits (id, family_id, visit_date, picked_up_by_phone, volunteer_id, created_at, idempotency_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(id, data.family_id, data.visit_date, data.picked_up_by_phone, data.volunteer_id, now, idempotencyKey ?? null).run();
+      INSERT INTO visits (id, family_id, visit_date, picked_up_by_phone, volunteer_id, bag_received, created_at, idempotency_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(id, data.family_id, data.visit_date, data.picked_up_by_phone, data.volunteer_id, bagReceived, now, idempotencyKey ?? null).run();
   } catch (err) {
     if (idempotencyKey && err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
       const existing = await db.prepare(
         `SELECT id FROM visits WHERE idempotency_key = ?`
       ).bind(idempotencyKey).first<{ id: string }>();
-      if (existing) return existing.id;
+      if (existing) return { id: existing.id, created: false };
     }
     throw err;
   }
-  return id;
+  return { id, created: true };
 }
 
 export async function getVisitsByFamily(db: D1Database, familyId: string): Promise<Visit[]> {

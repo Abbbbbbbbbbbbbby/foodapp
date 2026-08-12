@@ -25,7 +25,9 @@ interface TextsStepProps {
   onBack: () => void;
 }
 
-function TextsStep({ language, onComplete, onBack }: TextsStepProps) {
+// Exported for direct unit testing (walking 10 heterogeneous wizard steps in
+// a DOM test is brittle; the sub-step logic here is what needs pinning).
+export function TextsStep({ language, onComplete, onBack }: TextsStepProps) {
   const [subStep, setSubStep] = useState(0);
   const [receivesTexts, setReceivesTexts] = useState<boolean | null>(null);
 
