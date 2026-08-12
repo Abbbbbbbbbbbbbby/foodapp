@@ -5,7 +5,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 vi.mock('../../src/pwa/lib/offline', () => ({
   getPendingCount: vi.fn(async () => 0),
-  flushQueue: vi.fn(async () => ({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false })),
+  flushQueue: vi.fn(async () => ({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 })),
   getDeadLetters: vi.fn(async () => []),
   deleteDeadLetters: vi.fn(async () => undefined),
 }));
@@ -20,7 +20,7 @@ vi.mock('../../src/pwa/lib/api', () => ({
 }));
 
 import Layout from '../../src/pwa/components/Layout';
-import { getDeadLetters, deleteDeadLetters } from '../../src/pwa/lib/offline';
+import { getDeadLetters, deleteDeadLetters, flushQueue } from '../../src/pwa/lib/offline';
 import type { DeadLetterEntry } from '../../src/pwa/lib/offline';
 
 const dl = (id: string, label: string): DeadLetterEntry => ({
@@ -78,5 +78,36 @@ describe('Layout dead-letter banner', () => {
     await waitFor(() => expect(deleteDeadLetters).toHaveBeenCalledWith(['d1']));
     // The late entry re-renders the banner rather than being wiped unseen
     expect(await screen.findByText(/1 entry could not be saved/)).toBeInTheDocument();
+  });
+});
+
+describe('Layout session and sync banners (issue #6)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('a 401 during flush shows the sign-in banner instead of yanking to /login', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    vi.mocked(flushQueue).mockResolvedValue({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: true, foreignItems: 0 });
+    renderLayout();
+
+    expect(await screen.findByText(/Session expired/)).toBeInTheDocument();
+    // Still on the page — work not lost
+    expect(screen.getByText('HOME CONTENT')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Sign in/ })).toBeInTheDocument();
+  });
+
+  it('foreign queued items surface a that-person-must-sign-in notice', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    vi.mocked(flushQueue).mockResolvedValue({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 2 });
+    renderLayout();
+
+    expect(await screen.findByText(/2 entries from a different account/)).toBeInTheDocument();
+  });
+
+  it('a flush exception shows the sync-unavailable banner', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    vi.mocked(flushQueue).mockRejectedValue(new Error('blocked by another tab'));
+    renderLayout();
+
+    expect(await screen.findByText(/Offline sync is unavailable/)).toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, ApiError } from '../lib/api';
 import { queueItem, generateUUID } from '../lib/offline';
+import { getUser } from '../store/auth';
 import { localDateString } from '../lib/date';
 import LookupForm from '../components/enter/LookupForm';
 import ResultsList from '../components/enter/ResultsList';
@@ -102,7 +103,7 @@ export default function EnterPage() {
       // Offline: queue the family — the flush creates the family AND today's
       // visit, so it must NOT also join this pickup's log-visit loop.
       try {
-        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
+        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, getUser()?.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -143,7 +144,7 @@ export default function EnterPage() {
       }
       // Network error — queue with the same idempotency key and continue
       try {
-        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey);
+        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey, getUser()?.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -224,7 +225,7 @@ export default function EnterPage() {
       // Network error — queue family + visit pair together and advance
       let familyQueueId: string;
       try {
-        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
+        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, getUser()?.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -253,7 +254,7 @@ export default function EnterPage() {
       } else {
         // Network — queue only the visit (family already has an id)
         try {
-          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey);
+          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey, getUser()?.id);
         } catch {
           visitError = 'Visit not saved offline. Check storage permissions.';
         }

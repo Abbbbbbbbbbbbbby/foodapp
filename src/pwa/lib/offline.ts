@@ -18,6 +18,7 @@ export interface PendingItem {
   payload: unknown;
   createdAt: number;
   bag?: boolean;          // a bag was given for this submission's visit — applied after sync
+  queuedByUserId?: string; // who entered it — a different login must not flush it under their identity
 }
 
 export interface DeadLetterEntry {
@@ -40,7 +41,17 @@ function openDb(): Promise<IDBDatabase> {
       if (oldVersion < 1) db.createObjectStore(STORE, { keyPath: 'id' });
       if (oldVersion < 2) db.createObjectStore(DL_STORE, { keyPath: 'id' });
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // A second tab on old code holding the previous version would otherwise
+      // block upgrades forever; close so the other tab's upgrade proceeds.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    // Surfaced instead of hanging: a blocked open means another tab pins an
+    // old version — reject so callers report 'sync unavailable' rather than
+    // silently never settling.
+    req.onblocked = () => reject(new Error('offline storage blocked by another tab — close other tabs of this app'));
     req.onerror = () => reject(req.error);
   });
 }
@@ -56,14 +67,15 @@ function dispatchCountChange() {
 // Falls back to the queue item's own UUID when no key is supplied.
 export async function queueItem(
   item: Pick<PendingItem, 'type' | 'payload'>,
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  queuedByUserId?: string
 ): Promise<string> {
   const id = generateUUID();
   const key = idempotencyKey ?? id;
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).add({ ...item, id, idempotencyKey: key, createdAt: Date.now() });
+    tx.objectStore(STORE).add({ ...item, id, idempotencyKey: key, createdAt: Date.now(), queuedByUserId });
     tx.oncomplete = () => { dispatchCountChange(); resolve(id); };
     tx.onerror = () => reject(tx.error);
   });
@@ -286,7 +298,8 @@ export interface FlushResult {
   flushed: number;        // synced and removed from queue
   errors: number;         // transient failures — still in queue, will retry
   deadLettered: number;   // permanent 4xx failures — removed from queue
-  needsReLogin: boolean;  // a 401 was received — caller should redirect to login
+  needsReLogin: boolean;  // a 401 was received — caller should prompt re-login
+  foreignItems: number;   // queued by a DIFFERENT user — held until they sign in
 }
 
 // In-flight guard: prevents mount and 'online' event from overlapping.
@@ -295,16 +308,17 @@ export interface FlushResult {
 let flushing = false;
 let rerunRequested = false;
 
-export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
+export async function flushQueue(apiFn: ApiFn, currentUserId?: string): Promise<FlushResult> {
   if (flushing) {
     rerunRequested = true;
-    return { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false };
+    return { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 };
   }
   flushing = true;
-  const result: FlushResult = { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false };
+  const result: FlushResult = { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 };
   try {
    do {
     rerunRequested = false;
+    result.foreignItems = 0; // recounted each pass; foreign items persist
     const items = await getPending();
     for (const snapshot of items) {
       // Re-read just before syncing: setItemBag (or any update) landing after
@@ -317,6 +331,12 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
         item = fresh;
       } catch {
         result.errors++;
+        continue;
+      }
+      // Shared-device protection: user A's entries must not be written under
+      // user B's identity. Items with no attribution (legacy) flush normally.
+      if (item.queuedByUserId && currentUserId && item.queuedByUserId !== currentUserId) {
+        result.foreignItems++;
         continue;
       }
       try {

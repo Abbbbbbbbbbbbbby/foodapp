@@ -226,3 +226,36 @@ describe('flushQueue — review-round regressions', () => {
     expect(await getPending()).toHaveLength(0);
   });
 });
+
+describe('flushQueue — shared-device attribution (issue #6)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it("holds another user's items instead of flushing them under the current identity", async () => {
+    await queueItem({ type: 'family', payload: { data: { name: 'Mine' }, proxyData: null } }, 'k-mine', 'user-a');
+    await queueItem({ type: 'family', payload: { data: { name: 'Theirs' }, proxyData: null } }, 'k-theirs', 'user-b');
+
+    const posted: string[] = [];
+    const result = await flushQueue(async (_url, body) => {
+      const b = body as { idempotency_key?: string };
+      if (b.idempotency_key) posted.push(b.idempotency_key);
+      return { id: 'x' };
+    }, 'user-a');
+
+    expect(result.flushed).toBe(1);
+    expect(result.foreignItems).toBe(1);
+    expect(posted).toContain('k-mine');
+    expect(posted).not.toContain('k-theirs');
+    const pending = await getPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].queuedByUserId).toBe('user-b'); // held, not lost
+  });
+
+  it('legacy items without attribution still flush', async () => {
+    await queueItem({ type: 'family', payload: { data: { name: 'Legacy' }, proxyData: null } }, 'k-legacy');
+    const result = await flushQueue(async () => ({ id: 'x' }), 'user-a');
+    expect(result.flushed).toBe(1);
+    expect(result.foreignItems).toBe(0);
+  });
+});

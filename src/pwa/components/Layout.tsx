@@ -27,6 +27,9 @@ export default function Layout() {
   const [pendingCount, setPendingCount] = useState(0);
   const [deadLetters, setDeadLetters] = useState<DeadLetterEntry[]>([]);
   const [dlExpanded, setDlExpanded] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [syncBroken, setSyncBroken] = useState(false);
+  const [foreignCount, setForeignCount] = useState(0);
 
   useEffect(() => {
     function refresh() {
@@ -52,24 +55,28 @@ export default function Layout() {
     const doFlush = async () => {
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = undefined; }
       try {
-        const result = await flushQueue(apiFn);
+        const result = await flushQueue(apiFn, user.id);
+        setSyncBroken(false);
+        setForeignCount(result.foreignItems);
         if (result.errors > 0) {
           console.warn(`offline sync: ${result.errors} item(s) failed transiently — retrying in 30s`);
           // Mount and 'online' are not enough: a 503 or transient fetch
           // failure while the browser STAYS online needs a scheduled retry.
           if (!disposed) retryTimer = setTimeout(doFlush, 30_000);
         }
-        // Refresh dead-letter entries from the durable store before any navigation
+        // Refresh dead-letter entries from the durable store
         if (result.deadLettered > 0) {
           getDeadLetters().then(setDeadLetters).catch(() => {});
         }
         if (result.needsReLogin) {
-          clearAuth();
-          navigate('/login');
+          // Never yank mid-work: a stale queued item's 401 used to clearAuth
+          // and redirect from any page, losing in-progress entry (issue #6).
+          setSessionExpired(true);
         }
       } catch (err) {
-        // Broken IndexedDB (or a flush bug) must at least be tail-able.
+        // Broken IndexedDB (or a flush bug): visible, not just tail-able.
         console.error('offline sync unavailable:', err);
+        setSyncBroken(true);
       }
     };
     // Items queued while already online (e.g. a request that failed over live
@@ -120,6 +127,30 @@ export default function Layout() {
 
   return (
     <div className="layout">
+      {sessionExpired && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
+          <p style={{ margin: 0 }}>
+            Session expired — queued entries are safe and will sync after you sign in again. / Sesión expirada — las entradas guardadas se sincronizarán al volver a iniciar sesión.
+            <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => { clearAuth(); navigate('/login'); }}>
+              Sign in / Iniciar sesión
+            </button>
+          </p>
+        </div>
+      )}
+      {syncBroken && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
+          <p style={{ margin: 0 }}>
+            Offline sync is unavailable on this device — do not rely on offline entry. Tell a supervisor. / La sincronización sin conexión no está disponible en este dispositivo.
+          </p>
+        </div>
+      )}
+      {foreignCount > 0 && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
+          <p style={{ margin: 0 }}>
+            {foreignCount} entr{foreignCount === 1 ? 'y' : 'ies'} from a different account {foreignCount === 1 ? 'is' : 'are'} waiting — that person must sign in on this device to sync them.
+          </p>
+        </div>
+      )}
       {deadLetters.length > 0 && (
         <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
           <p style={{ margin: 0 }}>
