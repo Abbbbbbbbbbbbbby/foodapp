@@ -79,7 +79,7 @@ export async function mergeFamilies(
   ).bind(discardId, discardId, flagId).all<{ id: string }>();
 
   // Same-date visits on BOTH families: the discard side is about to be
-  // deleted, so capture its metadata now and back-fill keep's visit after the
+  // deleted, so capture its metadata now and back-fill keep's visits after the
   // delete (running it before would duplicate idempotency_key under its
   // unique index and abort the batch).
   const collided = await db.prepare(`
@@ -90,6 +90,53 @@ export async function mergeFamilies(
     visit_date: string; picked_up_by_phone: string | null; volunteer_id: string | null;
     updated_by: string | null; bag_received: number; idempotency_key: string | null;
   }>();
+
+  // Exactly ONE deterministic keep-side target per collided date — updating
+  // by (family_id, visit_date) could match several rows and copy the same
+  // idempotency_key onto all of them, violating its unique index.
+  const keepTargets = await db.prepare(`
+    SELECT v.id, v.visit_date, v.idempotency_key FROM visits v
+    WHERE v.family_id = ?1
+    AND v.visit_date IN (SELECT visit_date FROM visits WHERE family_id = ?2)
+    AND v.id = (SELECT MIN(id) FROM visits WHERE family_id = ?1 AND visit_date = v.visit_date)
+  `).bind(keepId, discardId).all<{ id: string; visit_date: string; idempotency_key: string | null }>();
+  const targetByDate = new Map((keepTargets.results ?? []).map(t => [t.visit_date, t]));
+
+  // Group the discarded rows per date: first non-null value per field wins;
+  // bag ORs across all rows. One discard key may be ADOPTED onto a keep
+  // target that has none; every other discarded key becomes a merged_keys
+  // alias so offline replays resolve to the surviving visit.
+  const byDate = new Map<string, typeof collided.results>();
+  for (const v of (collided.results ?? [])) {
+    const arr = byDate.get(v.visit_date) ?? [];
+    arr.push(v);
+    byDate.set(v.visit_date, arr);
+  }
+  const backfills: { date: string; targetId: string; phone: string | null; vol: string | null; upd: string | null; key: string | null; bag: number }[] = [];
+  const visitAliases: { key: string; targetId: string }[] = [];
+  for (const [date, rows] of byDate) {
+    const target = targetByDate.get(date);
+    if (!target || !rows) continue;
+    const first = <T>(f: (r: NonNullable<typeof collided.results>[number]) => T | null) =>
+      rows.map(f).find(v => v !== null) ?? null;
+    const keys = rows.map(r => r.idempotency_key).filter((k): k is string => k !== null);
+    let adoptKey: string | null = null;
+    if (target.idempotency_key === null && keys.length > 0) {
+      adoptKey = keys[0];
+      for (const k of keys.slice(1)) visitAliases.push({ key: k, targetId: target.id });
+    } else {
+      for (const k of keys) visitAliases.push({ key: k, targetId: target.id });
+    }
+    backfills.push({
+      date,
+      targetId: target.id,
+      phone: first(r => r.picked_up_by_phone),
+      vol: first(r => r.volunteer_id),
+      upd: first(r => r.updated_by),
+      key: adoptKey,
+      bag: rows.some(r => r.bag_received === 1) ? 1 : 0,
+    });
+  }
 
   const auditId = crypto.randomUUID().replace(/-/g, '');
   const auditChanges = JSON.stringify({
@@ -111,20 +158,25 @@ export async function mergeFamilies(
       AND visit_date NOT IN (SELECT visit_date FROM visits WHERE family_id = ?)
     `).bind(keepId, discardId, keepId),
     db.prepare(`DELETE FROM visits WHERE family_id = ?`).bind(discardId),
-    // Back-fill metadata from the deleted same-date visits onto keep's visit
-    // for that date: null fields adopt the discarded value, bag_received ORs.
-    ...(collided.results ?? []).map(v => db.prepare(`
+    // Back-fill metadata from the deleted same-date visits onto ONE keep
+    // visit per date: null fields adopt the discarded value, bag_received ORs.
+    ...backfills.map(b => db.prepare(`
       UPDATE visits SET
         picked_up_by_phone = COALESCE(picked_up_by_phone, ?),
         volunteer_id = COALESCE(volunteer_id, ?),
         updated_by = COALESCE(updated_by, ?),
         idempotency_key = COALESCE(idempotency_key, ?),
         bag_received = CASE WHEN bag_received = 1 OR ? = 1 THEN 1 ELSE 0 END
-      WHERE family_id = ? AND visit_date = ?
-    `).bind(
-      v.picked_up_by_phone, v.volunteer_id, v.updated_by, v.idempotency_key,
-      v.bag_received, keepId, v.visit_date
-    )),
+      WHERE id = ?
+    `).bind(b.phone, b.vol, b.upd, b.key, b.bag, b.targetId)),
+    // Idempotency aliases: replays of merged-away submissions must resolve to
+    // the survivors, not re-create the duplicates this merge eliminated.
+    ...(discard.idempotency_key ? [db.prepare(
+      `INSERT OR IGNORE INTO merged_keys (idempotency_key, kind, target_id) VALUES (?, 'family', ?)`
+    ).bind(discard.idempotency_key, keepId)] : []),
+    ...visitAliases.map(a => db.prepare(
+      `INSERT OR IGNORE INTO merged_keys (idempotency_key, kind, target_id) VALUES (?, 'visit', ?)`
+    ).bind(a.key, a.targetId)),
     // Move proxies whose phone isn't already on keep; leftovers are dupes
     db.prepare(`
       UPDATE proxies SET family_id = ?

@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:test';
+import { env } from 'cloudflare:workers';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { mergeFamilies, checkForDuplicates } from '../../src/worker/duplicates';
 
@@ -219,5 +219,81 @@ describe('mergeFamilies — same-date metadata preservation (probe round 2)', ()
     ).first<{ picked_up_by_phone: string; idempotency_key: string }>();
     expect(kept!.picked_up_by_phone).toBe('4805550001');
     expect(kept!.idempotency_key).toBe('k-keep');
+  });
+});
+
+describe('mergeFamilies — probe round 3: multi-visit collision + replay aliases', () => {
+  beforeEach(async () => {
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM merged_keys`),
+      env.DB.prepare(`DELETE FROM duplicate_flags`),
+      env.DB.prepare(`DELETE FROM visits`),
+      env.DB.prepare(`DELETE FROM proxies`),
+      env.DB.prepare(`DELETE FROM families`),
+      env.DB.prepare(`DELETE FROM record_changes`),
+    ]);
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, name, phone, role, active, self_registered) VALUES (?, 'Merge Tester', '4805550000', 'admin', 1, 0)`
+    ).bind(USER_ID).run();
+  });
+
+  it('merge succeeds when keep has MULTIPLE visits on the collided date (key lands on exactly one)', async () => {
+    await insertFamily('fam-keep', 'A', '4805551111');
+    await insertFamily('fam-drop', 'B', '4805552222');
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+    await insertVisit('v-keep-a', 'fam-keep', '2026-08-03');
+    await insertVisit('v-keep-b', 'fam-keep', '2026-08-03');
+    await insertVisit('v-drop', 'fam-drop', '2026-08-03', { idempotency_key: 'k-multi' });
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const withKey = await env.DB.prepare(
+      `SELECT id FROM visits WHERE idempotency_key = 'k-multi'`
+    ).all<{ id: string }>();
+    expect(withKey.results!.length).toBe(1);
+    expect(withKey.results![0].id).toBe('v-keep-a'); // deterministic MIN(id) target
+  });
+
+  it('replaying the merged-away FAMILY key resolves to the surviving family', async () => {
+    const { insertFamily: dbInsertFamily } = await import('../../src/worker/db');
+    await insertFamily('fam-keep', 'Garcia', '4805551111');
+    await env.DB.prepare(
+      `INSERT INTO families (id, name, phone, idempotency_key) VALUES ('fam-drop', 'Garcia Dup', '4805553333', 'family-drop-key')`
+    ).run();
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const replayId = await dbInsertFamily(env.DB, {
+      name: 'Garcia Dup', phone: null, address: null, zip_code: null, date_of_birth: null,
+      language: null, ethnicity: null, hispanic: null, ami_bracket: null, num_people: null,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null, want_text_updates: null,
+      id_confirmed: null, bag_received: null, first_visit_date: null, created_by: USER_ID,
+    }, 'family-drop-key');
+
+    expect(replayId).toBe('fam-keep'); // resolved to survivor, no duplicate created
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS n FROM families`).first<{ n: number }>();
+    expect(count!.n).toBe(1);
+  });
+
+  it('replaying a merged-away VISIT key (both sides had keys) resolves to the surviving visit', async () => {
+    const { insertVisit: dbInsertVisit } = await import('../../src/worker/db');
+    await insertFamily('fam-keep', 'A', '4805551111');
+    await insertFamily('fam-drop', 'B', '4805552222');
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+    await insertVisit('v-keep', 'fam-keep', '2026-08-04', { idempotency_key: 'k-keep' });
+    await insertVisit('v-drop', 'fam-drop', '2026-08-04', { idempotency_key: 'k-drop' });
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const replayId = await dbInsertVisit(env.DB, {
+      family_id: 'fam-keep', visit_date: '2026-08-04', picked_up_by_phone: null,
+      volunteer_id: USER_ID, bag_received: null,
+    }, 'k-drop');
+
+    expect(replayId).toBe('v-keep'); // alias hit — no duplicate visit
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS n FROM visits`).first<{ n: number }>();
+    expect(count!.n).toBe(1);
   });
 });

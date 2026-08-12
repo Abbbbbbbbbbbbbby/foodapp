@@ -1,4 +1,4 @@
-import { env, SELF } from 'cloudflare:test';
+import { env, exports as workerExports } from 'cloudflare:workers';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { buildSession, createSession } from '../../../src/worker/auth';
 import type { Env } from '../../../src/worker/schema';
@@ -28,12 +28,12 @@ beforeAll(async () => {
 
 describe('GET /api/families/search', () => {
   it('returns 401 without auth', async () => {
-    const res = await SELF.fetch('http://example.com/api/families/search?name=Smith');
+    const res = await workerExports.default.fetch('http://example.com/api/families/search?name=Smith');
     expect(res.status).toBe(401);
   });
 
   it('returns 400 without name or phone', async () => {
-    const res = await SELF.fetch('http://example.com/api/families/search', {
+    const res = await workerExports.default.fetch('http://example.com/api/families/search', {
       headers: { Authorization: authHeader },
     });
     expect(res.status).toBe(400);
@@ -41,7 +41,7 @@ describe('GET /api/families/search', () => {
 
   it('returns results by name', async () => {
     await insertFamily('Smith Family');
-    const res = await SELF.fetch('http://example.com/api/families/search?name=Smith', {
+    const res = await workerExports.default.fetch('http://example.com/api/families/search?name=Smith', {
       headers: { Authorization: authHeader },
     });
     expect(res.status).toBe(200);
@@ -53,12 +53,12 @@ describe('GET /api/families/search', () => {
 
 describe('GET /api/families/pickup', () => {
   it('returns 401 without auth', async () => {
-    const res = await SELF.fetch('http://example.com/api/families/pickup?phone=4805550200');
+    const res = await workerExports.default.fetch('http://example.com/api/families/pickup?phone=4805550200');
     expect(res.status).toBe(401);
   });
 
   it('returns 400 without phone', async () => {
-    const res = await SELF.fetch('http://example.com/api/families/pickup', {
+    const res = await workerExports.default.fetch('http://example.com/api/families/pickup', {
       headers: { Authorization: authHeader },
     });
     expect(res.status).toBe(400);
@@ -66,7 +66,7 @@ describe('GET /api/families/pickup', () => {
 
   it('returns own family when phone matches', async () => {
     await insertFamily('Pickup Family', '4805550200');
-    const res = await SELF.fetch('http://example.com/api/families/pickup?phone=4805550200', {
+    const res = await workerExports.default.fetch('http://example.com/api/families/pickup?phone=4805550200', {
       headers: { Authorization: authHeader },
     });
     expect(res.status).toBe(200);
@@ -77,7 +77,7 @@ describe('GET /api/families/pickup', () => {
 
 describe('POST /api/families — malformed JSON', () => {
   it('returns 400 for non-JSON body', async () => {
-    const res = await SELF.fetch('http://example.com/api/families', {
+    const res = await workerExports.default.fetch('http://example.com/api/families', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: 'not json {{{',
@@ -91,7 +91,7 @@ describe('POST /api/families — malformed JSON', () => {
 describe('PATCH /api/families/:id — enum validation', () => {
   it('returns 400 for invalid hispanic value', async () => {
     const id = await insertFamily('Enum Test');
-    const res = await SELF.fetch(`http://example.com/api/families/${id}`, {
+    const res = await workerExports.default.fetch(`http://example.com/api/families/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({ hispanic: 'maybe' }),
@@ -103,7 +103,7 @@ describe('PATCH /api/families/:id — enum validation', () => {
 
   it('returns 400 for invalid ami_bracket value', async () => {
     const id = await insertFamily('Enum Test 2');
-    const res = await SELF.fetch(`http://example.com/api/families/${id}`, {
+    const res = await workerExports.default.fetch(`http://example.com/api/families/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({ ami_bracket: 'rich' }),
@@ -118,12 +118,12 @@ describe('POST /api/families — idempotency', () => {
   it('returns the same id for the same idempotency_key', async () => {
     const key = `test-idem-${Date.now()}`;
     const body = { name: 'Idem Route Family', idempotency_key: key };
-    const r1 = await SELF.fetch('http://example.com/api/families', {
+    const r1 = await workerExports.default.fetch('http://example.com/api/families', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify(body),
     });
-    const r2 = await SELF.fetch('http://example.com/api/families', {
+    const r2 = await workerExports.default.fetch('http://example.com/api/families', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify(body),
@@ -138,7 +138,7 @@ describe('POST /api/families — idempotency', () => {
 
 describe('POST /api/families', () => {
   it('returns 401 without auth', async () => {
-    const res = await SELF.fetch('http://example.com/api/families', {
+    const res = await workerExports.default.fetch('http://example.com/api/families', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'Test' }),
@@ -147,7 +147,7 @@ describe('POST /api/families', () => {
   });
 
   it('returns 400 without name', async () => {
-    const res = await SELF.fetch('http://example.com/api/families', {
+    const res = await workerExports.default.fetch('http://example.com/api/families', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({}),
@@ -156,7 +156,7 @@ describe('POST /api/families', () => {
   });
 
   it('creates family and returns id', async () => {
-    const res = await SELF.fetch('http://example.com/api/families', {
+    const res = await workerExports.default.fetch('http://example.com/api/families', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({ name: 'New Family', num_people: 3 }),
@@ -171,7 +171,7 @@ describe('POST /api/families', () => {
 describe('PATCH /api/families/:id', () => {
   it('returns 401 without auth', async () => {
     const id = await insertFamily('Patch Target');
-    const res = await SELF.fetch(`http://example.com/api/families/${id}`, {
+    const res = await workerExports.default.fetch(`http://example.com/api/families/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ num_people: 5 }),
@@ -181,7 +181,7 @@ describe('PATCH /api/families/:id', () => {
 
   it('updates family', async () => {
     const id = await insertFamily('Patchable');
-    const res = await SELF.fetch(`http://example.com/api/families/${id}`, {
+    const res = await workerExports.default.fetch(`http://example.com/api/families/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({ num_people: 5 }),
@@ -194,7 +194,7 @@ describe('PATCH /api/families/:id', () => {
 
 describe('POST /api/families/:id/proxies', () => {
   async function createFamily(name: string): Promise<string> {
-    const res = await SELF.fetch('https://x/api/families', {
+    const res = await workerExports.default.fetch('https://x/api/families', {
       method: 'POST',
       headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -206,7 +206,7 @@ describe('POST /api/families/:id/proxies', () => {
   it('persists a normalized proxy and is idempotent on re-add', async () => {
     const famId = await createFamily('Proxy Target Family');
     for (let i = 0; i < 2; i++) {
-      const res = await SELF.fetch(`https://x/api/families/${famId}/proxies`, {
+      const res = await workerExports.default.fetch(`https://x/api/families/${famId}/proxies`, {
         method: 'POST',
         headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
         body: JSON.stringify({ proxy_name: 'Helper Person', proxy_phone: '(480) 555-0199' }),
@@ -222,12 +222,12 @@ describe('POST /api/families/:id/proxies', () => {
 
   it('surfaces the added family in pickup lookup by proxy phone', async () => {
     const famId = await createFamily('Pickup Via Proxy Family');
-    await SELF.fetch(`https://x/api/families/${famId}/proxies`, {
+    await workerExports.default.fetch(`https://x/api/families/${famId}/proxies`, {
       method: 'POST',
       headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({ proxy_name: 'Neighbor', proxy_phone: '4805550777' }),
     });
-    const res = await SELF.fetch('https://x/api/families/pickup?phone=4805550777', {
+    const res = await workerExports.default.fetch('https://x/api/families/pickup?phone=4805550777', {
       headers: { Authorization: authHeader },
     });
     const body = await res.json() as { proxy: Array<{ id: string }> };
@@ -236,13 +236,13 @@ describe('POST /api/families/:id/proxies', () => {
 
   it('400s without proxy_name and 404s for a missing family', async () => {
     const famId = await createFamily('Validation Family');
-    const noName = await SELF.fetch(`https://x/api/families/${famId}/proxies`, {
+    const noName = await workerExports.default.fetch(`https://x/api/families/${famId}/proxies`, {
       method: 'POST',
       headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({ proxy_phone: '4805550001' }),
     });
     expect(noName.status).toBe(400);
-    const missing = await SELF.fetch('https://x/api/families/ffffffffffffffff/proxies', {
+    const missing = await workerExports.default.fetch('https://x/api/families/ffffffffffffffff/proxies', {
       method: 'POST',
       headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({ proxy_name: 'X' }),

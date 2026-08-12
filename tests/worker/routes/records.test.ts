@@ -1,4 +1,4 @@
-import { env, SELF } from 'cloudflare:test';
+import { env, exports as workerExports } from 'cloudflare:workers';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildSession, createSession } from '../../../src/worker/auth';
 import type { Env } from '../../../src/worker/schema';
@@ -44,14 +44,14 @@ function headers(token: string) {
 
 describe('GET /api/records/visits', () => {
   it('returns 401 with no auth', async () => {
-    const res = await SELF.fetch('https://example.com/api/records/visits');
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits');
     expect(res.status).toBe(401);
   });
 
   it('returns 403 for volunteer', async () => {
     await seedUser('v1', 'Vol', '4801110001', 'volunteer');
     const token = await makeToken('v1', '4801110001', 'volunteer');
-    const res = await SELF.fetch('https://example.com/api/records/visits', { headers: headers(token) });
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits', { headers: headers(token) });
     expect(res.status).toBe(403);
   });
 
@@ -60,7 +60,7 @@ describe('GET /api/records/visits', () => {
     await seedFamily('f1', 'Smith');
     await seedVisit('vi1', 'f1', '2026-07-01', 's1');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/visits', { headers: headers(token) });
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits', { headers: headers(token) });
     expect(res.status).toBe(200);
     const body = await res.json() as { visits: unknown[] };
     expect(body.visits.length).toBe(1);
@@ -72,7 +72,7 @@ describe('GET /api/records/visits', () => {
     await seedVisit('vi1', 'f1', '2026-07-01', 's1');
     await seedVisit('vi2', 'f1', '2026-06-15', 's1');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/visits?start=2026-07-01&end=2026-07-31', { headers: headers(token) });
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits?start=2026-07-01&end=2026-07-31', { headers: headers(token) });
     expect(res.status).toBe(200);
     const body = await res.json() as { visits: { id: string }[] };
     expect(body.visits.length).toBe(1);
@@ -88,7 +88,7 @@ describe('GET /api/records/families', () => {
     await seedFamily('f1', 'Smith', '4805550001');
     await seedFamily('f2', 'Jones');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/families', { headers: headers(token) });
+    const res = await workerExports.default.fetch('https://example.com/api/records/families', { headers: headers(token) });
     expect(res.status).toBe(200);
     const body = await res.json() as { families: unknown[] };
     expect(body.families.length).toBe(2);
@@ -99,7 +99,7 @@ describe('GET /api/records/families', () => {
     await seedFamily('f1', 'Smith');
     await seedFamily('f2', 'Jones');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/families?q=smith', { headers: headers(token) });
+    const res = await workerExports.default.fetch('https://example.com/api/records/families?q=smith', { headers: headers(token) });
     expect(res.status).toBe(200);
     const body = await res.json() as { families: { id: string }[] };
     expect(body.families.length).toBe(1);
@@ -115,7 +115,7 @@ describe('PATCH /api/records/visits/:id', () => {
     await seedFamily('f1', 'Smith');
     await seedVisit('vi1', 'f1', '2026-07-01', 's1');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/visits/vi1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits/vi1', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ visit_date: '2026-07-05', bag_received: true }),
@@ -130,7 +130,7 @@ describe('PATCH /api/records/visits/:id', () => {
     await seedFamily('f1', 'Smith');
     await seedVisit('vi1', 'f1', '2026-07-01', 's1');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/visits/vi1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits/vi1', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ volunteer_id: 'other' }),
@@ -144,7 +144,7 @@ describe('PATCH /api/records/visits/:id', () => {
     await seedFamily('f1', 'Smith');
     await seedVisit('vi1', 'f1', '2026-07-01', 's1');
     const token = await makeToken('a1', '4801110000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/records/visits/vi1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits/vi1', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ volunteer_id: 'a1' }),
@@ -155,7 +155,7 @@ describe('PATCH /api/records/visits/:id', () => {
   it('returns 404 for unknown visit', async () => {
     await seedUser('s1', 'Staff', '4801110002', 'staff');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/visits/nope', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits/nope', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ visit_date: '2026-07-01' }),
@@ -168,7 +168,7 @@ describe('PATCH /api/records/visits/:id', () => {
     await seedFamily('f1', 'Smith');
     await seedVisit('vi1', 'f1', '2026-07-01', 's1');
     const token = await makeToken('s1', '4801110002', 'staff');
-    await SELF.fetch('https://example.com/api/records/visits/vi1', {
+    await workerExports.default.fetch('https://example.com/api/records/visits/vi1', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ visit_date: '2026-07-10' }),
@@ -188,7 +188,7 @@ describe('PATCH /api/records/families/:id', () => {
     await seedUser('s1', 'Staff', '4801110002', 'staff');
     await seedFamily('f1', 'Smith');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/families/f1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ num_people: 5 }),
@@ -200,7 +200,7 @@ describe('PATCH /api/records/families/:id', () => {
     await seedUser('s1', 'Staff', '4801110002', 'staff');
     await seedFamily('f1', 'Smith');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/families/f1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ name: 'Hacker' }),
@@ -212,7 +212,7 @@ describe('PATCH /api/records/families/:id', () => {
     await seedUser('a1', 'Admin', '4801110000', 'admin');
     await seedFamily('f1', 'Smith');
     const token = await makeToken('a1', '4801110000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/records/families/f1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ name: 'Johnson', num_children_under_18: 2 }),
@@ -229,7 +229,7 @@ describe('DELETE /api/records/visits/:id', () => {
     await seedFamily('f1', 'Smith');
     await seedVisit('vi1', 'f1', '2026-07-01', 's1');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/visits/vi1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits/vi1', {
       method: 'DELETE',
       headers: headers(token),
     });
@@ -241,7 +241,7 @@ describe('DELETE /api/records/visits/:id', () => {
     await seedFamily('f1', 'Smith');
     await seedVisit('vi1', 'f1', '2026-07-01', 'a1');
     const token = await makeToken('a1', '4801110000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/records/visits/vi1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits/vi1', {
       method: 'DELETE',
       headers: headers(token),
     });
@@ -256,7 +256,7 @@ describe('DELETE /api/records/visits/:id', () => {
   it('returns 404 for unknown visit', async () => {
     await seedUser('a1', 'Admin', '4801110000', 'admin');
     const token = await makeToken('a1', '4801110000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/records/visits/nope', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits/nope', {
       method: 'DELETE',
       headers: headers(token),
     });
@@ -272,7 +272,7 @@ describe('DELETE /api/records/families/:id', () => {
     await seedFamily('f1', 'Smith');
     await seedVisit('vi1', 'f1', '2026-07-01', 'a1');
     const token = await makeToken('a1', '4801110000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/records/families/f1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
       method: 'DELETE',
       headers: headers(token),
     });
@@ -288,7 +288,7 @@ describe('DELETE /api/records/families/:id', () => {
     await seedUser('s1', 'Staff', '4801110002', 'staff');
     await seedFamily('f1', 'Smith');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/families/f1', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
       method: 'DELETE',
       headers: headers(token),
     });
@@ -303,7 +303,7 @@ describe('POST /api/records/visits', () => {
     await seedUser('a1', 'Admin', '4801110000', 'admin');
     await seedFamily('f1', 'Smith');
     const token = await makeToken('a1', '4801110000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/records/visits', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits', {
       method: 'POST',
       headers: headers(token),
       body: JSON.stringify({ family_id: 'f1', visit_date: '2026-06-01', bag_received: true }),
@@ -317,7 +317,7 @@ describe('POST /api/records/visits', () => {
     await seedUser('s1', 'Staff', '4801110002', 'staff');
     await seedFamily('f1', 'Smith');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/visits', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits', {
       method: 'POST',
       headers: headers(token),
       body: JSON.stringify({ family_id: 'f1', visit_date: '2026-06-01' }),
@@ -328,7 +328,7 @@ describe('POST /api/records/visits', () => {
   it('returns 404 for unknown family_id', async () => {
     await seedUser('a1', 'Admin', '4801110000', 'admin');
     const token = await makeToken('a1', '4801110000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/records/visits', {
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits', {
       method: 'POST',
       headers: headers(token),
       body: JSON.stringify({ family_id: 'nope', visit_date: '2026-06-01' }),
@@ -343,7 +343,7 @@ describe('GET /api/records/changes/:table/:id', () => {
   it('returns 403 for staff', async () => {
     await seedUser('s1', 'Staff', '4801110002', 'staff');
     const token = await makeToken('s1', '4801110002', 'staff');
-    const res = await SELF.fetch('https://example.com/api/records/changes/visits/vi1', { headers: headers(token) });
+    const res = await workerExports.default.fetch('https://example.com/api/records/changes/visits/vi1', { headers: headers(token) });
     expect(res.status).toBe(403);
   });
 
@@ -353,12 +353,12 @@ describe('GET /api/records/changes/:table/:id', () => {
     await seedVisit('vi1', 'f1', '2026-07-01', 'a1');
     const token = await makeToken('a1', '4801110000', 'admin');
     // Patch to create a log entry
-    await SELF.fetch('https://example.com/api/records/visits/vi1', {
+    await workerExports.default.fetch('https://example.com/api/records/visits/vi1', {
       method: 'PATCH',
       headers: headers(token),
       body: JSON.stringify({ bag_received: true }),
     });
-    const res = await SELF.fetch('https://example.com/api/records/changes/visits/vi1', { headers: headers(token) });
+    const res = await workerExports.default.fetch('https://example.com/api/records/changes/visits/vi1', { headers: headers(token) });
     expect(res.status).toBe(200);
     const body = await res.json() as { changes: { changed_by_name: string }[] };
     expect(body.changes.length).toBe(1);

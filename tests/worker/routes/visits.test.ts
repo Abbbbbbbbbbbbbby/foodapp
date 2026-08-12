@@ -1,4 +1,4 @@
-import { env, SELF } from 'cloudflare:test';
+import { env, exports as workerExports } from 'cloudflare:workers';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { buildSession, createSession } from '../../../src/worker/auth';
 import type { Env } from '../../../src/worker/schema';
@@ -24,7 +24,7 @@ beforeAll(async () => {
 
 describe('POST /api/visits — malformed JSON', () => {
   it('returns 400 for non-JSON body', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: 'not json {{{',
@@ -39,12 +39,12 @@ describe('POST /api/visits — idempotency', () => {
   it('returns the same id for the same idempotency_key', async () => {
     const key = `visit-idem-${Date.now()}`;
     const body = { family_id: testFamilyId, idempotency_key: key, visit_date: '2026-01-01' };
-    const r1 = await SELF.fetch('http://example.com/api/visits', {
+    const r1 = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify(body),
     });
-    const r2 = await SELF.fetch('http://example.com/api/visits', {
+    const r2 = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify(body),
@@ -59,7 +59,7 @@ describe('POST /api/visits — idempotency', () => {
 
 describe('POST /api/visits', () => {
   it('returns 401 without auth', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ family_id: testFamilyId }),
@@ -68,7 +68,7 @@ describe('POST /api/visits', () => {
   });
 
   it('returns 400 without family_id', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({}),
@@ -77,7 +77,7 @@ describe('POST /api/visits', () => {
   });
 
   it('returns 400 without visit_date', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({ family_id: testFamilyId }),
@@ -86,7 +86,7 @@ describe('POST /api/visits', () => {
   });
 
   it('creates visit and returns id', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
       body: JSON.stringify({ family_id: testFamilyId, visit_date: '2026-01-01' }),
@@ -99,19 +99,19 @@ describe('POST /api/visits', () => {
 
 describe('GET /api/visits', () => {
   it('returns 401 without auth', async () => {
-    const res = await SELF.fetch(`http://example.com/api/visits?familyId=${testFamilyId}`);
+    const res = await workerExports.default.fetch(`http://example.com/api/visits?familyId=${testFamilyId}`);
     expect(res.status).toBe(401);
   });
 
   it('returns 400 without familyId', async () => {
-    const res = await SELF.fetch('http://example.com/api/visits', {
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
       headers: { Authorization: authHeader },
     });
     expect(res.status).toBe(400);
   });
 
   it('returns visits array', async () => {
-    const res = await SELF.fetch(`http://example.com/api/visits?familyId=${testFamilyId}`, {
+    const res = await workerExports.default.fetch(`http://example.com/api/visits?familyId=${testFamilyId}`, {
       headers: { Authorization: authHeader },
     });
     expect(res.status).toBe(200);

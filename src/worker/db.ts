@@ -59,6 +59,12 @@ export async function insertFamily(
       `SELECT id FROM families WHERE idempotency_key = ?`
     ).bind(idempotencyKey).first<{ id: string }>();
     if (existing) return existing.id;
+    // The key may belong to a family that was merged away — resolve to the
+    // survivor instead of re-creating the duplicate the merge eliminated.
+    const alias = await db.prepare(
+      `SELECT target_id FROM merged_keys WHERE idempotency_key = ? AND kind = 'family'`
+    ).bind(idempotencyKey).first<{ target_id: string }>();
+    if (alias) return alias.target_id;
   }
 
   const id = crypto.randomUUID().replace(/-/g, '');
@@ -264,6 +270,11 @@ export async function insertVisit(
       `SELECT id FROM visits WHERE idempotency_key = ?`
     ).bind(idempotencyKey).first<{ id: string }>();
     if (existing) return existing.id;
+    // Key of a visit that was merged away — resolve to the surviving visit.
+    const alias = await db.prepare(
+      `SELECT target_id FROM merged_keys WHERE idempotency_key = ? AND kind = 'visit'`
+    ).bind(idempotencyKey).first<{ target_id: string }>();
+    if (alias) return alias.target_id;
   }
 
   const id = crypto.randomUUID().replace(/-/g, '');

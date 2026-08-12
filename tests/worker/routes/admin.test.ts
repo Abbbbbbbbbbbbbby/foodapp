@@ -1,12 +1,16 @@
-import { env, SELF } from 'cloudflare:test';
+import { env, exports as workerExports } from 'cloudflare:workers';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildSession, createSession } from '../../../src/worker/auth';
 import type { Env } from '../../../src/worker/schema';
 
 beforeEach(async () => {
   const db = (env as unknown as Env).DB;
+  // FK-safe order: children before parents (the runtime enforces FKs now)
+  await db.prepare('DELETE FROM duplicate_flags').run();
   await db.prepare('DELETE FROM visits').run();
+  await db.prepare('DELETE FROM proxies').run();
   await db.prepare('DELETE FROM families').run();
+  await db.prepare('DELETE FROM otp_codes').run();
   await db.prepare('DELETE FROM users').run();
 });
 
@@ -37,14 +41,14 @@ describe('GET /api/admin/users', () => {
   it('returns 403 for non-admin', async () => {
     await seedUser('u1', 'Alice', '4805550001', 'volunteer');
     const token = await makeToken('u1', '4805550001', 'volunteer');
-    const res = await SELF.fetch('https://example.com/api/admin/users', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users', {
       headers: authHeader(token),
     });
     expect(res.status).toBe(403);
   });
 
   it('returns 401 with no auth', async () => {
-    const res = await SELF.fetch('https://example.com/api/admin/users');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users');
     expect(res.status).toBe(401);
   });
 
@@ -52,7 +56,7 @@ describe('GET /api/admin/users', () => {
     await seedUser('a1', 'Admin', '4805550000', 'admin');
     await seedUser('u1', 'Alice', '4805550001', 'volunteer');
     const token = await makeToken('a1', '4805550000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users', {
       headers: authHeader(token),
     });
     expect(res.status).toBe(200);
@@ -68,7 +72,7 @@ describe('PATCH /api/admin/users/:id', () => {
     await seedUser('a1', 'Admin', '4805550000', 'admin');
     await seedUser('u1', 'Bob', '4805550002', 'volunteer');
     const token = await makeToken('a1', '4805550000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users/u1', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
       method: 'PATCH',
       headers: authHeader(token),
       body: JSON.stringify({ role: 'staff' }),
@@ -83,7 +87,7 @@ describe('PATCH /api/admin/users/:id', () => {
     await seedUser('a1', 'Admin', '4805550000', 'admin');
     await seedUser('u1', 'Bob', '4805550002', 'volunteer');
     const token = await makeToken('a1', '4805550000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users/u1', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
       method: 'PATCH',
       headers: authHeader(token),
       body: JSON.stringify({ role: 'superuser' }),
@@ -95,7 +99,7 @@ describe('PATCH /api/admin/users/:id', () => {
     await seedUser('a1', 'Admin', '4805550000', 'admin');
     await seedUser('u1', 'Bob', '4805550002', 'volunteer');
     const token = await makeToken('a1', '4805550000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users/u1', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
       method: 'PATCH',
       headers: authHeader(token),
       body: JSON.stringify({ active: false }),
@@ -110,7 +114,7 @@ describe('PATCH /api/admin/users/:id', () => {
     await seedUser('u1', 'Alice', '4805550001', 'volunteer');
     await seedUser('u2', 'Bob', '4805550002', 'volunteer');
     const token = await makeToken('u1', '4805550001', 'volunteer');
-    const res = await SELF.fetch('https://example.com/api/admin/users/u2', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u2', {
       method: 'PATCH',
       headers: authHeader(token),
       body: JSON.stringify({ role: 'staff' }),
@@ -124,7 +128,7 @@ describe('DELETE /api/admin/users/:id', () => {
     await seedUser('a1', 'Admin', '4805550000', 'admin');
     await seedUser('u1', 'Bob', '4805550002', 'volunteer');
     const token = await makeToken('a1', '4805550000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users/u1', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
       method: 'DELETE',
       headers: authHeader(token),
     });
@@ -137,7 +141,7 @@ describe('DELETE /api/admin/users/:id', () => {
   it('prevents deleting self', async () => {
     await seedUser('a1', 'Admin', '4805550000', 'admin');
     const token = await makeToken('a1', '4805550000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users/a1', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/a1', {
       method: 'DELETE',
       headers: authHeader(token),
     });
@@ -149,7 +153,7 @@ describe('DELETE /api/admin/users/:id', () => {
   it('returns 404 for unknown user', async () => {
     await seedUser('a1', 'Admin', '4805550000', 'admin');
     const token = await makeToken('a1', '4805550000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users/nonexistent', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/nonexistent', {
       method: 'DELETE',
       headers: authHeader(token),
     });
@@ -160,7 +164,7 @@ describe('DELETE /api/admin/users/:id', () => {
     await seedUser('u1', 'Alice', '4805550001', 'volunteer');
     await seedUser('u2', 'Bob', '4805550002', 'volunteer');
     const token = await makeToken('u1', '4805550001', 'volunteer');
-    const res = await SELF.fetch('https://example.com/api/admin/users/u2', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u2', {
       method: 'DELETE',
       headers: authHeader(token),
     });
@@ -180,7 +184,7 @@ describe('DELETE /api/admin/users/:id — FK-referenced users (review round)', (
     await db.prepare(`INSERT INTO otp_codes (id, phone, code, expires_at) VALUES ('otpA', '4805550009', '123456', datetime('now', '+10 minutes'))`).run();
 
     const token = await makeToken('a1', '4805550000', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users/u9', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u9', {
       method: 'DELETE',
       headers: authHeader(token),
     });
@@ -206,7 +210,7 @@ describe('DELETE /api/admin/users/:id — FK-referenced users (review round)', (
     await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('famG', 'Guard Fam', 'a1')`).run();
 
     const token = await makeToken('a2', '4805550002', 'admin');
-    const res = await SELF.fetch('https://example.com/api/admin/users/a1', {
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/a1', {
       method: 'DELETE',
       headers: authHeader(token),
     });
