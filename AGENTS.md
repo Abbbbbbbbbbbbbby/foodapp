@@ -1,22 +1,29 @@
+# foodbox-data-app
+
+React PWA + Cloudflare Worker for food box line check-in. See README.md for architecture.
+
 ## Development
 
-When starting the dev server, use background mode:
-
+```sh
+npm run dev          # wrangler dev on :8787 (serves dist/pwa, so build first)
+npm run build        # Vite build + service-worker precache injection
+npm run pwa:dev      # Vite dev server, frontend-only hot reload
 ```
-astro dev --background
-```
 
-Manage the background server with `astro dev stop`, `astro dev status`, and `astro dev logs`.
+Apply local migrations before testing API routes: `wrangler d1 migrations apply foodapp --local`
 
-## Documentation
+## Tests: run the suite that matches what you touched
 
-Full documentation: https://docs.astro.build
+- `npm test`: worker/API (`tests/worker/`)
+- `npm run test:pwa`: offline queue and client libs (`tests/pwa/`)
+- `npm run test:ui`: React components (`tests/pwa-ui/`)
+- `npm run test:scripts`: build tooling (`tests/scripts/`)
+- `npm run test:e2e`: Playwright full-stack smoke (`tests/e2e/`)
 
-Consult these guides before working on related tasks:
+## Rules
 
-- [Adding pages, dynamic routes, or middleware](https://docs.astro.build/en/guides/routing/)
-- [Working with Astro components](https://docs.astro.build/en/basics/astro-components/)
-- [Using React, Vue, Svelte, or other framework components](https://docs.astro.build/en/guides/framework-components/)
-- [Adding or managing content](https://docs.astro.build/en/guides/content-collections/)
-- [Adding styles or using Tailwind](https://docs.astro.build/en/guides/styling/)
-- [Supporting multiple languages](https://docs.astro.build/en/guides/internationalization/)
+- New DB schema changes = new numbered file in `migrations/`; never edit an applied migration. Production migrations are applied manually with `--remote` and they require Jeff's prod wrangler login.
+- The service worker (`src/pwa/public/sw.js`) must keep the `PRECACHE_URLS` marker line; the build injects asset URLs there and fails loudly if the marker is missing.
+- Offline queue changes (`src/pwa/lib/offline.ts`) need tests: replay after network loss is the core feature.
+- Do not add auth gating for data sensitivity. Food line data is not PII (explicit decision); SMS rate limits are the control.
+- Push to `main` auto-deploys to production via Workers Builds.
