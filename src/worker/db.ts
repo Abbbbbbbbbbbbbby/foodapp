@@ -160,10 +160,6 @@ export interface FamilySearchResult extends Family {
   last_visit_date: string | null;
 }
 
-function escapeLike(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-}
-
 export async function searchFamilies(
   db: D1Database,
   params: SearchParams
@@ -186,57 +182,49 @@ export async function searchFamilies(
 
   if (name && name.trim().length >= 2) {
     const token = name.trim().split(/\s+/)[0];
-    // Broad candidate pull, precise post-ranking (per the design spec): an
-    // anchored 4-char prefix rejected transpositions ('Smiht'→'Smith') and
-    // any non-first-token match ('Garcia' couldn't find 'Jose Garcia').
-    // Anywhere-substring on the first two characters is forgiving enough for
-    // the Levenshtein filter to see real candidates, and the dataset is a
-    // few thousand rows, so LIMIT 300 stays cheap.
     const normToken = normalizeName(token);
-    const bigram = normToken.slice(0, 2);
-    // Candidate reachability: requiring the typo's LEADING bigram to appear
-    // contiguously makes common edits unreachable ('Msith' contains no 'sm').
-    // Pull candidates on any of: the leading bigram, its transposition, and
-    // the second bigram (survives a first-character edit).
-    const bigrams = new Set([bigram]);
-    if (bigram.length === 2) {
-      bigrams.add(bigram[1] + bigram[0]);
-      if (normToken.length >= 3) bigrams.add(normToken.slice(1, 3));
-    }
-    const needles = [...bigrams].map(escapeLike);
-    const fullNeedle = escapeLike(normToken);
-    const NORM = `COALESCE(f.name_normalized, LOWER(f.name))`;
-    // The cap must keep the BEST candidates, not an arbitrary scan-order 300:
-    // a common bigram ('ma') can match most of the table, and an unranked
-    // LIMIT could truncate the exact family being checked in. Rank exact-token
-    // substrings first (near-certain Levenshtein survivors), then names where
-    // ANY token starts with the bigram (last-name searches like 'Martines' →
-    // 'Jose Martinez'), then recency.
-    const likeResults = await db.prepare(`
-      SELECT f.*, MAX(v.visit_date) as last_visit_date
-      FROM families f
-      LEFT JOIN visits v ON v.family_id = f.id
-      WHERE ${needles.map(() => `${NORM} LIKE ? ESCAPE '\\'`).join(' OR ')}
-      GROUP BY f.id
-      ORDER BY
-        (${NORM} LIKE ? ESCAPE '\\') DESC,
-        (${NORM} LIKE ? ESCAPE '\\' OR ${NORM} LIKE ? ESCAPE '\\') DESC,
-        last_visit_date DESC
-      LIMIT 300
-    `).bind(
-      ...needles.map(n => `%${n}%`),
-      `%${fullNeedle}%`,
-      `${escapeLike(bigram)}%`, `% ${escapeLike(bigram)}%`,
-    ).all<Record<string, unknown>>();
+    const threshold = normToken.length <= 4 ? 2 : 3;
 
-    const nameRows = (likeResults.results ?? [])
-      .map(r => mapRow(r) as FamilySearchResult)
-      .filter(r => {
-        // Match against EVERY token of the stored name, so a last-name
-        // search finds full-name records.
-        const storedTokens = normalizeName(r.name).split(/\s+/);
-        return storedTokens.some(t => levenshtein(t, normToken) <= (normToken.length <= 4 ? 2 : 3));
-      });
+    // Levenshtein over EVERY stored name, no SQL prefilter. Earlier versions
+    // prefiltered with LIKE needles (prefix, then bigram variants), and every
+    // finite needle set left some legitimate one-edit typo unreachable
+    // ('Msith', then 'Sxith'). The contract is "matches within edit distance
+    // N are found" — the only way to guarantee it is to score every name.
+    // The dataset is a few thousand rows and this first pass pulls only
+    // id + normalized name, so the scan stays cheap; full rows are fetched
+    // afterward for just the matches.
+    const allNames = await db.prepare(
+      `SELECT id, COALESCE(name_normalized, LOWER(name)) AS norm FROM families`
+    ).all<{ id: string; norm: string }>();
+
+    const matches: { id: string; dist: number }[] = [];
+    for (const r of allNames.results ?? []) {
+      // Match against EVERY token of the stored name, so a last-name
+      // search finds full-name records.
+      let best = Infinity;
+      for (const t of r.norm.split(/\s+/)) {
+        const d = levenshtein(t, normToken);
+        if (d < best) best = d;
+      }
+      if (best <= threshold) matches.push({ id: r.id, dist: best });
+    }
+    // Closest first; cap the detail fetch well below D1's bind-parameter
+    // limit. Real match sets are tiny — the cap only guards degenerate
+    // two-letter searches.
+    matches.sort((a, b) => a.dist - b.dist);
+    const ids = matches.slice(0, 90).map(m => m.id);
+
+    let nameRows: FamilySearchResult[] = [];
+    if (ids.length > 0) {
+      const detail = await db.prepare(`
+        SELECT f.*, MAX(v.visit_date) as last_visit_date
+        FROM families f
+        LEFT JOIN visits v ON v.family_id = f.id
+        WHERE f.id IN (${ids.map(() => '?').join(',')})
+        GROUP BY f.id
+      `).bind(...ids).all<Record<string, unknown>>();
+      nameRows = (detail.results ?? []).map(r => mapRow(r) as FamilySearchResult);
+    }
 
     const existing = new Set(rows.map(r => r.id));
     for (const r of nameRows) {

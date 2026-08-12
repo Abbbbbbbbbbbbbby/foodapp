@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
-import { api, ApiError } from '../lib/api';
+import { api, apiWithToken, ApiError } from '../lib/api';
 import { queueItem, generateUUID } from '../lib/offline';
-import { getUser } from '../store/auth';
+import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
 import LookupForm from '../components/enter/LookupForm';
 import ResultsList from '../components/enter/ResultsList';
@@ -81,8 +81,13 @@ export default function EnterPage() {
     const today = localDateString();
     const familyPayload = { ...data, first_visit_date: today, proxy: proxyData ?? undefined };
     const familyIdemKey = generateUUID();
+    // One identity for the whole submission: the request's token and the
+    // offline attribution must come from the same auth snapshot, or a
+    // cross-tab account switch splits them (posted as A, queued as B).
+    const auth = getAuth();
+    const pinned = apiWithToken(auth?.token ?? null);
     try {
-      const result = await api.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
+      const result = await pinned.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
       // Registered online: join this pickup pre-checked. The visit is logged
       // with the rest of the selection through the normal log-visit loop.
       const newFam = {
@@ -103,7 +108,7 @@ export default function EnterPage() {
       // Offline: queue the family — the flush creates the family AND today's
       // visit, so it must NOT also join this pickup's log-visit loop.
       try {
-        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, getUser()?.id);
+        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth?.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -134,8 +139,10 @@ export default function EnterPage() {
     };
     let visitId: string | null = null;
     let queueId: string | null = null;
+    const auth = getAuth();
+    const pinned = apiWithToken(auth?.token ?? null);
     try {
-      const result = await api.post<{ id: string }>('/api/visits', visitPayload);
+      const result = await pinned.post<{ id: string }>('/api/visits', visitPayload);
       visitId = result.id;
     } catch (e) {
       if (e instanceof ApiError) {
@@ -144,7 +151,7 @@ export default function EnterPage() {
       }
       // Network error — queue with the same idempotency key and continue
       try {
-        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey, getUser()?.id);
+        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey, auth?.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -209,10 +216,15 @@ export default function EnterPage() {
     const familyIdemKey = generateUUID();
     const visitIdemKey = generateUUID();
 
+    // This submission spans TWO requests (family, then visit) plus offline
+    // attribution — pin all of it to one auth snapshot.
+    const auth = getAuth();
+    const pinned = apiWithToken(auth?.token ?? null);
+
     // --- POST family ---
     let familyId: string;
     try {
-      const result = await api.post<{ id: string }>('/api/families', {
+      const result = await pinned.post<{ id: string }>('/api/families', {
         ...familyPayload,
         idempotency_key: familyIdemKey,
       });
@@ -225,7 +237,7 @@ export default function EnterPage() {
       // Network error — queue family + visit pair together and advance
       let familyQueueId: string;
       try {
-        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, getUser()?.id);
+        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth?.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -245,7 +257,7 @@ export default function EnterPage() {
     let visitQueueId: string | null = null;
     let visitError: string | undefined;
     try {
-      const visitResult = await api.post<{ id: string }>('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
+      const visitResult = await pinned.post<{ id: string }>('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
       visitId = visitResult.id;
     } catch (e) {
       if (e instanceof ApiError) {
@@ -254,7 +266,7 @@ export default function EnterPage() {
       } else {
         // Network — queue only the visit (family already has an id)
         try {
-          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey, getUser()?.id);
+          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey, auth?.user.id);
         } catch {
           visitError = 'Visit not saved offline. Check storage permissions.';
         }

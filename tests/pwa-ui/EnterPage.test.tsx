@@ -4,8 +4,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../src/pwa/lib/api', () => {
   class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
-  return { api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() }, ApiError };
+  const pinnedPost = vi.fn();
+  return {
+    api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() },
+    apiWithToken: vi.fn(() => ({ post: pinnedPost, patch: vi.fn() })),
+    ApiError,
+  };
 });
+vi.mock('../../src/pwa/store/auth', () => ({
+  getAuth: () => ({ token: 'tok', user: { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' } }),
+  getUser: () => ({ id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' }),
+}));
 vi.mock('../../src/pwa/lib/offline', () => ({
   queueItem: vi.fn(async () => 'queue-id-1'),
   generateUUID: () => 'uuid-fixed',

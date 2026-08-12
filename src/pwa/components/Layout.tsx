@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { getUser, clearAuth, getToken } from '../store/auth';
+import { getUser, getAuth, clearAuth, getToken, AUTH_STORAGE_KEY } from '../store/auth';
 import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters, adoptForeignItems } from '../lib/offline';
 import type { DeadLetterEntry } from '../lib/offline';
 import { apiWithToken } from '../lib/api';
@@ -47,27 +47,53 @@ export default function Layout() {
   }, []);
 
   useEffect(() => {
+    // Cross-tab account changes: another tab signing in/out rewrites the
+    // shared auth blob while this tab still renders (and would act as) the
+    // old user. Reload so this tab rehydrates as whoever is actually signed
+    // in — an incoherent half-identity tab is worse than a refresh.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== AUTH_STORAGE_KEY) return;
+      const now = getUser();
+      if (!now || now.id !== user.id) window.location.reload();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [user.id]);
+
+  useEffect(() => {
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
+    // Overlapping doFlush invocations ('online' during a slow flush) must not
+    // orphan a timer: always clear before assigning, or unmount cleanup can
+    // miss one and a dead component flushes with a stale identity.
+    const scheduleFlush = (ms: number) => {
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = disposed ? undefined : setTimeout(doFlush, ms);
+    };
     const doFlush = async () => {
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = undefined; }
       try {
-        // Pin the token for the WHOLE flush: one queued submission spans
-        // several requests, and reading the live token per request would let
-        // a mid-flush account switch split it across two identities.
-        const pinned = apiWithToken(getToken());
+        // ONE auth snapshot for the WHOLE flush. The token and the user id
+        // live in the same storage blob but reading them separately (or at
+        // different times) lets a cross-tab account switch produce token-B +
+        // user-A: A's queued items pass the owner check and post under B's
+        // identity. Snapshot both together; a mid-flush switch then 401s
+        // (items stay queued) instead of misattributing.
+        const auth = getAuth();
+        const pinned = apiWithToken(auth?.token ?? null);
         const apiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') =>
           method === 'PATCH'
             ? pinned.patch<unknown>(url, body as Record<string, unknown>)
             : pinned.post<unknown>(url, body as Record<string, unknown>);
-        const result = await flushQueue(apiFn, user.id);
+        const result = await flushQueue(apiFn, auth?.user.id);
+        if (disposed) return;
         // A skipped result means another flush was already in flight — it
         // says nothing about queue health, so it must not clear warning
         // banners. The in-flight flush may belong to an UNMOUNTED Layout
         // whose setState is dead, so re-check shortly: THIS component must
         // be the one that surfaces the real results.
         if (result.skipped) {
-          if (!disposed) retryTimer = setTimeout(doFlush, 5_000);
+          scheduleFlush(5_000);
           return;
         }
         setSyncBroken(false);
@@ -76,7 +102,7 @@ export default function Layout() {
           console.warn(`offline sync: ${result.errors} item(s) failed transiently — retrying in 30s`);
           // Mount and 'online' are not enough: a 503 or transient fetch
           // failure while the browser STAYS online needs a scheduled retry.
-          if (!disposed) retryTimer = setTimeout(doFlush, 30_000);
+          scheduleFlush(30_000);
         }
         // Refresh dead letters UNCONDITIONALLY: entries may have been written
         // by an earlier flush whose component unmounted before rendering them,
@@ -131,7 +157,11 @@ export default function Layout() {
 
   async function handleAdoptForeign() {
     try {
-      await adoptForeignItems(user.id);
+      // Same-snapshot rule as the flush: adopt under whoever is signed in
+      // NOW, not the mount-time closure.
+      const auth = getAuth();
+      if (!auth) return;
+      await adoptForeignItems(auth.user.id);
       setForeignCount(0);
       setAdoptArmed(false);
       // adoptForeignItems dispatched offlinecountchange, which schedules the

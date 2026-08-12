@@ -223,12 +223,19 @@ describe('searchFamilies — broadened fuzzy matching (issue #6)', () => {
     expect(results.some(r => r.name === 'Smith Family')).toBe(true);
   });
 
-  it('finds a LEADING-pair transposition (Msith → Smith): candidate pull must not require the typo bigram', async () => {
+  it('finds a LEADING-pair transposition (Msith → Smith)', async () => {
     const db = (env as unknown as Env).DB;
     await insertFamily(db, { ...baseFamily(), name: 'Smith Family' });
-    // 'msith' contains no contiguous 'ms' match in 'smith family' — the
-    // transposed-bigram candidate needle is what makes this reachable.
     const results = await searchFamilies(db, { name: 'Msith' });
+    expect(results.some(r => r.name === 'Smith Family')).toBe(true);
+  });
+
+  it('finds ANY single-edit typo (Sxith → Smith): the distance contract holds with no prefilter escape hatch', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Smith Family' });
+    // Position-1 substitution defeated every finite bigram-needle scheme;
+    // the full-scan Levenshtein pass is what guarantees this.
+    const results = await searchFamilies(db, { name: 'Sxith' });
     expect(results.some(r => r.name === 'Smith Family')).toBe(true);
   });
 

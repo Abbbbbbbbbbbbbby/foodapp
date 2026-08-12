@@ -12,8 +12,10 @@ vi.mock('../../src/pwa/lib/offline', () => ({
 }));
 vi.mock('../../src/pwa/store/auth', () => ({
   getUser: () => ({ id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' }),
+  getAuth: () => ({ token: 'tok', user: { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' } }),
   getToken: () => 'tok',
   clearAuth: vi.fn(),
+  AUTH_STORAGE_KEY: 'foodapp_auth',
 }));
 vi.mock('../../src/pwa/lib/api', () => ({
   api: { post: vi.fn(), patch: vi.fn(), get: vi.fn() },
@@ -23,7 +25,7 @@ vi.mock('../../src/pwa/lib/api', () => ({
 
 import Layout from '../../src/pwa/components/Layout';
 import { getDeadLetters, deleteDeadLetters, flushQueue, adoptForeignItems } from '../../src/pwa/lib/offline';
-import { apiWithToken } from '../../src/pwa/lib/api';
+import { api, apiWithToken } from '../../src/pwa/lib/api';
 import type { DeadLetterEntry } from '../../src/pwa/lib/offline';
 
 const dl = (id: string, label: string): DeadLetterEntry => ({
@@ -123,13 +125,28 @@ describe('Layout session and sync banners (issue #6)', () => {
     expect(screen.queryByText(/2 entries from a different account/)).not.toBeInTheDocument();
   });
 
-  it('pins the flush identity: apiWithToken is called with the token captured at flush start', async () => {
+  it('pins the flush identity: the apiFn handed to flushQueue routes through the pinned client, with the same-snapshot user id', async () => {
     vi.mocked(getDeadLetters).mockResolvedValue([]);
     vi.mocked(flushQueue).mockResolvedValue({ flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 });
     renderLayout();
 
-    await screen.findByText('HOME CONTENT');
-    await waitFor(() => expect(apiWithToken).toHaveBeenCalledWith('tok'));
+    await waitFor(() => expect(flushQueue).toHaveBeenCalled());
+    expect(apiWithToken).toHaveBeenCalledWith('tok');
+    // Token and user id must come from ONE auth snapshot.
+    expect(vi.mocked(flushQueue).mock.calls[0][1]).toBe('u1');
+
+    // Drive the ACTUAL apiFn Layout handed to flushQueue: it must hit the
+    // pinned client — a regression to the live `api` would pass a
+    // call-count-only assertion but fails this one.
+    const apiFn = vi.mocked(flushQueue).mock.calls[0][0] as
+      (url: string, body: unknown, method?: 'POST' | 'PATCH') => Promise<unknown>;
+    const pinnedClient = vi.mocked(apiWithToken).mock.results[0].value;
+    await apiFn('/api/families', { name: 'X' });
+    await apiFn('/api/visits/v1/bag', { bag_received: true }, 'PATCH');
+    expect(pinnedClient.post).toHaveBeenCalledWith('/api/families', { name: 'X' });
+    expect(pinnedClient.patch).toHaveBeenCalledWith('/api/visits/v1/bag', { bag_received: true });
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.patch).not.toHaveBeenCalled();
   });
 
   it('a flush exception shows the sync-unavailable banner', async () => {

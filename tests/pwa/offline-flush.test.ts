@@ -315,3 +315,26 @@ describe('adoptForeignItems — stranded-entry recovery (deactivated owner)', ()
     expect(await adoptForeignItems('user-a')).toBe(0);
   });
 });
+
+describe('adoptForeignItems — concurrent-update safety', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it('preserves a bag flag set concurrently with adoption (no stale-snapshot overwrite)', async () => {
+    const { adoptForeignItems, setItemBag, getItem } = await import('../../src/pwa/lib/offline');
+    const id = await queueItem({ type: 'family', payload: { data: { name: 'Race Fam' }, proxyData: null } }, 'k-race', 'user-b');
+
+    // Interleave: whichever transaction commits first, the other must see
+    // its write — the cursor update reads the latest stored value, so the
+    // bag flag survives in both orders.
+    await Promise.all([
+      adoptForeignItems('user-a'),
+      setItemBag(id, true),
+    ]);
+
+    const item = await getItem(id);
+    expect(item?.queuedByUserId).toBe('user-a');
+    expect(item?.bag).toBe(true);
+  });
+});

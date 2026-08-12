@@ -152,15 +152,25 @@ export async function getPendingCount(): Promise<number> {
 // deliberate human action behind a banner button — never automatic — because
 // it trades attribution accuracy for not losing the data.
 export async function adoptForeignItems(currentUserId: string): Promise<number> {
-  const items = await getPending();
-  const foreign = items.filter(i => i.queuedByUserId && i.queuedByUserId !== currentUserId);
-  if (foreign.length === 0) return 0;
   const db = await openDb();
   return new Promise((resolve, reject) => {
+    // Cursor read-modify-write inside ONE readwrite transaction: a separate
+    // snapshot-then-put would write back stale copies, erasing concurrent
+    // updates (a bag flag set between the read and the write).
+    let adopted = 0;
     const tx = db.transaction(STORE, 'readwrite');
-    const store = tx.objectStore(STORE);
-    for (const item of foreign) store.put({ ...item, queuedByUserId: currentUserId });
-    tx.oncomplete = () => { dispatchCountChange(); resolve(foreign.length); };
+    const req = tx.objectStore(STORE).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (!cursor) return;
+      const item = cursor.value as PendingItem;
+      if (item.queuedByUserId && item.queuedByUserId !== currentUserId) {
+        cursor.update({ ...item, queuedByUserId: currentUserId });
+        adopted++;
+      }
+      cursor.continue();
+    };
+    tx.oncomplete = () => { if (adopted > 0) dispatchCountChange(); resolve(adopted); };
     rejectOnFailure(tx, reject);
   });
 }
