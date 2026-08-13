@@ -58,17 +58,21 @@ export default function Layout() {
     getDeadLetters().then(setDeadLetters).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    // Refresh the offline family directory while we HAVE a connection — it
-    // is what lets a returning household be found during a later outage
-    // instead of being re-registered as a duplicate.
+  // Refresh the offline family directory while we HAVE a connection — it is
+  // what lets a returning household be found during a later outage instead
+  // of being re-registered as a duplicate. Mount-only was not enough (a
+  // family created after the initial fetch was invisible offline in the
+  // same session), so this also runs on reconnect and after every flush
+  // that landed queued records.
+  const refreshDirectory = () => {
     if (navigator.onLine === false) return;
     const auth = getAuth();
     if (!auth) return;
     apiWithToken(auth.token).get<{ families: DirectoryFamily[] }>('/api/families/directory')
       .then(r => cacheDirectory(r.families))
       .catch(err => console.warn('family directory refresh failed (offline lookup will use the last cached copy):', err));
-  }, []);
+  };
+  useEffect(() => { refreshDirectory(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const overlayRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -160,6 +164,9 @@ export default function Layout() {
         }
         setSyncBroken(false);
         setForeignCount(result.foreignItems);
+        // Queued records just landed server-side (with server-assigned
+        // state) — pull a fresh roster so offline lookup reflects them.
+        if (result.flushed > 0) refreshDirectory();
         if (result.errors > 0) {
           console.warn(`offline sync: ${result.errors} item(s) failed transiently — retrying in 30s`);
           // Mount and 'online' are not enough: a 503 or transient fetch
@@ -194,14 +201,15 @@ export default function Layout() {
       if (queuedTimer) clearTimeout(queuedTimer);
       queuedTimer = setTimeout(doFlush, 5_000);
     };
+    const onOnline = () => { refreshDirectory(); doFlush(); };
     doFlush();
-    window.addEventListener('online', doFlush);
+    window.addEventListener('online', onOnline);
     window.addEventListener('offlinecountchange', onCountChange);
     return () => {
       disposed = true;
       if (retryTimer) clearTimeout(retryTimer);
       if (queuedTimer) clearTimeout(queuedTimer);
-      window.removeEventListener('online', doFlush);
+      window.removeEventListener('online', onOnline);
       window.removeEventListener('offlinecountchange', onCountChange);
     };
   }, [navigate]);

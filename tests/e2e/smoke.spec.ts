@@ -25,8 +25,12 @@ test('register, check in a new family, and record a bag', async ({ page }) => {
   await page.getByRole('button', { name: /Create account|Crear cuenta/i }).click();
 
   const code = await otpFor(page, PHONE);
-  await page.getByRole('textbox').first().fill(code);
-  await page.getByRole('button', { name: /Verify|Verificar|Sign in|Entrar/i }).first().click();
+  // Wait for the verify VIEW before filling: filling 'the first textbox'
+  // during the register→verify transition could land the code in the
+  // register form's name field, leaving Verify disabled forever.
+  await page.getByText(/Enter code|Ingresar código/).waitFor();
+  await page.getByRole('textbox', { name: /6-digit code|Código/ }).fill(code);
+  await page.getByRole('button', { name: /Verify|Verificar/i }).click();
 
   // ── Home → Enter Data ──
   await page.getByRole('button', { name: /Enter Data|Ingresar/i }).first().click();

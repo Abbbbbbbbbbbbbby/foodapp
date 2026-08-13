@@ -1,7 +1,8 @@
 import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, apiWithToken, ApiError } from '../lib/api';
-import { queueItem, generateUUID, searchDirectory } from '../lib/offline';
+import { queueItem, generateUUID, searchDirectory, upsertDirectoryFamilies } from '../lib/offline';
+import { normalizeName, normalizePhone } from '../../shared/fuzzy';
 import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
 import LookupForm from '../components/enter/LookupForm';
@@ -39,6 +40,18 @@ export default function EnterPage() {
   const pendingFamilies = useRef<SummaryFamily[]>([]);
   // Accumulates visit IDs for the log-visit (existing family) flow
   const pendingVisitIds = useRef<{ visitId: string | null; queueId: string | null; visitKey: string }[]>([]);
+
+
+  // A family registered online THIS session must be findable if the network
+  // dies before the next full directory refresh. Fire-and-forget: a cache
+  // write failure only degrades offline lookup, never the check-in.
+  function rememberInDirectory(id: string, name: string, phone: string | null | undefined, numPeople: number | null | undefined) {
+    upsertDirectoryFamilies([{
+      id, name, name_normalized: normalizeName(name),
+      phone: normalizePhone(phone) ?? null, proxy_phones: [],
+      num_people: numPeople ?? null, last_visit_date: localDateString(),
+    }]).catch(err => console.warn('directory upsert failed:', err));
+  }
 
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
@@ -122,6 +135,7 @@ export default function EnterPage() {
     const pinned = apiWithToken(auth.token);
     try {
       const result = await pinned.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
+      rememberInDirectory(result.id, data.name, data.phone, data.num_people);
       // Registered online: join this pickup pre-checked. The visit is logged
       // with the rest of the selection through the normal log-visit loop.
       const newFam = {
@@ -277,6 +291,7 @@ export default function EnterPage() {
         idempotency_key: familyIdemKey,
       });
       familyId = result.id;
+      rememberInDirectory(familyId, data.name, data.phone, data.num_people);
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);

@@ -54,7 +54,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (!phone) {
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
-  const limit = await checkOtpSendLimit(env.SESSIONS, phone);
+  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test' });
   if (!limit.allowed) {
     return Response.json({ error: 'Too many code requests. Try again later.' }, { status: 429 });
   }
@@ -86,7 +86,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   if (!phone) {
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
-  const limit = await checkOtpSendLimit(env.SESSIONS, phone);
+  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test' });
   if (!limit.allowed) {
     return Response.json({ error: 'Too many code requests. Try again later.' }, { status: 429 });
   }

@@ -27,6 +27,9 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
   const needBag = families.filter(f => !f.bag_received);
 
   const [bagsGiven, setBagsGiven] = useState(false);
+  // The identity this screen was opened under — bag saves refuse to run for
+  // anyone else (same contract as the wizard's submission handlers).
+  const [mountUserId] = useState(() => getAuth()?.user.id);
   // Picklist selection — pre-checked: taking a bag is the common case,
   // volunteers uncheck the exceptions.
   const [selected, setSelected] = useState<Set<number>>(
@@ -61,8 +64,8 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     // carry the token of whoever clicked, or a cross-tab switch mid-handler
     // audit-attributes this user's bags to someone else.
     const auth = getAuth();
-    if (!auth) {
-      setBagError('Session ended — sign in again. No bags were marked. / La sesión terminó — inicie sesión de nuevo.');
+    if (!auth || auth.user.id !== mountUserId) {
+      setBagError('The signed-in account changed — no bags were marked. Sign back in as the original account. / La cuenta cambió — no se marcaron bolsas. Vuelva a iniciar sesión con la cuenta original.');
       return;
     }
     const pinned = apiWithToken(auth.token);

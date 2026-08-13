@@ -22,6 +22,7 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   // the mock surface must match the real module or deeper flows throw.
   setItemBag: vi.fn(async () => undefined),
   searchDirectory: vi.fn(async () => []),
+  upsertDirectoryFamilies: vi.fn(async () => undefined),
 }));
 
 import EnterPage from '../../src/pwa/pages/EnterPage';
@@ -71,7 +72,7 @@ describe('EnterPage lookup error routing', () => {
   it('an offline search with a cached directory hit shows the RETURNING household, not register-as-new', async () => {
     vi.mocked(api.get).mockRejectedValue(new TypeError('Failed to fetch'));
     vi.mocked(searchDirectory).mockResolvedValue([
-      { id: 'f9', name: 'Garcia Familia', phone: null, num_people: 4, last_visit_date: '2026-08-01' },
+      { id: 'f9', name: 'Garcia Familia', name_normalized: 'garcia familia', phone: null, proxy_phones: [], num_people: 4, last_visit_date: '2026-08-01' },
     ]);
     const user = userEvent.setup();
     render(<EnterPage />);

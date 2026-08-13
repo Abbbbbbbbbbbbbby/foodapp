@@ -194,3 +194,31 @@ describe('PATCH /api/visits/:id/bag — contract hardening (issue #6)', () => {
     expect(phantom!.n).toBe(0);
   });
 });
+
+describe('POST /api/visits — stale cached family id (offline replay after merge/delete)', () => {
+  it('a visit against a merged-away family id lands on the survivor', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT INTO families (id, name) VALUES ('survivor', 'Survivor Fam')`).run();
+    await db.prepare(`INSERT INTO merged_family_ids (old_id, target_id) VALUES ('mergedAway', 'survivor')`).run();
+
+    const res = await workerExports.default.fetch('https://x/api/visits', {
+      method: 'POST', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family_id: 'mergedAway', visit_date: '2026-08-12', idempotency_key: 'stale-key-1' }),
+    });
+    expect(res.status).toBe(201);
+    const v = await db.prepare(`SELECT family_id FROM visits WHERE idempotency_key = 'stale-key-1'`).first<{ family_id: string }>();
+    expect(v!.family_id).toBe('survivor');
+  });
+
+  it('a visit against a genuinely gone family id is a permanent 404, not a retry-forever 500', async () => {
+    const res = await workerExports.default.fetch('https://x/api/visits', {
+      method: 'POST', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family_id: 'never-existed', visit_date: '2026-08-12' }),
+    });
+    // 4xx → the offline queue dead-letters it with the recoverable payload
+    // instead of classifying it transient and retrying forever.
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: string };
+    expect(body.error).toMatch(/merged or removed/);
+  });
+});

@@ -119,12 +119,22 @@ async function handleDirectory(request: Request, env: Env): Promise<Response> {
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
   const rows = await env.DB.prepare(`
-    SELECT f.id, f.name, f.phone, f.num_people, MAX(v.visit_date) AS last_visit_date
+    SELECT f.id, f.name, COALESCE(f.name_normalized, LOWER(f.name)) AS name_normalized,
+           f.phone, f.num_people, MAX(v.visit_date) AS last_visit_date,
+           (SELECT GROUP_CONCAT(p.proxy_phone) FROM proxies p
+             WHERE p.family_id = f.id AND p.proxy_phone IS NOT NULL) AS proxy_phones
     FROM families f
     LEFT JOIN visits v ON v.family_id = f.id
     GROUP BY f.id
-  `).all<{ id: string; name: string; phone: string | null; num_people: number | null; last_visit_date: string | null }>();
-  return Response.json({ families: rows.results ?? [] });
+  `).all<{ id: string; name: string; name_normalized: string; phone: string | null; num_people: number | null; last_visit_date: string | null; proxy_phones: string | null }>();
+  // Ship the SERVER-normalized name (the iOS 9 client can't fold accents
+  // itself) and proxy pickup phones (a designated pickup person searching
+  // their own number offline must find their linked families).
+  const families = (rows.results ?? []).map(r => ({
+    ...r,
+    proxy_phones: r.proxy_phones ? r.proxy_phones.split(',') : [],
+  }));
+  return Response.json({ families });
 }
 
 async function handlePickup(request: Request, env: Env): Promise<Response> {

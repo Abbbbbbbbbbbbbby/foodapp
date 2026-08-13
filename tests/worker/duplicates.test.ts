@@ -57,6 +57,27 @@ describe('mergeFamilies', () => {
     ).first<{ changes: string }>();
     expect(audit).not.toBeNull();
     expect(JSON.parse(audit!.changes).merged_from.id).toBe('fam-drop');
+    // Family-ID alias written: offline directories cache the discarded id,
+    // and replayed visits must resolve to the survivor.
+    const alias = await env.DB.prepare(
+      `SELECT target_id FROM merged_family_ids WHERE old_id = 'fam-drop'`
+    ).first<{ target_id: string }>();
+    expect(alias!.target_id).toBe('fam-keep');
+  });
+
+  it('chained merges leave every old family id pointing at the final survivor', async () => {
+    await insertFamily('fam-a', 'Chain A', '4805552221');
+    await insertFamily('fam-b', 'Chain B', '4805552221');
+    await insertFamily('fam-c', 'Chain C', '4805552221');
+    await insertFlag('flag-ab', 'fam-b', 'fam-a');
+    await mergeFamilies(env.DB, 'fam-b', 'fam-a', USER_ID, 'flag-ab');
+    await insertFlag('flag-bc', 'fam-c', 'fam-b');
+    await mergeFamilies(env.DB, 'fam-c', 'fam-b', USER_ID, 'flag-bc');
+
+    const a = await env.DB.prepare(`SELECT target_id FROM merged_family_ids WHERE old_id = 'fam-a'`).first<{ target_id: string }>();
+    const b = await env.DB.prepare(`SELECT target_id FROM merged_family_ids WHERE old_id = 'fam-b'`).first<{ target_id: string }>();
+    expect(a!.target_id).toBe('fam-c'); // A→B retargeted when B merged into C
+    expect(b!.target_id).toBe('fam-c');
   });
 
   it('moves visits preserving bag_received and idempotency_key', async () => {

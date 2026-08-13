@@ -1,50 +1,7 @@
 import type { Family, Visit, NewFamily, NewVisit } from './schema';
-
-// Two-row DP with an optional distance bound. When `max` is given, returns
-// max + 1 as soon as the distance provably exceeds it (length difference
-// short-circuit + per-row early exit) — the search path runs this against
-// every stored name per request, so allocation and wasted rows matter for
-// Workers CPU-time limits.
-export function levenshtein(a: string, b: string, max = Infinity): number {
-  const m = a.length, n = b.length;
-  if (Math.abs(m - n) > max) return max + 1;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  let prev = new Array<number>(n + 1);
-  let curr = new Array<number>(n + 1);
-  for (let j = 0; j <= n; j++) prev[j] = j;
-  for (let i = 1; i <= m; i++) {
-    curr[0] = i;
-    let rowMin = curr[0];
-    for (let j = 1; j <= n; j++) {
-      curr[j] = a[i - 1] === b[j - 1]
-        ? prev[j - 1]
-        : 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
-      if (curr[j] < rowMin) rowMin = curr[j];
-    }
-    if (rowMin > max) return max + 1;
-    const swap = prev; prev = curr; curr = swap;
-  }
-  return prev[n] > max ? max + 1 : prev[n];
-}
-
-// Canonical form: exactly 10 digits. Strips a leading country code 1 from
-// 11-digit numbers. Returns null for anything else (rejects 7–9 digit and
-// 12+ digit inputs rather than silently accepting them, so the Twilio `To`
-// field is always valid as +1<10digits>).
-export function normalizePhone(phone: string | null | undefined): string | null {
-  if (!phone) return null;
-  const digits = phone.replace(/\D/g, '');
-  if (digits.length === 11 && digits[0] === '1') return digits.slice(1);
-  if (digits.length === 10) return digits;
-  return null;
-}
-
-// Lowercase + strip combining marks so LIKE searches match accented names.
-// Stored in name_normalized column; also applied to the query prefix before binding.
-export function normalizeName(s: string): string {
-  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-}
+import { levenshtein, normalizeName, normalizePhone, rankName, compareRank } from '../shared/fuzzy';
+// Re-exported: routes and tests import these from db.ts.
+export { levenshtein, normalizeName, normalizePhone };
 
 // D1 stores booleans as 0/1 integers; convert them back to JS booleans on
 // every read path so callers can use strict comparisons safely.
@@ -197,51 +154,29 @@ export async function searchFamilies(
     const token = name.trim().split(/\s+/)[0];
     const normToken = normalizeName(token);
     const normFull = normalizeName(name.trim());
-    const tokenThreshold = normToken.length <= 4 ? 2 : 3;
-    const fullThreshold = normFull.length <= 4 ? 2 : 3;
 
     // Levenshtein over EVERY stored name, no SQL prefilter. Earlier versions
     // prefiltered with LIKE needles (prefix, then bigram variants), and every
     // finite needle set left some legitimate one-edit typo unreachable
     // ('Msith', then 'Sxith'). The contract is "matches within edit distance
     // N are found" — the only way to guarantee it is to score every name.
-    // The dataset is a few thousand rows and this first pass pulls only
-    // id + normalized name, so the scan stays cheap; full rows are fetched
-    // afterward for just the matches.
+    // The matching/tier logic itself lives in shared/fuzzy.ts because the
+    // PWA's offline directory must behave IDENTICALLY. The dataset is a few
+    // thousand rows and this first pass pulls only id + normalized name, so
+    // the scan stays cheap; full rows are fetched afterward for the matches.
     const allNames = await db.prepare(
       `SELECT id, COALESCE(name_normalized, LOWER(name)) AS norm FROM families`
     ).all<{ id: string; norm: string }>();
 
-    const matches: { id: string; tier: number; minDist: number; fullDist: number }[] = [];
+    const matches: ({ id: string } & import('../shared/fuzzy').FuzzyRank)[] = [];
     for (const r of allNames.results ?? []) {
-      // Match against EVERY token of the stored name, so a last-name
-      // search finds full-name records. Distances are bounded: past the
-      // threshold the exact value never matters, so stop computing.
-      let tokenDist = Infinity;
-      for (const t of r.norm.split(/\s+/)) {
-        const d = levenshtein(t, normToken, tokenThreshold);
-        if (d < tokenDist) tokenDist = d;
-        if (tokenDist === 0) break;
-      }
-      // Also score the WHOLE query against the WHOLE stored name: a
-      // multi-token query ('Maria Target') must rank its exact/near-exact
-      // full match above the crowd of families sharing the first token.
-      const fullDist = levenshtein(r.norm, normFull, fullThreshold);
-      if (tokenDist <= tokenThreshold || fullDist <= fullThreshold) {
-        // Explicit tiers, because neither distance alone ranks honestly:
-        // fullDist-primary buries exact SURNAME hits under short-name junk
-        // ('Maria Cruz' outranked 'Guadalupe Garcia' for query 'garcia');
-        // tokenDist-primary would bury exact FULL matches under every
-        // family sharing the first token.
-        //   0 = exact whole-name match, 1 = exact token match, 2 = fuzzy
-        const tier = fullDist === 0 ? 0 : tokenDist === 0 ? 1 : 2;
-        matches.push({ id: r.id, tier, minDist: Math.min(tokenDist, fullDist), fullDist });
-      }
+      const rank = rankName(r.norm, normToken, normFull);
+      if (rank) matches.push({ id: r.id, ...rank });
     }
     // Rank BEFORE any cap: exact tiers first, then closest by whichever
     // metric matched. 270 near-miss 'Smath' rows must never crowd out an
     // exact-surname 'Alexandria Verylongname Smith'.
-    matches.sort((a, b) => (a.tier - b.tier) || (a.minDist - b.minDist) || (a.fullDist - b.fullDist));
+    matches.sort(compareRank);
     // Fetch details for ALL ranked matches up to a response ceiling, in
     // chunks under D1's per-statement bind-parameter limit. The ceiling only
     // trims degenerate 1-2 char queries, and ranking guarantees anything it

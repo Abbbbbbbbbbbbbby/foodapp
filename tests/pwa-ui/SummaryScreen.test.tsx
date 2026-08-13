@@ -11,8 +11,9 @@ vi.mock('../../src/pwa/lib/api', () => ({
   apiWithToken: vi.fn(() => pinned),
   ApiError: class ApiError extends Error { constructor(public status: number, message: string) { super(message); } },
 }));
+const authState = vi.hoisted(() => ({ userId: 'u1' }));
 vi.mock('../../src/pwa/store/auth', () => ({
-  getAuth: () => ({ token: 'tok', user: { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' } }),
+  getAuth: () => ({ token: 'tok', user: { id: authState.userId, name: 'Vol', phone: '4805550001', role: 'volunteer' } }),
 }));
 vi.mock('../../src/pwa/lib/offline', () => ({
   setItemBag: vi.fn(),
@@ -28,7 +29,22 @@ const fam = (over: Partial<SummaryFamily>): SummaryFamily => ({
 });
 
 describe('SummaryScreen bag picklist', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); authState.userId = 'u1'; });
+
+  it('refuses to save bags when the signed-in account changed after mount', async () => {
+    const user = userEvent.setup();
+    render(<SummaryScreen families={[fam({ id: 'a', name: 'Garcia' })]} onNext={() => {}} />);
+    await user.click(screen.getByRole('checkbox'));
+    // Garcia stays pre-checked — the save has real work to refuse.
+
+    // Cross-tab switch between mount and the save click.
+    authState.userId = 'u2';
+    await user.click(screen.getByRole('button', { name: /Save bags/ }));
+
+    expect(await screen.findByText(/account changed — no bags were marked/)).toBeInTheDocument();
+    expect(pinned.patch).not.toHaveBeenCalled();
+    expect(setItemBag).not.toHaveBeenCalled();
+  });
 
   it('reveals the per-family picklist behind the bilingual bag question', async () => {
     const user = userEvent.setup();

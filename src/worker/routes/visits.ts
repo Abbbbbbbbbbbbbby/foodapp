@@ -35,8 +35,24 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
   }
   if (!body.family_id) return Response.json({ error: 'family_id is required' }, { status: 400 });
   if (!body.visit_date) return Response.json({ error: 'visit_date is required' }, { status: 400 });
+  // Resolve the family BEFORE inserting: offline clients replay visits
+  // against cached family ids, and a merge/delete since then would hit a
+  // missing FK — a 500 the client retries forever. A merged id follows its
+  // alias to the survivor; a genuinely gone family is a permanent 404 the
+  // client dead-letters recoverably.
+  let familyId = body.family_id;
+  const famExists = await env.DB.prepare(`SELECT 1 FROM families WHERE id = ?`).bind(familyId).first();
+  if (!famExists) {
+    const alias = await env.DB.prepare(
+      `SELECT m.target_id FROM merged_family_ids m JOIN families f ON f.id = m.target_id WHERE m.old_id = ?`
+    ).bind(familyId).first<{ target_id: string }>();
+    if (!alias) {
+      return Response.json({ error: 'Family no longer exists — it may have been merged or removed. Re-search and re-enter this visit.' }, { status: 404 });
+    }
+    familyId = alias.target_id;
+  }
   const data: NewVisit = {
-    family_id: body.family_id,
+    family_id: familyId,
     visit_date: body.visit_date,
     picked_up_by_phone: body.picked_up_by_phone ?? null,
     volunteer_id: ctx.userId,

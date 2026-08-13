@@ -1,3 +1,6 @@
+import { rankName, compareRank, normalizeName, normalizePhone } from '../../shared/fuzzy';
+import type { FuzzyRank } from '../../shared/fuzzy';
+
 const DB_NAME = 'foodapp_offline';
 const DB_VERSION = 3;
 const STORE = 'pending';
@@ -158,17 +161,11 @@ export async function getPendingCount(): Promise<number> {
 export interface DirectoryFamily {
   id: string;
   name: string;
-  phone: string | null;
+  name_normalized: string;   // server-normalized: iOS 9 can't fold accents
+  phone: string | null;      // already normalized to 10 digits server-side
+  proxy_phones: string[];    // designated pickup people's numbers
   num_people: number | null;
   last_visit_date: string | null;
-}
-
-// Accent-fold + lowercase, feature-tested: String.normalize is missing on
-// the iOS 9 target and core-js does not polyfill unicode normalization.
-function normalizeClient(s: string): string {
-  return typeof s.normalize === 'function'
-    ? s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
-    : s.toLowerCase();
 }
 
 // Full replace: the server response is the complete roster.
@@ -184,10 +181,36 @@ export async function cacheDirectory(families: DirectoryFamily[]): Promise<void>
   });
 }
 
-// Substring match on normalized name or digits-only phone — deliberately
-// simpler than the server's edit-distance search: it runs on old hardware
-// and a miss still falls back to "register as new", which is exactly what
-// happened on EVERY offline lookup before the cache existed.
+// Merge-aware upsert for families learned OUTSIDE a full refresh (a family
+// just registered online in this session must be findable if the network
+// dies a minute later). Merge, don't replace: an incoming record without
+// proxy data must not wipe proxy phones a full refresh delivered earlier.
+export async function upsertDirectoryFamilies(families: DirectoryFamily[]): Promise<void> {
+  if (families.length === 0) return;
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DIR_STORE, 'readwrite');
+    const store = tx.objectStore(DIR_STORE);
+    for (const f of families) {
+      const getReq = store.get(f.id);
+      getReq.onsuccess = () => {
+        const existing = getReq.result as DirectoryFamily | undefined;
+        store.put(existing
+          ? { ...existing, ...f, proxy_phones: f.proxy_phones.length ? f.proxy_phones : existing.proxy_phones }
+          : f);
+      };
+    }
+    tx.oncomplete = () => resolve();
+    rejectOnFailure(tx, reject);
+  });
+}
+
+// The SAME matching contract as the server's search (shared/fuzzy.ts): a
+// weaker offline matcher was a duplicate-family generator — 'Sxith' found
+// Smith online but not offline, and a '+1 480…' query missed the stored
+// 10-digit phone. Stored names arrive pre-normalized from the server; only
+// the QUERY is normalized here (with the shared accent-map fallback for the
+// no-String.normalize iOS 9 target).
 export async function searchDirectory(name: string, phone: string | null): Promise<DirectoryFamily[]> {
   const db = await openDb();
   const all: DirectoryFamily[] = await new Promise((resolve, reject) => {
@@ -201,15 +224,28 @@ export async function searchDirectory(name: string, phone: string | null): Promi
     };
     req.onerror = () => reject(req.error);
   });
-  const needle = normalizeClient(name.trim());
-  const phoneDigits = (phone ?? '').replace(/\D/g, '');
-  const hits = all.filter(f =>
-    (needle.length >= 2 && normalizeClient(f.name).includes(needle)) ||
-    (phoneDigits.length >= 4 && (f.phone ?? '').includes(phoneDigits))
-  );
-  hits.sort((a, b) => (b.last_visit_date ?? '').localeCompare(a.last_visit_date ?? ''));
-  return hits.slice(0, 20);
+
+  const normQueryPhone = normalizePhone(phone);
+  const trimmed = name.trim();
+  const scored: { f: DirectoryFamily; phoneHit: boolean; rank: FuzzyRank | null }[] = [];
+  for (const f of all) {
+    const phoneHit = normQueryPhone !== null &&
+      (f.phone === normQueryPhone || (f.proxy_phones ?? []).indexOf(normQueryPhone) !== -1);
+    let rank: FuzzyRank | null = null;
+    if (trimmed.length >= 2) {
+      const normToken = normalizeName(trimmed.split(/\s+/)[0]);
+      const normFull = normalizeName(trimmed);
+      rank = rankName(f.name_normalized ?? normalizeName(f.name), normToken, normFull);
+    }
+    if (phoneHit || rank) scored.push({ f, phoneHit, rank });
+  }
+  scored.sort((a, b) =>
+    (Number(b.phoneHit) - Number(a.phoneHit))
+    || compareRank(a.rank ?? WORST_RANK, b.rank ?? WORST_RANK)
+    || (b.f.last_visit_date ?? '').localeCompare(a.f.last_visit_date ?? ''));
+  return scored.slice(0, 20).map(s => s.f);
 }
+const WORST_RANK: FuzzyRank = { tier: 3, minDist: 99, fullDist: 99 };
 
 // Recovery for held entries whose owner can no longer sign in (deactivated
 // or deleted account): explicitly re-attribute every foreign pending item to

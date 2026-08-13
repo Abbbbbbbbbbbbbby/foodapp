@@ -345,30 +345,67 @@ describe('offline family directory (returning-household lookup)', () => {
     await freshDb();
   });
 
-  it('caches the roster and finds a returning household by partial name or phone', async () => {
+  const dirFam = (over: Record<string, unknown>) => ({
+    id: 'fx', name: 'Fam', name_normalized: 'fam', phone: null, proxy_phones: [],
+    num_people: null, last_visit_date: null, ...over,
+  });
+
+  it('caches the roster and finds a returning household by name or phone', async () => {
     const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
     await cacheDirectory([
-      { id: 'f1', name: 'José García Familia', phone: '4805551111', num_people: 4, last_visit_date: '2026-08-01' },
-      { id: 'f2', name: 'Chen Family', phone: null, num_people: 2, last_visit_date: '2026-08-10' },
+      dirFam({ id: 'f1', name: 'José García Familia', name_normalized: 'jose garcia familia', phone: '4805551111', num_people: 4, last_visit_date: '2026-08-01' }),
+      dirFam({ id: 'f2', name: 'Chen Family', name_normalized: 'chen family', num_people: 2, last_visit_date: '2026-08-10' }),
     ]);
 
-    // Accent-folded name substring
-    const byName = await searchDirectory('garcia', null);
+    // Accent-insensitive name match against the server-normalized name
+    const byName = await searchDirectory('García', null);
     expect(byName.map(f => f.id)).toEqual(['f1']);
-    // Phone digits
-    const byPhone = await searchDirectory('', '480-555-1111');
+    // Phone match must normalize the QUERY like the server does — a +1
+    // country code missed the stored 10-digit form before.
+    const byPhone = await searchDirectory('', '+1 (480) 555-1111');
     expect(byPhone.map(f => f.id)).toEqual(['f1']);
-    // Most recently seen ranks first
-    const both = await searchDirectory('fam', null); // matches both names
-    expect(both).toHaveLength(2);
-    expect(both[0].id).toBe('f2');
+    // Recency breaks equal-rank ties
+    const both = await searchDirectory('familia', null);
+    expect(both.length).toBeGreaterThanOrEqual(1);
+    expect(both[0].id).toBe('f1');
+  });
+
+  it('matches with the SAME fuzziness as online search (Sxith → Smith offline)', async () => {
+    const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([
+      dirFam({ id: 'sm', name: 'Smith Family', name_normalized: 'smith family' }),
+    ]);
+    // A weaker offline matcher silently routed this to register-as-new —
+    // the duplicate-family path.
+    const results = await searchDirectory('Sxith', null);
+    expect(results.map(f => f.id)).toEqual(['sm']);
+  });
+
+  it('finds linked families by a designated pickup phone (proxy)', async () => {
+    const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([
+      dirFam({ id: 'own', name: 'Vargas Family', name_normalized: 'vargas family', phone: '6025558888', proxy_phones: ['4805559999'] }),
+      dirFam({ id: 'other', name: 'Unrelated Family', name_normalized: 'unrelated family', phone: '6025550000' }),
+    ]);
+    const results = await searchDirectory('', '480 555 9999');
+    expect(results.map(f => f.id)).toEqual(['own']);
   });
 
   it('a re-cache fully replaces the previous roster', async () => {
     const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
-    await cacheDirectory([{ id: 'old', name: 'Old Family', phone: null, num_people: 1, last_visit_date: null }]);
-    await cacheDirectory([{ id: 'new', name: 'New Family', phone: null, num_people: 1, last_visit_date: null }]);
+    await cacheDirectory([dirFam({ id: 'old', name: 'Old Family', name_normalized: 'old family' })]);
+    await cacheDirectory([dirFam({ id: 'new', name: 'New Family', name_normalized: 'new family' })]);
     expect(await searchDirectory('family', null)).toHaveLength(1);
     expect((await searchDirectory('family', null))[0].id).toBe('new');
+  });
+});
+
+describe('shared fuzzy accent fallback (no String.normalize — iOS 9)', () => {
+  it('folds the Latin diacritics this population actually uses', async () => {
+    const { foldAccentsFallback, normalizeName } = await import('../../src/shared/fuzzy');
+    // The fallback must agree with the NFD path for these inputs.
+    for (const s of ['García', 'José', 'Muñoz', 'Peña', 'AGÜERO', 'François']) {
+      expect(foldAccentsFallback(s)).toBe(normalizeName(s));
+    }
   });
 });

@@ -35,8 +35,12 @@ test('offline check-in queues family, visit, and bag; reconnect syncs them to th
   await page.getByRole('textbox', { name: /Phone|Teléfono/i }).fill(PHONE);
   await page.getByRole('button', { name: /Create account|Crear cuenta/i }).click();
   const code = await otpFor(page, PHONE);
-  await page.getByRole('textbox').first().fill(code);
-  await page.getByRole('button', { name: /Verify|Verificar|Sign in|Entrar/i }).first().click();
+  // Wait for the verify VIEW before filling: filling 'the first textbox'
+  // during the register→verify transition could land the code in the
+  // register form's name field, leaving Verify disabled forever.
+  await page.getByText(/Enter code|Ingresar código/).waitFor();
+  await page.getByRole('textbox', { name: /6-digit code|Código/ }).fill(code);
+  await page.getByRole('button', { name: /Verify|Verificar/i }).click();
   await page.getByRole('button', { name: /Enter Data|Ingresar/i }).first().click();
 
   // ── Go OFFLINE before anything is entered ──
@@ -46,8 +50,15 @@ test('offline check-in queues family, visit, and bag; reconnect syncs them to th
   await page.getByRole('textbox').first().fill(familyName);
   await page.getByRole('button', { name: /Search \/ Buscar/ }).click();
 
-  // Search fails on the dead network; the offline continue path opens the wizard.
-  await page.getByRole('button', { name: /continue and register as new/i }).click();
+  // Search fails on the dead network. With an EMPTY cache the offline
+  // continue button appears; with earlier runs' E2E families in the cached
+  // roster, the offline results screen appears instead — take its
+  // register-as-new. Both are correct offline entries into the wizard.
+  const offlineContinue = page.getByRole('button', { name: /continue and register as new/i });
+  const cachedRegisterNew = page.getByRole('button', { name: /Register as new|Registrar como nuevo/i });
+  await offlineContinue.or(cachedRegisterNew).first().waitFor();
+  if (await cachedRegisterNew.isVisible()) await cachedRegisterNew.click();
+  else await offlineContinue.click();
   await page.getByRole('button', { name: /^1$/ }).click();
   await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
 
@@ -112,8 +123,12 @@ test('a RETURNING household checked in offline resolves to its existing record �
   await page.getByRole('textbox', { name: /Phone|Teléfono/i }).fill(phone);
   await page.getByRole('button', { name: /Create account|Crear cuenta/i }).click();
   const code = await otpFor(page, phone);
-  await page.getByRole('textbox').first().fill(code);
-  await page.getByRole('button', { name: /Verify|Verificar|Sign in|Entrar/i }).first().click();
+  // Wait for the verify VIEW before filling: filling 'the first textbox'
+  // during the register→verify transition could land the code in the
+  // register form's name field, leaving Verify disabled forever.
+  await page.getByText(/Enter code|Ingresar código/).waitFor();
+  await page.getByRole('textbox', { name: /6-digit code|Código/ }).fill(code);
+  await page.getByRole('button', { name: /Verify|Verificar/i }).click();
 
   // ── First check-in ONLINE (creates the household) ──
   const familyName = `E2E Returning Family ${Date.now().toString().slice(-6)}`;
@@ -140,15 +155,14 @@ test('a RETURNING household checked in offline resolves to its existing record �
   await page.getByRole('button', { name: /^No$/ }).first().click();
   await page.getByRole('button', { name: /^No$/ }).first().click();
   await expect(page.getByText(/Summary \/ Resumen/)).toBeVisible();
+  // Finish the check-in like a real volunteer: back to the lookup.
+  await page.getByRole('button', { name: /Next car/ }).click();
 
-  // ── Reload while ONLINE: Layout remount refreshes the offline directory
-  //    so it now includes the family created above. ──
-  await page.reload();
-  await page.getByRole('button', { name: /Enter Data|Ingresar/i }).first().waitFor();
-
-  // ── OUTAGE. The same household returns (e.g. second distribution line). ──
+  // ── OUTAGE, SAME SESSION — no reload. The family created a moment ago
+  //    must already be in the offline directory (create-time upsert); an
+  //    earlier version only refreshed the cache at mount, which this test
+  //    masked with a reload. ──
   await context.setOffline(true);
-  await page.getByRole('button', { name: /Enter Data|Ingresar/i }).first().click();
   await page.getByRole('textbox').first().fill(familyName);
   await page.getByRole('button', { name: /Search \/ Buscar/ }).click();
 
