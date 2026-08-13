@@ -22,6 +22,7 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   // the mock surface must match the real module or deeper flows throw.
   setItemBag: vi.fn(async () => undefined),
   searchDirectory: vi.fn(async () => []),
+  directoryPickup: vi.fn(async () => ({ own: null, proxy: [] })),
   upsertDirectoryFamilies: vi.fn(async () => undefined),
 }));
 
@@ -83,6 +84,31 @@ describe('EnterPage lookup error routing', () => {
     expect(await screen.findByText(/last synced family list/)).toBeInTheDocument();
     expect(screen.getByText(/Garcia Familia/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /continue and register as new/i })).not.toBeInTheDocument();
+  });
+
+  it('an offline PHONE search keeps pickup semantics: own + proxy families together', async () => {
+    vi.mocked(api.get).mockRejectedValue(new TypeError('Failed to fetch'));
+    const { directoryPickup } = await import('../../src/pwa/lib/offline');
+    vi.mocked(directoryPickup).mockResolvedValue({
+      own: { id: 'own', name: 'Mendez Family', name_normalized: 'mendez family', phone: '4805550001', proxy_phones: [], num_people: 3, last_visit_date: null },
+      proxy: [
+        { id: 'p1', name: 'Vargas Family', name_normalized: 'vargas family', phone: '6025550002', proxy_phones: ['4805550001'], num_people: 5, last_visit_date: null },
+        { id: 'p2', name: 'Cruz Family', name_normalized: 'cruz family', phone: '6025550003', proxy_phones: ['4805550001'], num_people: 2, last_visit_date: null },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<EnterPage />);
+    const inputs = screen.getAllByRole('textbox');
+    await user.type(inputs[1], '4805550001'); // phone field
+    await user.click(screen.getByRole('button', { name: /Search \/ Buscar/ }));
+
+    // The family-select screen — the same grouping the online pickup flow
+    // shows — with ALL linked families, not flat name results.
+    expect(await screen.findByText(/Select families|Seleccionar familias/)).toBeInTheDocument();
+    expect(screen.getByText('Mendez Family')).toBeInTheDocument();
+    expect(screen.getByText('Vargas Family')).toBeInTheDocument();
+    expect(screen.getByText('Cruz Family')).toBeInTheDocument();
+    expect(screen.getByText(/last synced family list/)).toBeInTheDocument();
   });
 
   it('a server rejection (not connectivity) does NOT offer the offline path', async () => {

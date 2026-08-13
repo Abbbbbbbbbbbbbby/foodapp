@@ -168,8 +168,20 @@ export interface DirectoryFamily {
   last_visit_date: string | null;
 }
 
-// Full replace: the server response is the complete roster.
-export async function cacheDirectory(families: DirectoryFamily[]): Promise<void> {
+// Refresh ordering: full refreshes race each other (reconnect fires one
+// directly and another via the flush) and race create-time upserts. A stale
+// response committing a clear-and-replace would erase newer data, so every
+// write claims an epoch and a full refresh only commits if nothing newer
+// claimed one while its response was in flight.
+let directoryEpoch = 0;
+export function nextDirectoryEpoch(): number {
+  return ++directoryEpoch;
+}
+
+// Full replace: the server response is the complete roster. Callers pass the
+// epoch they claimed BEFORE fetching; a superseded response is dropped.
+export async function cacheDirectory(families: DirectoryFamily[], epoch?: number): Promise<void> {
+  if (epoch !== undefined && epoch !== directoryEpoch) return; // stale response — newer data exists
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(DIR_STORE, 'readwrite');
@@ -181,12 +193,52 @@ export async function cacheDirectory(families: DirectoryFamily[]): Promise<void>
   });
 }
 
+// Mutation invalidation: any online family/proxy mutation (edit, delete,
+// proxy add, import, merge) calls this so Layout re-pulls the roster —
+// otherwise offline lookup serves obsolete phones/names until the next
+// reconnect or flush.
+export function markDirectoryStale(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('directorystale'));
+  }
+}
+
+// Offline analog of GET /api/families/pickup: partition the cached roster
+// into the searcher's OWN family and the families that designated this
+// phone as a pickup proxy — flattening these into plain results lost the
+// proxy grouping and the pickup attribution.
+export async function directoryPickup(phone: string): Promise<{ own: DirectoryFamily | null; proxy: DirectoryFamily[] }> {
+  const normQueryPhone = normalizePhone(phone);
+  if (!normQueryPhone) return { own: null, proxy: [] };
+  const all = await readAllDirectory();
+  const own = all.find(f => f.phone === normQueryPhone) ?? null;
+  const proxy = all.filter(f => (f.proxy_phones ?? []).indexOf(normQueryPhone) !== -1 && f.id !== own?.id);
+  proxy.sort((a, b) => (b.last_visit_date ?? '').localeCompare(a.last_visit_date ?? ''));
+  return { own, proxy };
+}
+
+function readAllDirectory(): Promise<DirectoryFamily[]> {
+  return openDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(DIR_STORE, 'readonly');
+    const items: DirectoryFamily[] = [];
+    const req = tx.objectStore(DIR_STORE).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (cursor) { items.push(cursor.value as DirectoryFamily); cursor.continue(); }
+      else resolve(items);
+    };
+    req.onerror = () => reject(req.error);
+  }));
+}
+
 // Merge-aware upsert for families learned OUTSIDE a full refresh (a family
 // just registered online in this session must be findable if the network
 // dies a minute later). Merge, don't replace: an incoming record without
 // proxy data must not wipe proxy phones a full refresh delivered earlier.
 export async function upsertDirectoryFamilies(families: DirectoryFamily[]): Promise<void> {
   if (families.length === 0) return;
+  // Newer data than any refresh already in flight: invalidate them.
+  nextDirectoryEpoch();
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(DIR_STORE, 'readwrite');
@@ -212,19 +264,7 @@ export async function upsertDirectoryFamilies(families: DirectoryFamily[]): Prom
 // the QUERY is normalized here (with the shared accent-map fallback for the
 // no-String.normalize iOS 9 target).
 export async function searchDirectory(name: string, phone: string | null): Promise<DirectoryFamily[]> {
-  const db = await openDb();
-  const all: DirectoryFamily[] = await new Promise((resolve, reject) => {
-    const tx = db.transaction(DIR_STORE, 'readonly');
-    const items: DirectoryFamily[] = [];
-    const req = tx.objectStore(DIR_STORE).openCursor();
-    req.onsuccess = (e) => {
-      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
-      if (cursor) { items.push(cursor.value as DirectoryFamily); cursor.continue(); }
-      else resolve(items);
-    };
-    req.onerror = () => reject(req.error);
-  });
-
+  const all = await readAllDirectory();
   const normQueryPhone = normalizePhone(phone);
   const trimmed = name.trim();
   const scored: { f: DirectoryFamily; phoneHit: boolean; rank: FuzzyRank | null }[] = [];

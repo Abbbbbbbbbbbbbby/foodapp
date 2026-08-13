@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, apiWithToken, ApiError } from '../lib/api';
-import { queueItem, generateUUID, searchDirectory, upsertDirectoryFamilies } from '../lib/offline';
+import { queueItem, generateUUID, searchDirectory, directoryPickup, upsertDirectoryFamilies } from '../lib/offline';
 import { normalizeName, normalizePhone } from '../../shared/fuzzy';
 import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
@@ -19,7 +19,7 @@ type EnterView =
   | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null; offline?: boolean }
   | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
   | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra: FamilySearchResult[]; selectedIds: string[] } }
-  | { type: 'log-visit'; families: FamilySearchResult[]; current: number }
+  | { type: 'log-visit'; families: FamilySearchResult[]; current: number; pickupPhone: string | null }
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
   | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
   | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
@@ -86,6 +86,23 @@ export default function EnterPage() {
         // family directory: a returning household must resolve to its
         // EXISTING record (offline register-as-new mints a duplicate).
         try {
+          // Phone searches keep PICKUP semantics offline: the searcher's own
+          // family plus every family that designated this phone, presented
+          // together — with the searched phone preserved for the visit.
+          if (phone) {
+            const pickup = await directoryPickup(phone);
+            if (pickup.own || pickup.proxy.length > 0) {
+              setView({
+                type: 'family-select',
+                own: (pickup.own ?? null) as unknown as FamilySearchResult | null,
+                proxy: pickup.proxy as unknown as FamilySearchResult[],
+                pickupName: pickup.own?.name ?? name,
+                pickupPhone: phone,
+                notice: 'No connection — from the last synced family list. / Sin conexión — de la última lista sincronizada.',
+              });
+              return;
+            }
+          }
           const cached = await searchDirectory(name, phone);
           if (cached.length > 0) {
             setView({
@@ -173,16 +190,24 @@ export default function EnterPage() {
   function handleFamilySelectConfirm(families: FamilySearchResult[]) {
     if (families.length === 0) return;
     pendingVisitIds.current = [];
-    setView({ type: 'log-visit', families, current: 0 });
+    // Carry the SEARCHED phone through to visit creation: when a proxy is
+    // picking up, the visit must record who picked up, not lose it.
+    const pickupPhone = view.type === 'family-select' ? view.pickupPhone : null;
+    setView({ type: 'log-visit', families, current: 0, pickupPhone });
   }
 
   async function handleLogVisit(familyId: string) {
     if (view.type !== 'log-visit') return;
     const { families, current } = view;
     const visitIdemKey = generateUUID();
+    const family = families.find(f => f.id === familyId);
+    // A pickup by someone other than the family's own number is a PROXY
+    // pickup — record who actually picked up.
+    const pickedUpBy = view.pickupPhone && view.pickupPhone !== family?.phone ? view.pickupPhone : null;
     const visitPayload = {
       family_id: familyId,
       visit_date: localDateString(),
+      picked_up_by_phone: pickedUpBy,
       idempotency_key: visitIdemKey,
     };
     let visitId: string | null = null;
@@ -206,7 +231,7 @@ export default function EnterPage() {
       }
       // Network error — queue with the same idempotency key and continue
       try {
-        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey, auth.user.id);
+        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date, picked_up_by_phone: pickedUpBy } }, visitIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -214,7 +239,7 @@ export default function EnterPage() {
     }
     pendingVisitIds.current.push({ visitId, queueId, visitKey: visitIdemKey });
     if (current + 1 < families.length) {
-      setView({ type: 'log-visit', families, current: current + 1 });
+      setView({ type: 'log-visit', families, current: current + 1, pickupPhone: view.pickupPhone });
     } else {
       const visitRefs = pendingVisitIds.current;
       pendingVisitIds.current = [];

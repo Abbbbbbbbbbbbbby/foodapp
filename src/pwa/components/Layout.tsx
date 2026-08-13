@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, getAuth, clearAuth, getToken, AUTH_STORAGE_KEY } from '../store/auth';
-import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters, adoptForeignItems, cacheDirectory } from '../lib/offline';
+import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters, adoptForeignItems, cacheDirectory, nextDirectoryEpoch } from '../lib/offline';
 import type { DirectoryFamily } from '../lib/offline';
 import type { DeadLetterEntry } from '../lib/offline';
 import { apiWithToken } from '../lib/api';
@@ -68,11 +68,24 @@ export default function Layout() {
     if (navigator.onLine === false) return;
     const auth = getAuth();
     if (!auth) return;
+    // Claim the epoch BEFORE fetching: if newer data (an upsert, a later
+    // refresh) lands while this response is in flight, this clear-and-
+    // replace is dropped instead of erasing it.
+    const epoch = nextDirectoryEpoch();
     apiWithToken(auth.token).get<{ families: DirectoryFamily[] }>('/api/families/directory')
-      .then(r => cacheDirectory(r.families))
+      .then(r => cacheDirectory(r.families, epoch))
       .catch(err => console.warn('family directory refresh failed (offline lookup will use the last cached copy):', err));
   };
   useEffect(() => { refreshDirectory(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    // Online mutations (proxy add, edits, deletes, merges, imports) mark the
+    // directory stale — re-pull so offline lookup never serves data the user
+    // just changed.
+    const onStale = () => refreshDirectory();
+    window.addEventListener('directorystale', onStale);
+    return () => window.removeEventListener('directorystale', onStale);
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const overlayRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {

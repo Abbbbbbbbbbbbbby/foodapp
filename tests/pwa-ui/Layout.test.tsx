@@ -10,6 +10,7 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   deleteDeadLetters: vi.fn(async () => undefined),
   adoptForeignItems: vi.fn(async () => 0),
   cacheDirectory: vi.fn(async () => undefined),
+  nextDirectoryEpoch: vi.fn(() => 1),
 }));
 const authState = vi.hoisted(() => ({
   user: { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' } as
@@ -298,5 +299,25 @@ describe('Layout offline-capability notice (no service worker)', () => {
     vi.mocked(getDeadLetters).mockResolvedValue([]);
     renderLayout();
     expect(await screen.findByText(/keep this tab open during outages/)).toBeInTheDocument();
+  });
+});
+
+describe('Layout directory staleness listener', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authState.user = { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' };
+  });
+
+  it('an online mutation marking the directory stale triggers a re-pull', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    renderLayout();
+    await screen.findByText('HOME CONTENT');
+    const callsAfterMount = vi.mocked(apiWithToken).mock.calls.length;
+
+    await act(async () => {
+      window.dispatchEvent(new Event('directorystale'));
+    });
+    // A fresh pinned client (and directory GET) was created for the re-pull.
+    expect(vi.mocked(apiWithToken).mock.calls.length).toBeGreaterThan(callsAfterMount);
   });
 });

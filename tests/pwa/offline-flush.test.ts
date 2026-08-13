@@ -409,3 +409,63 @@ describe('shared fuzzy accent fallback (no String.normalize — iOS 9)', () => {
     }
   });
 });
+
+describe('directoryPickup — offline proxy semantics', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  const dirFam2 = (over: Record<string, unknown>) => ({
+    id: 'fx', name: 'Fam', name_normalized: 'fam', phone: null, proxy_phones: [],
+    num_people: null, last_visit_date: null, ...over,
+  });
+
+  it('partitions the roster into own family and the families that designated this phone', async () => {
+    const { cacheDirectory, directoryPickup } = await import('../../src/pwa/lib/offline');
+    // One pickup person (4805550001): their OWN family plus TWO families
+    // that designated them — all must be presented together, like online.
+    await cacheDirectory([
+      dirFam2({ id: 'own', name: 'Mendez Family', name_normalized: 'mendez family', phone: '4805550001' }),
+      dirFam2({ id: 'p1', name: 'Vargas Family', name_normalized: 'vargas family', phone: '6025550002', proxy_phones: ['4805550001'], last_visit_date: '2026-08-01' }),
+      dirFam2({ id: 'p2', name: 'Cruz Family', name_normalized: 'cruz family', phone: '6025550003', proxy_phones: ['4805550001'], last_visit_date: '2026-08-10' }),
+      dirFam2({ id: 'x', name: 'Unrelated Family', name_normalized: 'unrelated family', phone: '6025550004' }),
+    ]);
+
+    const pickup = await directoryPickup('+1 480 555 0001');
+    expect(pickup.own?.id).toBe('own');
+    expect(pickup.proxy.map(f => f.id)).toEqual(['p2', 'p1']); // both, recency-sorted
+  });
+
+  it('proxy-only phone (no own family) still resolves the linked families', async () => {
+    const { cacheDirectory, directoryPickup } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([
+      dirFam2({ id: 'p1', name: 'Vargas Family', name_normalized: 'vargas family', phone: '6025550002', proxy_phones: ['4805550009'] }),
+    ]);
+    const pickup = await directoryPickup('4805550009');
+    expect(pickup.own).toBeNull();
+    expect(pickup.proxy.map(f => f.id)).toEqual(['p1']);
+  });
+});
+
+describe('directory epoch — stale refresh responses cannot commit', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it('a refresh that started before an upsert is dropped instead of erasing it', async () => {
+    const { cacheDirectory, upsertDirectoryFamilies, searchDirectory, nextDirectoryEpoch } = await import('../../src/pwa/lib/offline');
+    const fam = { id: 'fresh', name: 'Fresh Family', name_normalized: 'fresh family', phone: null, proxy_phones: [], num_people: null, last_visit_date: null };
+
+    // A full refresh claims its epoch, then (while its response is in
+    // flight) a create-time upsert lands newer data…
+    const staleEpoch = nextDirectoryEpoch();
+    await upsertDirectoryFamilies([fam]);
+    // …so the stale clear-and-replace must be a no-op.
+    await cacheDirectory([], staleEpoch);
+    expect((await searchDirectory('fresh', null)).map(f => f.id)).toEqual(['fresh']);
+
+    // A refresh with a CURRENT epoch still commits.
+    await cacheDirectory([], nextDirectoryEpoch());
+    expect(await searchDirectory('fresh', null)).toHaveLength(0);
+  });
+});

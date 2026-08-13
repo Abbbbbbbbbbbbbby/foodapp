@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { markDirectoryStale } from '../lib/offline';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { getUser } from '../store/auth';
@@ -448,6 +449,7 @@ function FamilyCard({ family, role, onUpdated, onDeleted }: FamilyCardProps) {
     }
     try {
       await api.patch(`/api/records/families/${family.id}`, patch);
+      markDirectoryStale();
       onUpdated(family.id, draft);
       setEditing(false);
     } catch (e) {
@@ -457,6 +459,7 @@ function FamilyCard({ family, role, onUpdated, onDeleted }: FamilyCardProps) {
 
   async function doDelete() {
     await api.delete(`/api/records/families/${family.id}`);
+    markDirectoryStale();
     onDeleted(family.id);
   }
 
