@@ -181,8 +181,13 @@ export function nextDirectoryEpoch(): number {
 // Full replace: the server response is the complete roster. Callers pass the
 // epoch they claimed BEFORE fetching; a superseded response is dropped.
 export async function cacheDirectory(families: DirectoryFamily[], epoch?: number): Promise<void> {
-  if (epoch !== undefined && epoch !== directoryEpoch) return; // stale response — newer data exists
+  if (epoch !== undefined && epoch !== directoryEpoch) return; // fast path: already stale
   const db = await openDb();
+  // Re-check AFTER the await: a newer refresh/upsert can claim an epoch
+  // while IndexedDB is opening, and this clear-and-replace must not resume
+  // over it. Between here and issuing the writes there is no further yield,
+  // so the epoch cannot move again before the transaction is created.
+  if (epoch !== undefined && epoch !== directoryEpoch) return;
   return new Promise((resolve, reject) => {
     const tx = db.transaction(DIR_STORE, 'readwrite');
     const store = tx.objectStore(DIR_STORE);

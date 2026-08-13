@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, apiWithToken, ApiError } from '../lib/api';
 import { queueItem, generateUUID, searchDirectory, directoryPickup, upsertDirectoryFamilies, markDirectoryStale } from '../lib/offline';
+import type { DirectoryFamily } from '../lib/offline';
 import { normalizeName, normalizePhone } from '../../shared/fuzzy';
 import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
@@ -24,6 +25,25 @@ type EnterView =
   | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
   | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
   | { type: 'done'; families: SummaryFamily[]; error?: string };
+
+
+// Explicit, field-by-field lift of a cached directory row into the
+// FamilySearchResult contract the select/log-visit screens consume. Every
+// Family field is enumerated so the compiler flags this site when the
+// contract grows — a blanket cast would silently hand new fields undefined.
+function directoryToSearchResult(f: DirectoryFamily): FamilySearchResult {
+  return {
+    id: f.id, name: f.name, phone: f.phone, num_people: f.num_people,
+    last_visit_date: f.last_visit_date,
+    address: null, zip_code: null, date_of_birth: null, language: null,
+    ethnicity: null, hispanic: null, ami_bracket: null,
+    num_children_under_18: null, num_children_under_5: null,
+    num_with_diabetes: null, health_insurance: null, snap_benefits: null,
+    receives_texts: null, want_text_updates: null, id_confirmed: null,
+    bag_received: null, first_visit_date: null, created_by: null,
+    created_at: '', updated_at: '',
+  };
+}
 
 export default function EnterPage() {
   const [view, setView] = useState<EnterView>({ type: 'lookup' });
@@ -103,8 +123,8 @@ export default function EnterPage() {
             if (pickup.own || pickup.proxy.length > 0) {
               setView({
                 type: 'family-select',
-                own: (pickup.own ?? null) as unknown as FamilySearchResult | null,
-                proxy: pickup.proxy as unknown as FamilySearchResult[],
+                own: pickup.own ? directoryToSearchResult(pickup.own) : null,
+                proxy: pickup.proxy.map(directoryToSearchResult),
                 pickupName: pickup.own?.name ?? name,
                 pickupPhone: phone,
                 notice: 'No connection — from the last synced family list. / Sin conexión — de la última lista sincronizada.',
@@ -116,14 +136,23 @@ export default function EnterPage() {
           if (cached.length > 0) {
             setView({
               type: 'results', offline: true, searchName: name, searchPhone: phone,
-              results: cached as unknown as FamilySearchResult[],
+              results: cached.map(directoryToSearchResult),
             });
             return;
           }
         } catch (err) {
-          // Loud: a BROKEN cache must be distinguishable from an empty one —
-          // this path silently becomes the duplicate-family lane otherwise.
-          console.warn('offline directory lookup failed — falling back to register-as-new:', err);
+          // A BROKEN cache must visibly BLOCK offline registration: with the
+          // roster unreadable, "register as new" for a possibly-returning
+          // household is the duplicate-family lane. Do NOT offer it.
+          console.warn('offline directory lookup failed — blocking offline registration:', err);
+          const detail = err instanceof Error && err.message.includes('blocked by another tab')
+            ? ' Close other tabs of this app and retry.'
+            : '';
+          setError(
+            'No connection AND the offline family list is unreadable on this device — do not register families offline. Retry, or find a supervisor.' + detail +
+            ' / Sin conexión y la lista sin conexión no se puede leer — no registre familias. Reintente o busque a un supervisor.'
+          );
+          return;
         }
         setError('Network error. Check connection and try again.');
         setOfflineSearch({ name, phone });

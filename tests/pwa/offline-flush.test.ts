@@ -469,3 +469,31 @@ describe('directory epoch — stale refresh responses cannot commit', () => {
     expect(await searchDirectory('fresh', null)).toHaveLength(0);
   });
 });
+
+describe('directory epoch — mid-open race (round-11)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  // HONESTY NOTE: the dangerous interleave needs the stale refresh's
+  // IndexedDB open to resolve AFTER a newer write committed. fake-indexeddb
+  // resolves opens FIFO, so that inversion is not constructible through the
+  // public API here (a gated-open monkeypatch was attempted and could not
+  // beat the fake's dispatch internals). The post-open re-check in
+  // cacheDirectory is therefore verified by reasoning — no yield exists
+  // between the re-check and transaction creation, and same-store readwrite
+  // transactions execute in creation order — plus this convergence test,
+  // which pins that concurrent refresh+upsert always ends with the newer
+  // data regardless of scheduling.
+  it('concurrent stale refresh and upsert converge to the newer data', async () => {
+    const { cacheDirectory, upsertDirectoryFamilies, searchDirectory, nextDirectoryEpoch } = await import('../../src/pwa/lib/offline');
+    const fam = { id: 'newer', name: 'Newer Family', name_normalized: 'newer family', phone: null, proxy_phones: [], num_people: null, last_visit_date: null };
+
+    const staleEpoch = nextDirectoryEpoch();
+    const staleRefresh = cacheDirectory([], staleEpoch);
+    const upsert = upsertDirectoryFamilies([fam]);
+    await Promise.all([staleRefresh, upsert]);
+
+    expect((await searchDirectory('newer', null)).map(f => f.id)).toEqual(['newer']);
+  });
+});

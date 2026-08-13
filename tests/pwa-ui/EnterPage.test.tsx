@@ -150,6 +150,21 @@ describe('EnterPage lookup error routing', () => {
     expect(byFamily['p1'].picked_up_by_phone).toBe('4805550001');     // proxy pickup, normalized
   });
 
+  it('a BROKEN offline cache visibly blocks offline registration — no register-as-new offer', async () => {
+    vi.mocked(api.get).mockRejectedValue(new TypeError('Failed to fetch'));
+    const { searchDirectory } = await import('../../src/pwa/lib/offline');
+    vi.mocked(searchDirectory).mockRejectedValue(new Error('offline storage blocked by another tab — close other tabs of this app'));
+    const user = userEvent.setup();
+    render(<EnterPage />);
+    await searchFor(user, 'Returning Family');
+
+    // The unreadable-roster message, with the actionable tab guidance…
+    expect(await screen.findByText(/offline family list is unreadable/)).toBeInTheDocument();
+    expect(screen.getByText(/Close other tabs of this app/)).toBeInTheDocument();
+    // …and crucially NOT the duplicate-family lane.
+    expect(screen.queryByRole('button', { name: /continue and register as new/i })).not.toBeInTheDocument();
+  });
+
   it('a server rejection (not connectivity) does NOT offer the offline path', async () => {
     vi.mocked(api.get).mockRejectedValue(new (ApiError as new (s: number, m: string) => Error)(400, 'bad query'));
     const user = userEvent.setup();
