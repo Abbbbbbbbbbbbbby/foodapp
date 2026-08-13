@@ -1,7 +1,10 @@
 import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
-import { api, ApiError } from '../lib/api';
-import { queueItem, generateUUID } from '../lib/offline';
+import { api, apiWithToken, ApiError } from '../lib/api';
+import { queueItem, generateUUID, searchDirectory, directoryPickup, upsertDirectoryFamilies, markDirectoryStale } from '../lib/offline';
+import type { DirectoryFamily } from '../lib/offline';
+import { normalizeName, normalizePhone } from '../../shared/fuzzy';
+import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
 import LookupForm from '../components/enter/LookupForm';
 import ResultsList from '../components/enter/ResultsList';
@@ -14,25 +17,74 @@ import SummaryScreen, { type SummaryFamily } from '../components/enter/SummarySc
 
 type EnterView =
   | { type: 'lookup' }
-  | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null }
+  | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null; offline?: boolean }
   | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
   | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra: FamilySearchResult[]; selectedIds: string[] } }
-  | { type: 'log-visit'; families: FamilySearchResult[]; current: number }
+  | { type: 'log-visit'; families: FamilySearchResult[]; current: number; pickupPhone: string | null }
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
   | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
   | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
   | { type: 'done'; families: SummaryFamily[]; error?: string };
 
+
+// Explicit, field-by-field lift of a cached directory row into the
+// FamilySearchResult contract the select/log-visit screens consume. Every
+// Family field is enumerated so the compiler flags this site when the
+// contract grows — a blanket cast would silently hand new fields undefined.
+function directoryToSearchResult(f: DirectoryFamily): FamilySearchResult {
+  return {
+    id: f.id, name: f.name, phone: f.phone, num_people: f.num_people,
+    last_visit_date: f.last_visit_date,
+    address: null, zip_code: null, date_of_birth: null, language: null,
+    ethnicity: null, hispanic: null, ami_bracket: null,
+    num_children_under_18: null, num_children_under_5: null,
+    num_with_diabetes: null, health_insurance: null, snap_benefits: null,
+    receives_texts: null, want_text_updates: null, id_confirmed: null,
+    bag_received: null, first_visit_date: null, created_by: null,
+    created_at: '', updated_at: '',
+  };
+}
+
 export default function EnterPage() {
   const [view, setView] = useState<EnterView>({ type: 'lookup' });
+  // The identity this page was opened under. Submission handlers refuse to
+  // run for anyone else — defense in depth behind the account-change
+  // overlay, so no focus-management gap can submit a draft as another user.
+  const [mountUserId] = useState(() => getAuth()?.user.id);
   const [error, setError] = useState<string | null>(null);
+  // Set when a search failed for connectivity reasons: offers the offline
+  // continue path (without it, a dead network strands the volunteer at the
+  // lookup and the offline queue is unreachable).
+  const [offlineSearch, setOfflineSearch] = useState<{ name: string; phone: string | null } | null>(null);
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
   // Accumulates visit IDs for the log-visit (existing family) flow
   const pendingVisitIds = useRef<{ visitId: string | null; queueId: string | null; visitKey: string }[]>([]);
 
+
+  // A family registered online THIS session must be findable if the network
+  // dies before the next full directory refresh. Fire-and-forget: a cache
+  // write failure only degrades offline lookup, never the check-in.
+  function rememberInDirectory(id: string, name: string, phone: string | null | undefined, numPeople: number | null | undefined, proxyPhone?: string | null) {
+    // The proxy designation must reach the offline index too: a family
+    // registered WITH a proxy at 9am must be findable by that proxy's phone
+    // during a 9:30 outage, or the neighbor gets the register-new dead end.
+    const normProxy = normalizePhone(proxyPhone);
+    upsertDirectoryFamilies([{
+      id, name, name_normalized: normalizeName(name),
+      phone: normalizePhone(phone) ?? null, proxy_phones: normProxy ? [normProxy] : [],
+      num_people: numPeople ?? null, last_visit_date: localDateString(),
+    }]).catch(err => {
+      console.warn('directory upsert failed — requesting a full re-pull:', err);
+      // A full refresh replaces the failed incremental write (and warns
+      // through Layout's existing path if storage is truly broken).
+      markDirectoryStale();
+    });
+  }
+
   async function handleSearch(name: string, phone: string | null) {
     setError(null);
+    setOfflineSearch(null);
     try {
       if (phone) {
         const pickup = await api.get<{ own: FamilySearchResult | null; proxy: FamilySearchResult[] }>(
@@ -56,7 +108,55 @@ export default function EnterPage() {
         setView({ type: 'results', results, searchName: name, searchPhone: phone });
       }
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Network error. Check connection and try again.');
+      if (e instanceof ApiError) {
+        setError(e.message);
+      } else {
+        // Offline is a supported mode, not a dead end. FIRST try the cached
+        // family directory: a returning household must resolve to its
+        // EXISTING record (offline register-as-new mints a duplicate).
+        try {
+          // Phone searches keep PICKUP semantics offline: the searcher's own
+          // family plus every family that designated this phone, presented
+          // together — with the searched phone preserved for the visit.
+          if (phone) {
+            const pickup = await directoryPickup(phone);
+            if (pickup.own || pickup.proxy.length > 0) {
+              setView({
+                type: 'family-select',
+                own: pickup.own ? directoryToSearchResult(pickup.own) : null,
+                proxy: pickup.proxy.map(directoryToSearchResult),
+                pickupName: pickup.own?.name ?? name,
+                pickupPhone: phone,
+                notice: 'No connection — from the last synced family list. / Sin conexión — de la última lista sincronizada.',
+              });
+              return;
+            }
+          }
+          const cached = await searchDirectory(name, phone);
+          if (cached.length > 0) {
+            setView({
+              type: 'results', offline: true, searchName: name, searchPhone: phone,
+              results: cached.map(directoryToSearchResult),
+            });
+            return;
+          }
+        } catch (err) {
+          // A BROKEN cache must visibly BLOCK offline registration: with the
+          // roster unreadable, "register as new" for a possibly-returning
+          // household is the duplicate-family lane. Do NOT offer it.
+          console.warn('offline directory lookup failed — blocking offline registration:', err);
+          const detail = err instanceof Error && err.message.includes('blocked by another tab')
+            ? ' Close other tabs of this app and retry.'
+            : '';
+          setError(
+            'No connection AND the offline family list is unreadable on this device — do not register families offline. Retry, or find a supervisor.' + detail +
+            ' / Sin conexión y la lista sin conexión no se puede leer — no registre familias. Reintente o busque a un supervisor.'
+          );
+          return;
+        }
+        setError('Network error. Check connection and try again.');
+        setOfflineSearch({ name, phone });
+      }
     }
   }
 
@@ -80,8 +180,21 @@ export default function EnterPage() {
     const today = localDateString();
     const familyPayload = { ...data, first_visit_date: today, proxy: proxyData ?? undefined };
     const familyIdemKey = generateUUID();
+    // One identity for the whole submission: the request's token and the
+    // offline attribution must come from the same auth snapshot, or a
+    // cross-tab account switch splits them (posted as A, queued as B).
+    const auth = getAuth();
+    if (!auth || auth.user.id !== mountUserId) {
+      // Cross-tab sign-out or account switch racing this handler: fail loud
+      // rather than posting under another identity or queueing an item with
+      // the wrong (or no) owner.
+      setError('The signed-in account changed — nothing was saved. Sign back in as the original account to finish this entry. / La cuenta cambió — no se guardó nada. Vuelva a iniciar sesión con la cuenta original.');
+      return;
+    }
+    const pinned = apiWithToken(auth.token);
     try {
-      const result = await api.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
+      const result = await pinned.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
+      rememberInDirectory(result.id, data.name, data.phone, data.num_people, proxyData?.proxy_phone);
       // Registered online: join this pickup pre-checked. The visit is logged
       // with the rest of the selection through the normal log-visit loop.
       const newFam = {
@@ -102,7 +215,7 @@ export default function EnterPage() {
       // Offline: queue the family — the flush creates the family AND today's
       // visit, so it must NOT also join this pickup's log-visit loop.
       try {
-        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
+        await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -119,22 +232,42 @@ export default function EnterPage() {
   function handleFamilySelectConfirm(families: FamilySearchResult[]) {
     if (families.length === 0) return;
     pendingVisitIds.current = [];
-    setView({ type: 'log-visit', families, current: 0 });
+    // Carry the SEARCHED phone through to visit creation: when a proxy is
+    // picking up, the visit must record who picked up, not lose it.
+    const pickupPhone = view.type === 'family-select' ? view.pickupPhone : null;
+    setView({ type: 'log-visit', families, current: 0, pickupPhone });
   }
 
   async function handleLogVisit(familyId: string) {
     if (view.type !== 'log-visit') return;
     const { families, current } = view;
     const visitIdemKey = generateUUID();
+    const family = families.find(f => f.id === familyId);
+    // A pickup by someone other than the family's own number is a PROXY
+    // pickup — record who actually picked up. NORMALIZE both sides: the
+    // typed phone is raw ('480-555-0001') while the stored one is 10 bare
+    // digits — raw comparison misattributed a family's own pickup as proxy.
+    const normPickup = normalizePhone(view.pickupPhone);
+    const pickedUpBy = normPickup && normPickup !== family?.phone ? normPickup : null;
     const visitPayload = {
       family_id: familyId,
       visit_date: localDateString(),
+      picked_up_by_phone: pickedUpBy,
       idempotency_key: visitIdemKey,
     };
     let visitId: string | null = null;
     let queueId: string | null = null;
+    const auth = getAuth();
+    if (!auth || auth.user.id !== mountUserId) {
+      // Cross-tab sign-out or account switch racing this handler: fail loud
+      // rather than posting under another identity or queueing an item with
+      // the wrong (or no) owner.
+      setError('The signed-in account changed — nothing was saved. Sign back in as the original account to finish this entry. / La cuenta cambió — no se guardó nada. Vuelva a iniciar sesión con la cuenta original.');
+      return;
+    }
+    const pinned = apiWithToken(auth.token);
     try {
-      const result = await api.post<{ id: string }>('/api/visits', visitPayload);
+      const result = await pinned.post<{ id: string }>('/api/visits', visitPayload);
       visitId = result.id;
     } catch (e) {
       if (e instanceof ApiError) {
@@ -143,7 +276,7 @@ export default function EnterPage() {
       }
       // Network error — queue with the same idempotency key and continue
       try {
-        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date } }, visitIdemKey);
+        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date, picked_up_by_phone: pickedUpBy } }, visitIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -151,7 +284,7 @@ export default function EnterPage() {
     }
     pendingVisitIds.current.push({ visitId, queueId, visitKey: visitIdemKey });
     if (current + 1 < families.length) {
-      setView({ type: 'log-visit', families, current: current + 1 });
+      setView({ type: 'log-visit', families, current: current + 1, pickupPhone: view.pickupPhone });
     } else {
       const visitRefs = pendingVisitIds.current;
       pendingVisitIds.current = [];
@@ -208,14 +341,27 @@ export default function EnterPage() {
     const familyIdemKey = generateUUID();
     const visitIdemKey = generateUUID();
 
+    // This submission spans TWO requests (family, then visit) plus offline
+    // attribution — pin all of it to one auth snapshot.
+    const auth = getAuth();
+    if (!auth || auth.user.id !== mountUserId) {
+      // Cross-tab sign-out or account switch racing this handler: fail loud
+      // rather than posting under another identity or queueing an item with
+      // the wrong (or no) owner.
+      setError('The signed-in account changed — nothing was saved. Sign back in as the original account to finish this entry. / La cuenta cambió — no se guardó nada. Vuelva a iniciar sesión con la cuenta original.');
+      return;
+    }
+    const pinned = apiWithToken(auth.token);
+
     // --- POST family ---
     let familyId: string;
     try {
-      const result = await api.post<{ id: string }>('/api/families', {
+      const result = await pinned.post<{ id: string }>('/api/families', {
         ...familyPayload,
         idempotency_key: familyIdemKey,
       });
       familyId = result.id;
+      rememberInDirectory(familyId, data.name, data.phone, data.num_people, proxyData?.proxy_phone);
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);
@@ -224,7 +370,7 @@ export default function EnterPage() {
       // Network error — queue family + visit pair together and advance
       let familyQueueId: string;
       try {
-        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey);
+        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -244,7 +390,7 @@ export default function EnterPage() {
     let visitQueueId: string | null = null;
     let visitError: string | undefined;
     try {
-      const visitResult = await api.post<{ id: string }>('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
+      const visitResult = await pinned.post<{ id: string }>('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
       visitId = visitResult.id;
     } catch (e) {
       if (e instanceof ApiError) {
@@ -253,7 +399,7 @@ export default function EnterPage() {
       } else {
         // Network — queue only the visit (family already has an id)
         try {
-          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey);
+          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey, auth.user.id);
         } catch {
           visitError = 'Visit not saved offline. Check storage permissions.';
         }
@@ -298,11 +444,32 @@ export default function EnterPage() {
   return (
     <div className="enter-page">
       {error && <p className="error banner">{error}</p>}
+      {offlineSearch && view.type === 'lookup' && (
+        <p className="banner">
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setError(null);
+              const target = offlineSearch;
+              setOfflineSearch(null);
+              setView({ type: 'how-many', searchName: target.name, searchPhone: target.phone });
+            }}
+          >
+            No connection — continue and register as new / Sin conexión — continuar y registrar como nuevo
+          </button>
+        </p>
+      )}
 
       {view.type === 'lookup' && (
         <LookupForm onSearch={handleSearch} />
       )}
       {view.type === 'results' && (
+        <>
+        {view.offline && (
+          <p className="banner">
+            No connection — results from the last synced family list. / Sin conexión — resultados de la última lista sincronizada.
+          </p>
+        )}
         <ResultsList
           results={view.results}
           onSelect={handleSelectResult}
@@ -313,6 +480,7 @@ export default function EnterPage() {
           }}
           onBack={() => setView({ type: 'lookup' })}
         />
+        </>
       )}
       {view.type === 'family-select' && (
         <FamilySelectScreen

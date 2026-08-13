@@ -30,7 +30,10 @@ async function increment(kv: KVNamespace, key: string, ttl: number, current: num
 
 export async function checkOtpSendLimit(
   kv: KVNamespace,
-  phone: string
+  phone: string,
+  // Test harnesses (e2e against a persistent local KV) exhaust the GLOBAL
+  // caps by sheer run count; the per-phone cap stays enforced everywhere.
+  opts?: { skipGlobal?: boolean }
 ): Promise<{ allowed: boolean; remaining: number }> {
   const phoneKey = `rl:otp:send:${phone}:h${hourSlot()}`;
   const globalHourKey = `rl:otp:global:h${hourSlot()}`;
@@ -43,8 +46,8 @@ export async function checkOtpSendLimit(
   ]);
 
   if (phoneCount >= OTP_SEND_PER_PHONE_PER_HOUR) return { allowed: false, remaining: 0 };
-  if (globalHour >= OTP_SEND_GLOBAL_PER_HOUR) return { allowed: false, remaining: 0 };
-  if (globalDay >= OTP_SEND_GLOBAL_PER_DAY) return { allowed: false, remaining: 0 };
+  if (!opts?.skipGlobal && globalHour >= OTP_SEND_GLOBAL_PER_HOUR) return { allowed: false, remaining: 0 };
+  if (!opts?.skipGlobal && globalDay >= OTP_SEND_GLOBAL_PER_DAY) return { allowed: false, remaining: 0 };
 
   await Promise.all([
     increment(kv, phoneKey, 3600, phoneCount),

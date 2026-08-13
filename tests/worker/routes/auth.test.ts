@@ -235,3 +235,25 @@ describe('GET /api/auth/me', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('GET /api/test/latest-otp — production gate', () => {
+  it('is unreachable when ENVIRONMENT is not "test", even with a live code', async () => {
+    const { handleAuthRoutes } = await import('../../../src/worker/routes/auth');
+    const e = env as unknown as Env;
+    await seedUser('4805559999');
+    await createOtp(e.DB, '4805559999');
+
+    const req = new Request('https://example.com/api/test/latest-otp/4805559999');
+    // null = fell through to the router's 404 — the OTP never leaves the DB.
+    // A regression here exposes every live login code by phone number.
+    for (const environment of ['production', 'staging', '', undefined] as const) {
+      const gated = await handleAuthRoutes(req, { ...e, ENVIRONMENT: environment as string }, '/api/test/latest-otp/4805559999');
+      expect(gated).toBeNull();
+    }
+
+    // Sanity: the same request succeeds with the gate open, proving the
+    // gated assertions above exercised a real, working endpoint.
+    const open = await handleAuthRoutes(req, { ...e, ENVIRONMENT: 'test' }, '/api/test/latest-otp/4805559999');
+    expect(open?.status).toBe(200);
+  });
+});

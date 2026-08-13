@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { api } from '../../lib/api';
+import { apiWithToken } from '../../lib/api';
+import { getAuth } from '../../store/auth';
 import { setItemBag } from '../../lib/offline';
 
 export interface SummaryFamily {
@@ -26,6 +27,9 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
   const needBag = families.filter(f => !f.bag_received);
 
   const [bagsGiven, setBagsGiven] = useState(false);
+  // The identity this screen was opened under — bag saves refuse to run for
+  // anyone else (same contract as the wizard's submission handlers).
+  const [mountUserId] = useState(() => getAuth()?.user.id);
   // Picklist selection — pre-checked: taking a bag is the common case,
   // volunteers uncheck the exceptions.
   const [selected, setSelected] = useState<Set<number>>(
@@ -55,6 +59,16 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
 
   async function handleSaveBags() {
     setBagError(null);
+    // One identity for the whole save (same contract as the submission
+    // handlers): the bag PATCHes and the resolve-recovery reads must all
+    // carry the token of whoever clicked, or a cross-tab switch mid-handler
+    // audit-attributes this user's bags to someone else.
+    const auth = getAuth();
+    if (!auth || auth.user.id !== mountUserId) {
+      setBagError('The signed-in account changed — no bags were marked. Sign back in as the original account. / La cuenta cambió — no se marcaron bolsas. Vuelva a iniciar sesión con la cuenta original.');
+      return;
+    }
+    const pinned = apiWithToken(auth.token);
     setMarking(true);
     const chosen = remainingIdx.filter(i => selected.has(i)).map(i => ({ i, f: needBag[i] }));
     const synced = chosen.filter(({ f }) => f.visitId);
@@ -62,7 +76,7 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     const unreachable = chosen.filter(({ f }) => !f.visitId && !f.queueId);
     // Settle per family: one failure must not block or misreport the others.
     const results = await Promise.allSettled([
-      ...synced.map(({ f }) => api.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true })),
+      ...synced.map(({ f }) => pinned.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true })),
       // Offline submissions: record the bag on the queued item — the flush
       // applies it to the visit after sync.
       ...queued.map(({ f }) => setItemBag(f.queueId!, true)),
@@ -98,8 +112,8 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     for (const { i, f } of recoveries) {
       try {
         if (!f.visitKey) throw new Error('no key');
-        const { id: visitId } = await api.get<{ id: string }>(`/api/visits/resolve/${encodeURIComponent(f.visitKey)}`);
-        await api.patch(`/api/visits/${visitId}/bag`, { bag_received: true });
+        const { id: visitId } = await pinned.get<{ id: string }>(`/api/visits/resolve/${encodeURIComponent(f.visitKey)}`);
+        await pinned.patch(`/api/visits/${visitId}/bag`, { bag_received: true });
         newlySaved.push(i); // recovered — fully saved, no guidance needed
       } catch {
         // Couldn't recover automatically — fall back to the staff guidance

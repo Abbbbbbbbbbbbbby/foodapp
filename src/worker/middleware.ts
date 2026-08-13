@@ -15,6 +15,12 @@ export async function getAuthContext(
   if (!payload) return null;
   const session = await getSession(env.SESSIONS, payload.sessionId);
   if (!session) return null;
+  // Re-check active on every request: deactivation must end access
+  // immediately, not up to 12h later when the session expires (issue #6).
+  const live = await env.DB.prepare(
+    `SELECT active FROM users WHERE id = ?`
+  ).bind(session.userId).first<{ active: number }>();
+  if (!live || live.active !== 1) return null;
   return {
     userId: session.userId,
     phone: session.phone,

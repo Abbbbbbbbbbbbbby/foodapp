@@ -6,9 +6,15 @@ import type { Env } from '../../src/worker/schema';
 
 async function makeAuthHeader(
   userId: string,
-  role: 'admin' | 'staff' | 'volunteer'
+  role: 'admin' | 'staff' | 'volunteer',
+  active = 1
 ): Promise<string> {
   const e = env as unknown as Env;
+  // getAuthContext re-checks users.active on every request, so the user row
+  // must exist (deactivation ends access immediately — issue #6 item 2).
+  await e.DB.prepare(
+    `INSERT OR REPLACE INTO users (id, name, phone, role, active, self_registered) VALUES (?, 'MW Test', '4805551234', ?, ?, 0)`
+  ).bind(userId, role, active).run();
   const { token, payload } = await buildSession(userId, '4805551234', role, e.JWT_SECRET);
   await createSession(e.SESSIONS, payload);
   return `Bearer ${token}`;
@@ -100,5 +106,17 @@ describe('requireRole', () => {
 
   it('throws when called with no roles', () => {
     expect(() => requireRole()).toThrow('requireRole: at least one role is required');
+  });
+});
+
+describe('deactivation ends live sessions (issue #6)', () => {
+  it('a valid session for a deactivated user returns null immediately', async () => {
+    const e = env as unknown as Env;
+    const authHeader = await makeAuthHeader('deact-user', 'staff');
+    const req = new Request('https://example.com', { headers: { Authorization: authHeader } });
+    expect(await getAuthContext(req, e)).not.toBeNull();
+
+    await e.DB.prepare(`UPDATE users SET active = 0 WHERE id = 'deact-user'`).run();
+    expect(await getAuthContext(req, e)).toBeNull(); // same session, now dead
   });
 });

@@ -85,6 +85,21 @@ describe('POST /api/visits', () => {
     expect(res.status).toBe(400);
   });
 
+  it('stores picked_up_by_phone NORMALIZED (proxy pickup attribution)', async () => {
+    const key = `visit-proxy-${Date.now()}`;
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      // Raw formatted input — replayed queue items and the wizard proxy
+      // path arrive like this; it must match proxies.proxy_phone later.
+      body: JSON.stringify({ family_id: testFamilyId, visit_date: '2026-02-01', picked_up_by_phone: '+1 (480) 555-7777', idempotency_key: key }),
+    });
+    expect(res.status).toBe(201);
+    const row = await env.DB.prepare(`SELECT picked_up_by_phone FROM visits WHERE idempotency_key = ?`)
+      .bind(key).first<{ picked_up_by_phone: string }>();
+    expect(row!.picked_up_by_phone).toBe('4805557777');
+  });
+
   it('creates visit and returns id', async () => {
     const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
@@ -147,5 +162,78 @@ describe('GET /api/visits/resolve/:key (bag recovery)', () => {
       headers: { Authorization: authHeader },
     });
     expect(missing.status).toBe(404);
+  });
+});
+
+describe('PATCH /api/visits/:id/bag — contract hardening (issue #6)', () => {
+  it('rejects a missing/non-boolean bag_received instead of silently un-marking', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT OR IGNORE INTO families (id, name) VALUES ('bagf1', 'Bag Fam')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, bag_received) VALUES ('bagv1', 'bagf1', '2026-08-12', 1)`).run();
+    const res = await workerExports.default.fetch('https://x/api/visits/bagv1/bag', {
+      method: 'PATCH', headers: { Authorization: authHeader, 'Content-Type': 'application/json' }, body: '{}',
+    });
+    expect(res.status).toBe(400);
+    const v = await db.prepare(`SELECT bag_received FROM visits WHERE id = 'bagv1'`).first<{ bag_received: number }>();
+    expect(v!.bag_received).toBe(1); // unchanged
+  });
+
+  it('writes an audit row and updated_by on success', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT OR IGNORE INTO families (id, name) VALUES ('bagf2', 'Bag Fam 2')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, bag_received) VALUES ('bagv2', 'bagf2', '2026-08-12', 0)`).run();
+    const res = await workerExports.default.fetch('https://x/api/visits/bagv2/bag', {
+      method: 'PATCH', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bag_received: true }),
+    });
+    expect(res.status).toBe(200);
+    const v = await db.prepare(`SELECT bag_received, updated_by FROM visits WHERE id = 'bagv2'`).first<{ bag_received: number; updated_by: string | null }>();
+    expect(v!.bag_received).toBe(1);
+    expect(v!.updated_by).not.toBeNull();
+    const audit = await db.prepare(`SELECT changes FROM record_changes WHERE table_name = 'visits' AND record_id = 'bagv2'`).first<{ changes: string }>();
+    expect(audit).not.toBeNull();
+  });
+
+  it('404s a nonexistent visit and leaves NO phantom audit row', async () => {
+    const db = env.DB;
+    const res = await workerExports.default.fetch('https://x/api/visits/no-such-visit/bag', {
+      method: 'PATCH', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bag_received: true }),
+    });
+    expect(res.status).toBe(404);
+    // The batch unavoidably inserts the audit row; the compensating delete
+    // must remove it or history accumulates changes for untouched visits.
+    const phantom = await db.prepare(
+      `SELECT COUNT(*) AS n FROM record_changes WHERE table_name = 'visits' AND record_id = 'no-such-visit'`
+    ).first<{ n: number }>();
+    expect(phantom!.n).toBe(0);
+  });
+});
+
+describe('POST /api/visits — stale cached family id (offline replay after merge/delete)', () => {
+  it('a visit against a merged-away family id lands on the survivor', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT INTO families (id, name) VALUES ('survivor', 'Survivor Fam')`).run();
+    await db.prepare(`INSERT INTO merged_family_ids (old_id, target_id) VALUES ('mergedAway', 'survivor')`).run();
+
+    const res = await workerExports.default.fetch('https://x/api/visits', {
+      method: 'POST', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family_id: 'mergedAway', visit_date: '2026-08-12', idempotency_key: 'stale-key-1' }),
+    });
+    expect(res.status).toBe(201);
+    const v = await db.prepare(`SELECT family_id FROM visits WHERE idempotency_key = 'stale-key-1'`).first<{ family_id: string }>();
+    expect(v!.family_id).toBe('survivor');
+  });
+
+  it('a visit against a genuinely gone family id is a permanent 404, not a retry-forever 500', async () => {
+    const res = await workerExports.default.fetch('https://x/api/visits', {
+      method: 'POST', headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family_id: 'never-existed', visit_date: '2026-08-12' }),
+    });
+    // 4xx → the offline queue dead-letters it with the recoverable payload
+    // instead of classifying it transient and retrying forever.
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: string };
+    expect(body.error).toMatch(/merged or removed/);
   });
 });

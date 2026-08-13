@@ -129,6 +129,12 @@ async function handleUpdateUser(
   return Response.json({ ok: true });
 }
 
+// Last-admin protection for the delete-user batch. Every statement carries
+// this predicate, so a guard rejection no-ops the WHOLE batch. Exported so
+// the SQL-level race test asserts against this exact string, not a copy that
+// could silently drift from the deployed SQL.
+export const LAST_ADMIN_GUARD = `(SELECT role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?1) > 0 FROM users WHERE id = ?1)`;
+
 async function handleDeleteUser(
   env: Env,
   id: string,
@@ -158,21 +164,29 @@ async function handleDeleteUser(
   // the DELETE so D1's foreign-key enforcement accepts it. The guard reads
   // only from users, which nothing here mutates before the DELETE, so the
   // predicate is stable across the batch.
-  const GUARD = `(SELECT role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?1) > 0 FROM users WHERE id = ?1)`;
   const results = await env.DB.batch([
-    env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?1 AND ${GUARD}`).bind(id),
-    env.DB.prepare(`UPDATE families SET updated_by = NULL WHERE updated_by = ?1 AND ${GUARD}`).bind(id),
-    env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?1 AND ${GUARD}`).bind(id),
-    env.DB.prepare(`UPDATE visits SET updated_by = NULL WHERE updated_by = ?1 AND ${GUARD}`).bind(id),
-    env.DB.prepare(`UPDATE duplicate_flags SET reviewed_by = NULL WHERE reviewed_by = ?1 AND ${GUARD}`).bind(id),
-    env.DB.prepare(`DELETE FROM otp_codes WHERE phone = ?2 AND ${GUARD}`).bind(id, user.phone),
-    env.DB.prepare(`DELETE FROM users WHERE id = ?1 AND ${GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE families SET updated_by = NULL WHERE updated_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE visits SET updated_by = NULL WHERE updated_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+    env.DB.prepare(`UPDATE duplicate_flags SET reviewed_by = NULL WHERE reviewed_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+    env.DB.prepare(`DELETE FROM otp_codes WHERE phone = ?2 AND ${LAST_ADMIN_GUARD}`).bind(id, user.phone),
+    env.DB.prepare(`DELETE FROM users WHERE id = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
   ]);
 
   const deleteResult = results[results.length - 1];
   if (deleteResult.meta.rows_written === 0) {
-    // Pre-checks passed but the guarded delete matched nothing: lost the
-    // concurrent last-admin race.
+    // Pre-checks passed but the guarded delete matched nothing. Two causes:
+    // the concurrent last-admin race, or the user row was removed between
+    // the pre-check and the batch (the guard's scalar subquery goes NULL and
+    // the whole batch no-ops). Distinguish them so the admin isn't told
+    // "last admin" about a user who is already gone.
+    const stillThere = await env.DB.prepare(
+      `SELECT 1 FROM users WHERE id = ?`
+    ).bind(id).first();
+    if (!stillThere) {
+      return Response.json({ error: 'User was already deleted' }, { status: 404 });
+    }
     return Response.json({ error: 'Cannot delete the last admin' }, { status: 400 });
   }
 
@@ -231,14 +245,24 @@ async function handleImport(
   const phoneToId = new Map<string, string>(
     (existingFamilyRows.results ?? []).map(r => [r.phone, r.id])
   );
-  const existingPhones = new Set(phoneToId.keys());
+
+  // Primary dedup key: the stable Bubble source id — makes re-running the
+  // same import a no-op for every row, phone or no phone (issue #6 item 3).
+  const bubbleRows = await env.DB.prepare(
+    `SELECT id, bubble_id FROM families WHERE bubble_id IS NOT NULL`
+  ).all<{ id: string; bubble_id: string }>();
+  const bubbleToId = new Map<string, string>(
+    (bubbleRows.results ?? []).map(r => [r.bubble_id, r.id])
+  );
 
   // For families with no phone, dedup by normalized name to prevent
   // re-importing the same phoneless family on subsequent CSV runs
   const noPhoneNameRows = await env.DB.prepare(
-    `SELECT LOWER(name) AS n FROM families WHERE phone IS NULL`
-  ).all<{ n: string }>();
-  const existingNoPhoneNames = new Set((noPhoneNameRows.results ?? []).map(r => r.n));
+    `SELECT id, LOWER(name) AS n FROM families WHERE phone IS NULL`
+  ).all<{ id: string; n: string }>();
+  const noPhoneNameToId = new Map<string, string>(
+    (noPhoneNameRows.results ?? []).map(r => [r.n, r.id])
+  );
 
   const now = new Date().toISOString();
   let imported = 0;
@@ -252,15 +276,16 @@ async function handleImport(
 
     const phone = normalizePhone(row.phone);
 
-    if (!phone && existingNoPhoneNames.has(row.name.trim().toLowerCase())) {
-      skipped_existing++;
-      continue;
-    }
-
-    if (phone && existingPhones.has(phone)) {
-      // Family exists — add any new visits rather than skipping
-      const familyId = phoneToId.get(phone);
-      if (familyId && row.visits?.length) {
+    // Existing-family resolution, strongest key first: Bubble source id,
+    // then phone, then (phoneless rows only) normalized name. All three
+    // paths merge new visits — a phoneless returning family must not have
+    // its visit history dropped just because it deduped by name.
+    const bubbleHit = row.bubble_id ? bubbleToId.get(row.bubble_id) : undefined;
+    const familyId = bubbleHit
+      ?? (phone ? phoneToId.get(phone) : undefined)
+      ?? (!phone ? noPhoneNameToId.get(row.name.trim().toLowerCase()) : undefined);
+    if (familyId) {
+      if (row.visits?.length) {
         try {
           const existing = await env.DB.prepare(
             `SELECT visit_date FROM visits WHERE family_id = ?`
@@ -270,6 +295,8 @@ async function handleImport(
           const visitStmts: D1PreparedStatement[] = [];
           for (const visitDate of row.visits) {
             if (!visitDate || existingDates.has(visitDate)) continue;
+            // Also dedupes a date repeated WITHIN this row.
+            existingDates.add(visitDate);
             const vid = crypto.randomUUID().replace(/-/g, '');
             visitStmts.push(
               env.DB.prepare(
@@ -285,6 +312,29 @@ async function handleImport(
           errors.push({ name: row.name, error: e instanceof Error ? e.message : 'Unknown error' });
         }
       }
+      // Family matched by phone/name from a pre-bubble_id import: adopt the
+      // row's bubble_id so future re-imports dedup on the primary key.
+      if (row.bubble_id && !bubbleHit && !bubbleToId.has(row.bubble_id)) {
+        try {
+          const adoption = await env.DB.prepare(
+            `UPDATE families SET bubble_id = ? WHERE id = ? AND bubble_id IS NULL`
+          ).bind(row.bubble_id, familyId).run();
+          if (adoption.meta.changes === 1) {
+            bubbleToId.set(row.bubble_id, familyId);
+          } else {
+            // The family already carries a DIFFERENT bubble_id: two source
+            // records claim one family. Report it — silently discarding the
+            // mapping makes future re-imports fall back to weak keys and
+            // eventually mint the duplicate this dedup exists to prevent.
+            errors.push({
+              name: row.name,
+              error: `bubble_id ${row.bubble_id} not adopted: family ${familyId} already has a different bubble_id`,
+            });
+          }
+        } catch (e) {
+          errors.push({ name: row.name, error: e instanceof Error ? e.message : 'Unknown error' });
+        }
+      }
       skipped_existing++;
       continue;
     }
@@ -295,14 +345,14 @@ async function handleImport(
       const stmts: D1PreparedStatement[] = [
         env.DB.prepare(`
           INSERT INTO families (
-            id, name, name_normalized, phone, address, zip_code, date_of_birth,
+            id, name, name_normalized, bubble_id, phone, address, zip_code, date_of_birth,
             language, ethnicity, hispanic, ami_bracket, num_people,
             num_children_under_18, num_children_under_5, num_with_diabetes,
             health_insurance, snap_benefits, receives_texts, want_text_updates,
             id_confirmed, bag_received, first_visit_date,
             created_by, created_at, updated_at
           ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?, ?,
@@ -311,21 +361,25 @@ async function handleImport(
           )
         `).bind(
           id, row.name.trim(), normalizeName(row.name.trim()),
-          phone, row.address, row.zip_code, row.date_of_birth,
-          row.language, row.ethnicity, row.hispanic, row.ami_bracket, row.num_people,
-          row.num_children_under_18, row.num_children_under_5, row.num_with_diabetes,
-          row.health_insurance, row.snap_benefits,
+          row.bubble_id ?? null,
+          phone, row.address ?? null, row.zip_code ?? null, row.date_of_birth ?? null,
+          row.language ?? null, row.ethnicity ?? null, row.hispanic ?? null, row.ami_bracket ?? null, row.num_people ?? null,
+          row.num_children_under_18 ?? null, row.num_children_under_5 ?? null, row.num_with_diabetes ?? null,
+          row.health_insurance ?? null, row.snap_benefits ?? null,
           row.receives_texts === true ? 1 : row.receives_texts === false ? 0 : null,
           row.want_text_updates === true ? 1 : row.want_text_updates === false ? 0 : null,
           row.id_confirmed === true ? 1 : row.id_confirmed === false ? 0 : null,
           row.bag_received === true ? 1 : row.bag_received === false ? 0 : null,
-          row.first_visit_date,
+          row.first_visit_date ?? null,
           ctx.userId, now, now
         ),
       ];
 
+      const rowDates = new Set<string>();
       for (const visitDate of (row.visits ?? [])) {
-        if (!visitDate) continue;
+        // A date repeated within one source row must create ONE visit.
+        if (!visitDate || rowDates.has(visitDate)) continue;
+        rowDates.add(visitDate);
         const vid = crypto.randomUUID().replace(/-/g, '');
         stmts.push(
           env.DB.prepare(
@@ -346,8 +400,11 @@ async function handleImport(
 
       await env.DB.batch(stmts);
 
-      if (phone) existingPhones.add(phone);
-      else existingNoPhoneNames.add(row.name.trim().toLowerCase());
+      if (phone) phoneToId.set(phone, id);
+      else noPhoneNameToId.set(row.name.trim().toLowerCase(), id);
+      // A repeated bubble_id later in the SAME file merges into this family
+      // instead of failing the unique index.
+      if (row.bubble_id) bubbleToId.set(row.bubble_id, id);
       imported++;
     } catch (e) {
       errors.push({ name: row.name, error: e instanceof Error ? e.message : 'Unknown error' });

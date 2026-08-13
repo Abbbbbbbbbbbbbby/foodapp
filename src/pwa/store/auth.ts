@@ -10,7 +10,9 @@ interface AuthState {
   user: AuthUser;
 }
 
-const KEY = 'foodapp_auth';
+// Exported so Layout can watch cross-tab auth changes via 'storage' events.
+export const AUTH_STORAGE_KEY = 'foodapp_auth';
+const KEY = AUTH_STORAGE_KEY;
 
 export function getAuth(): AuthState | null {
   try {

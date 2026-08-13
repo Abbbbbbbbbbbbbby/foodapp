@@ -286,3 +286,30 @@ describe('POST /api/families — merged-key alias replay (probe round 4)', () =>
     expect(proxies!.n).toBe(0); // proxy not reprocessed on replay
   });
 });
+
+describe('GET /api/families/directory (offline roster cache)', () => {
+  it('requires auth', async () => {
+    const res = await workerExports.default.fetch('https://x/api/families/directory');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns the roster with normalized names, proxy phones, and last visit dates', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT INTO families (id, name, name_normalized, phone, num_people) VALUES ('dirF', 'Dirección Fam', 'direccion fam', '4805554444', 5)`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('dirV', 'dirF', '2026-08-11')`).run();
+    await db.prepare(`INSERT INTO proxies (family_id, proxy_name, proxy_phone) VALUES ('dirF', 'Pickup Person', '4805557777')`).run();
+
+    const res = await workerExports.default.fetch('https://x/api/families/directory', {
+      headers: { Authorization: authHeader },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { families: { id: string; name: string; name_normalized: string; phone: string | null; proxy_phones: string[]; num_people: number | null; last_visit_date: string | null }[] };
+    const fam = body.families.find(f => f.id === 'dirF');
+    expect(fam).toBeTruthy();
+    expect(fam!.name).toBe('Dirección Fam');
+    expect(fam!.name_normalized).toBe('direccion fam'); // iOS 9 can't fold accents itself
+    expect(fam!.proxy_phones).toEqual(['4805557777']);  // designated pickup reachable offline
+    expect(fam!.num_people).toBe(5);
+    expect(fam!.last_visit_date).toBe('2026-08-11');
+  });
+});

@@ -202,22 +202,153 @@ describe('DELETE /api/admin/users/:id — FK-referenced users (review round)', (
     expect(await db.prepare(`SELECT id FROM otp_codes WHERE id = 'otpA'`).first()).toBeNull();
   });
 
-  it('still blocks deleting the last admin, without corrupting references', async () => {
+  it('a deactivated admin token can no longer act at all (401)', async () => {
     await seedUser('a1', 'Admin One', '4805550000', 'admin');
     await seedUser('a2', 'Admin Two', '4805550002', 'admin');
     const db = (env as unknown as Env).DB;
-    await db.prepare(`UPDATE users SET active = 0 WHERE id = 'a2'`).run();
-    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('famG', 'Guard Fam', 'a1')`).run();
-
     const token = await makeToken('a2', '4805550002', 'admin');
+    await db.prepare(`UPDATE users SET active = 0 WHERE id = 'a2'`).run();
+
     const res = await workerExports.default.fetch('https://example.com/api/admin/users/a1', {
       method: 'DELETE',
       headers: authHeader(token),
     });
-    expect(res.status).toBe(400);
-    // Guard rejection left the reference intact — no orphaned attribution
-    const fam = await db.prepare(`SELECT created_by FROM families WHERE id = 'famG'`).first<{ created_by: string | null }>();
-    expect(fam!.created_by).toBe('a1');
+    expect(res.status).toBe(401); // deactivation ends access immediately
     expect(await db.prepare(`SELECT id FROM users WHERE id = 'a1'`).first()).not.toBeNull();
+  });
+
+  it('the SQL race guard no-ops the whole batch when the target is the last active admin', async () => {
+    // The endpoint path to this 400 requires the concurrent race (an active
+    // admin actor always counts as "another admin"), so pin the guard at the
+    // statement level — using the route's OWN exported predicate, so this
+    // test fails if the deployed SQL ever changes.
+    const { LAST_ADMIN_GUARD } = await import('../../../src/worker/routes/admin');
+    await seedUser('a1', 'Last Admin', '4805550000', 'admin');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('famG', 'Guard Fam', 'a1')`).run();
+
+    const results = await db.batch([
+      db.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind('a1'),
+      db.prepare(`DELETE FROM users WHERE id = ?1 AND ${LAST_ADMIN_GUARD}`).bind('a1'),
+    ]);
+    expect(results[1].meta.rows_written).toBe(0); // delete blocked
+    const fam = await db.prepare(`SELECT created_by FROM families WHERE id = 'famG'`).first<{ created_by: string | null }>();
+    expect(fam!.created_by).toBe('a1'); // reference untouched — batch no-oped together
+  });
+});
+
+describe('POST /api/admin/import — bubble_id idempotency (issue #6)', () => {
+  it('re-running the same import is a no-op even for phoneless families', async () => {
+    await seedUser('imp-admin', 'Importer', '4805550088', 'admin');
+    const token = await makeToken('imp-admin', '4805550088', 'admin');
+    const db = (env as unknown as Env).DB;
+    const payload = JSON.stringify({
+      families: [
+        { bubble_id: 'bub-1', name: 'Phoneless Fam', phone: null, visits: ['2026-08-01'] },
+        { bubble_id: 'bub-2', name: 'Phoned Fam', phone: '480-555-7777', visits: [] },
+      ],
+    });
+    for (let i = 0; i < 2; i++) {
+      const res = await workerExports.default.fetch('https://example.com/api/admin/import', {
+        method: 'POST', headers: authHeader(token), body: payload,
+      });
+      expect(res.status).toBe(200);
+    }
+    const fams = await db.prepare(`SELECT COUNT(*) AS n FROM families WHERE bubble_id IN ('bub-1','bub-2')`).first<{ n: number }>();
+    expect(fams!.n).toBe(2); // not 4
+    const visits = await db.prepare(`SELECT COUNT(*) AS n FROM visits WHERE visit_date = '2026-08-01'`).first<{ n: number }>();
+    expect(visits!.n).toBe(1); // visit not duplicated either
+  });
+
+  it('a phoneless family from a pre-bubble_id import gets its id backfilled and visits merged', async () => {
+    await seedUser('imp-admin2', 'Importer Two', '4805550089', 'admin');
+    const token = await makeToken('imp-admin2', '4805550089', 'admin');
+    const db = (env as unknown as Env).DB;
+    // Simulates a row imported before migration 0008: phoneless, no bubble_id.
+    await db.prepare(
+      `INSERT INTO families (id, name, phone) VALUES ('preFam', 'Legacy NoPhone', NULL)`
+    ).bind().run();
+    await db.prepare(
+      `INSERT INTO visits (id, family_id, visit_date) VALUES ('preV', 'preFam', '2026-07-01')`
+    ).bind().run();
+
+    const res = await workerExports.default.fetch('https://example.com/api/admin/import', {
+      method: 'POST', headers: authHeader(token),
+      body: JSON.stringify({
+        families: [
+          { bubble_id: 'bub-legacy', name: 'Legacy NoPhone', phone: null, visits: ['2026-07-01', '2026-08-05'] },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    // Deduped by name — no second family — and the bubble_id was adopted.
+    const fam = await db.prepare(
+      `SELECT COUNT(*) AS n FROM families WHERE name = 'Legacy NoPhone'`
+    ).first<{ n: number }>();
+    expect(fam!.n).toBe(1);
+    const backfilled = await db.prepare(
+      `SELECT bubble_id FROM families WHERE id = 'preFam'`
+    ).first<{ bubble_id: string | null }>();
+    expect(backfilled!.bubble_id).toBe('bub-legacy');
+
+    // New visit merged, existing one not duplicated.
+    const visits = await db.prepare(
+      `SELECT visit_date FROM visits WHERE family_id = 'preFam' ORDER BY visit_date`
+    ).all<{ visit_date: string }>();
+    expect((visits.results ?? []).map(v => v.visit_date)).toEqual(['2026-07-01', '2026-08-05']);
+  });
+
+  it('reports a conflicting bubble_id instead of silently discarding it', async () => {
+    await seedUser('imp-admin3', 'Importer Three', '4805550090', 'admin');
+    const token = await makeToken('imp-admin3', '4805550090', 'admin');
+    const db = (env as unknown as Env).DB;
+    // Family already claimed by bubble_id B1, reachable by phone.
+    await db.prepare(
+      `INSERT INTO families (id, name, phone, bubble_id) VALUES ('conFam', 'Conflict Fam', '4805556666', 'bub-B1')`
+    ).run();
+
+    // A second source record with the SAME phone but a DIFFERENT bubble_id.
+    const res = await workerExports.default.fetch('https://example.com/api/admin/import', {
+      method: 'POST', headers: authHeader(token),
+      body: JSON.stringify({
+        families: [{ bubble_id: 'bub-B2', name: 'Conflict Fam', phone: '480-555-6666', visits: [] }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { errors: { error: string }[] };
+    expect(body.errors.some(e => e.error.includes('bub-B2') && e.error.includes('different bubble_id'))).toBe(true);
+    // And the stored mapping is untouched.
+    const fam = await db.prepare(`SELECT bubble_id FROM families WHERE id = 'conFam'`).first<{ bubble_id: string }>();
+    expect(fam!.bubble_id).toBe('bub-B1');
+  });
+
+  it('a visit date repeated within one source row creates exactly one visit', async () => {
+    await seedUser('imp-admin4', 'Importer Four', '4805550091', 'admin');
+    const token = await makeToken('imp-admin4', '4805550091', 'admin');
+    const db = (env as unknown as Env).DB;
+
+    // New-family branch: duplicate date in one row.
+    const res = await workerExports.default.fetch('https://example.com/api/admin/import', {
+      method: 'POST', headers: authHeader(token),
+      body: JSON.stringify({
+        families: [{ bubble_id: 'bub-dup', name: 'Dup Dates Fam', phone: null, visits: ['2026-08-10', '2026-08-10'] }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const famId = (await db.prepare(`SELECT id FROM families WHERE bubble_id = 'bub-dup'`).first<{ id: string }>())!.id;
+    let visits = await db.prepare(`SELECT COUNT(*) AS n FROM visits WHERE family_id = ?`).bind(famId).first<{ n: number }>();
+    expect(visits!.n).toBe(1);
+
+    // Existing-family branch: re-import with a NEW date repeated twice.
+    const res2 = await workerExports.default.fetch('https://example.com/api/admin/import', {
+      method: 'POST', headers: authHeader(token),
+      body: JSON.stringify({
+        families: [{ bubble_id: 'bub-dup', name: 'Dup Dates Fam', phone: null, visits: ['2026-08-11', '2026-08-11'] }],
+      }),
+    });
+    expect(res2.status).toBe(200);
+    visits = await db.prepare(`SELECT COUNT(*) AS n FROM visits WHERE family_id = ?`).bind(famId).first<{ n: number }>();
+    expect(visits!.n).toBe(2); // one per distinct date, not three
   });
 });

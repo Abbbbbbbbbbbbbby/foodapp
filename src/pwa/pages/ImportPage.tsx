@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { markDirectoryStale } from '../lib/offline';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { calcAmiBracket } from '../lib/ami';
@@ -318,6 +319,7 @@ export default function ImportPage() {
     setImporting(true);
     try {
       const res = await api.post<ImportResult>('/api/admin/import', { families });
+      markDirectoryStale();
       setResult(res);
       setFamilies(null);
     } catch (e) {

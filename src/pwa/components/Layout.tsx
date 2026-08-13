@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { getUser, clearAuth, getToken } from '../store/auth';
-import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters } from '../lib/offline';
+import { getUser, getAuth, clearAuth, getToken, AUTH_STORAGE_KEY } from '../store/auth';
+import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters, adoptForeignItems, cacheDirectory, nextDirectoryEpoch } from '../lib/offline';
+import type { DirectoryFamily } from '../lib/offline';
 import type { DeadLetterEntry } from '../lib/offline';
-import { api } from '../lib/api';
+import { apiWithToken } from '../lib/api';
 
 interface NavItem {
   label: string;
@@ -23,10 +24,25 @@ const NAV_ITEMS: NavItem[] = [
 export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const user = getUser()!;
+  // Mount-time identity, deliberately NOT re-read on re-render: this Layout
+  // instance belongs to whoever opened it. A live getUser() here would shift
+  // the comparison baseline the moment another tab rewrites the auth blob
+  // (and a cross-tab sign-out would make it null mid-render).
+  const [user] = useState(() => getUser()!);
   const [pendingCount, setPendingCount] = useState(0);
   const [deadLetters, setDeadLetters] = useState<DeadLetterEntry[]>([]);
   const [dlExpanded, setDlExpanded] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [syncBroken, setSyncBroken] = useState(false);
+  const [foreignCount, setForeignCount] = useState(0);
+  const [adoptArmed, setAdoptArmed] = useState(false);
+  // Feature-tested once: Safari gained service workers in 11.1 (iOS 11.3);
+  // the documented iPad 2 / iOS 9.3.5 target has none, so a reload or
+  // cold start during an outage cannot restore the app there. Say so
+  // instead of letting the device silently fail to a white screen.
+  const [swSupported] = useState(() => 'serviceWorker' in navigator);
+  // Cross-tab identity change: 'signed-out', or the new user's name.
+  const [accountChanged, setAccountChanged] = useState<{ name: string } | 'signed-out' | null>(null);
 
   useEffect(() => {
     function refresh() {
@@ -42,34 +58,152 @@ export default function Layout() {
     getDeadLetters().then(setDeadLetters).catch(() => {});
   }, []);
 
+  // Refresh the offline family directory while we HAVE a connection — it is
+  // what lets a returning household be found during a later outage instead
+  // of being re-registered as a duplicate. Mount-only was not enough (a
+  // family created after the initial fetch was invisible offline in the
+  // same session), so this also runs on reconnect and after every flush
+  // that landed queued records.
+  const refreshDirectory = () => {
+    if (navigator.onLine === false) return;
+    const auth = getAuth();
+    if (!auth) return;
+    // Claim the epoch BEFORE fetching: if newer data (an upsert, a later
+    // refresh) lands while this response is in flight, this clear-and-
+    // replace is dropped instead of erasing it.
+    const epoch = nextDirectoryEpoch();
+    apiWithToken(auth.token).get<{ families: DirectoryFamily[] }>('/api/families/directory')
+      .then(r => cacheDirectory(r.families, epoch))
+      .catch(err => console.warn('family directory refresh failed (offline lookup will use the last cached copy):', err));
+  };
+  useEffect(() => { refreshDirectory(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
-    const apiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') =>
-      method === 'PATCH'
-        ? api.patch<unknown>(url, body as Record<string, unknown>)
-        : api.post<unknown>(url, body as Record<string, unknown>);
+    // Online mutations (proxy add, edits, deletes, merges, imports) mark the
+    // directory stale — re-pull so offline lookup never serves data the user
+    // just changed.
+    const onStale = () => refreshDirectory();
+    window.addEventListener('directorystale', onStale);
+    return () => window.removeEventListener('directorystale', onStale);
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Real modality, not just aria-modal: without this, focus stays on
+    // whatever wizard button the volunteer last touched, and Enter fires
+    // the handler BEHIND the overlay — submitting the old draft under the
+    // newly signed-in account. Move focus in, contain Tab, and recapture
+    // anything that escapes (works without `inert`, which the iOS 9 target
+    // lacks).
+    if (!accountChanged) return;
+    const dialog = overlayRef.current;
+    if (!dialog) return;
+    const focusDialog = () => {
+      (dialog.querySelector('button') ?? dialog).focus();
+    };
+    focusDialog();
+    const onFocusIn = (e: FocusEvent) => {
+      if (!dialog.contains(e.target as Node)) focusDialog();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      // The dialog has a single focusable control — keep focus on it.
+      e.preventDefault();
+      focusDialog();
+    };
+    document.addEventListener('focusin', onFocusIn, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [accountChanged]);
+
+  useEffect(() => {
+    // Cross-tab account changes: another tab signing in/out rewrites the
+    // shared auth blob while this tab still renders the old user. A hard
+    // reload here would destroy in-progress wizard entry (React state only)
+    // and could even interrupt a multi-request submission after the family
+    // POST committed but before the visit followed. Instead: block the tab
+    // with an overlay that PRESERVES the draft. It clears automatically if
+    // the original account is restored in the other tab; the only way to
+    // proceed under the new identity is an explicit discard-and-reload.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== AUTH_STORAGE_KEY) return;
+      const now = getUser();
+      if (!now) setAccountChanged('signed-out');
+      else if (now.id !== user.id) setAccountChanged({ name: now.name });
+      else setAccountChanged(null);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [user.id]);
+
+  useEffect(() => {
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
+    // Overlapping doFlush invocations ('online' during a slow flush) must not
+    // orphan a timer: always clear before assigning, or unmount cleanup can
+    // miss one and a dead component flushes with a stale identity.
+    const scheduleFlush = (ms: number) => {
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = disposed ? undefined : setTimeout(doFlush, ms);
+    };
     const doFlush = async () => {
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = undefined; }
       try {
-        const result = await flushQueue(apiFn);
+        // ONE auth snapshot for the WHOLE flush. The token and the user id
+        // live in the same storage blob but reading them separately (or at
+        // different times) lets a cross-tab account switch produce token-B +
+        // user-A: A's queued items pass the owner check and post under B's
+        // identity. Snapshot both together; a mid-flush switch then 401s
+        // (items stay queued) instead of misattributing.
+        const auth = getAuth();
+        const pinned = apiWithToken(auth?.token ?? null);
+        const apiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') =>
+          method === 'PATCH'
+            ? pinned.patch<unknown>(url, body as Record<string, unknown>)
+            : pinned.post<unknown>(url, body as Record<string, unknown>);
+        const result = await flushQueue(apiFn, auth?.user.id);
+        if (disposed) return;
+        // A skipped result means another flush was already in flight — it
+        // says nothing about queue health, so it must not clear warning
+        // banners. The in-flight flush may belong to an UNMOUNTED Layout
+        // whose setState is dead, so re-check shortly: THIS component must
+        // be the one that surfaces the real results.
+        if (result.skipped) {
+          scheduleFlush(5_000);
+          return;
+        }
+        setSyncBroken(false);
+        setForeignCount(result.foreignItems);
+        // Queued records just landed server-side (with server-assigned
+        // state) — pull a fresh roster so offline lookup reflects them.
+        if (result.flushed > 0) refreshDirectory();
         if (result.errors > 0) {
           console.warn(`offline sync: ${result.errors} item(s) failed transiently — retrying in 30s`);
           // Mount and 'online' are not enough: a 503 or transient fetch
           // failure while the browser STAYS online needs a scheduled retry.
-          if (!disposed) retryTimer = setTimeout(doFlush, 30_000);
+          scheduleFlush(30_000);
         }
-        // Refresh dead-letter entries from the durable store before any navigation
-        if (result.deadLettered > 0) {
-          getDeadLetters().then(setDeadLetters).catch(() => {});
-        }
+        // Refresh dead letters UNCONDITIONALLY: entries may have been written
+        // by an earlier flush whose component unmounted before rendering them,
+        // so this flush's own deadLettered count can't gate the read.
+        getDeadLetters().then(setDeadLetters).catch((err) => {
+          // Failing to show just-dead-lettered entries would read as
+          // "synced". Surface the degraded state.
+          console.error('failed to load dead-letter entries after flush:', err);
+          setSyncBroken(true);
+        });
         if (result.needsReLogin) {
-          clearAuth();
-          navigate('/login');
+          // Never yank mid-work: a stale queued item's 401 used to clearAuth
+          // and redirect from any page, losing in-progress entry (issue #6).
+          setSessionExpired(true);
         }
       } catch (err) {
-        // Broken IndexedDB (or a flush bug) must at least be tail-able.
+        // Broken IndexedDB (or a flush bug): visible, not just tail-able.
         console.error('offline sync unavailable:', err);
+        setSyncBroken(true);
       }
     };
     // Items queued while already online (e.g. a request that failed over live
@@ -80,14 +214,15 @@ export default function Layout() {
       if (queuedTimer) clearTimeout(queuedTimer);
       queuedTimer = setTimeout(doFlush, 5_000);
     };
+    const onOnline = () => { refreshDirectory(); doFlush(); };
     doFlush();
-    window.addEventListener('online', doFlush);
+    window.addEventListener('online', onOnline);
     window.addEventListener('offlinecountchange', onCountChange);
     return () => {
       disposed = true;
       if (retryTimer) clearTimeout(retryTimer);
       if (queuedTimer) clearTimeout(queuedTimer);
-      window.removeEventListener('online', doFlush);
+      window.removeEventListener('online', onOnline);
       window.removeEventListener('offlinecountchange', onCountChange);
     };
   }, [navigate]);
@@ -101,6 +236,23 @@ export default function Layout() {
       setDeadLetters(remaining);
       if (remaining.length === 0) setDlExpanded(false);
     } catch { /* keep the banner if the clear failed */ }
+  }
+
+  async function handleAdoptForeign() {
+    try {
+      // Same-snapshot rule as the flush: adopt under whoever is signed in
+      // NOW, not the mount-time closure.
+      const auth = getAuth();
+      if (!auth) return;
+      await adoptForeignItems(auth.user.id);
+      setForeignCount(0);
+      setAdoptArmed(false);
+      // adoptForeignItems dispatched offlinecountchange, which schedules the
+      // flush that syncs the adopted entries under this account.
+    } catch (err) {
+      console.error('failed to adopt held entries:', err);
+      setSyncBroken(true);
+    }
   }
 
   async function handleLogout() {
@@ -120,6 +272,87 @@ export default function Layout() {
 
   return (
     <div className="layout">
+      {accountChanged && (
+        <div
+          ref={overlayRef}
+          tabIndex={-1}
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="Account changed in another tab"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.75)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+          }}
+        >
+          <div className="banner" style={{ background: '#fff', color: '#1a1a1a', borderRadius: 8, padding: 20, maxWidth: 520 }}>
+            <p style={{ marginTop: 0, fontWeight: 600 }}>
+              {accountChanged === 'signed-out'
+                ? 'This account was signed out in another tab. / Esta cuenta cerró sesión en otra pestaña.'
+                : `Another tab signed in as ${accountChanged.name}. / Otra pestaña inició sesión como ${accountChanged.name}.`}
+            </p>
+            <p>
+              Anything typed on this screen is paused, not lost. To finish this entry, sign back in as {user.name} in the other tab and this notice will clear. / Lo escrito está pausado, no perdido. Vuelva a iniciar sesión como {user.name} en la otra pestaña para continuar.
+            </p>
+            <button
+              className="btn-ghost"
+              style={{ fontSize: 13 }}
+              onClick={() => window.location.reload()}
+            >
+              {accountChanged === 'signed-out'
+                ? 'Discard this entry and go to sign-in / Descartar y salir'
+                : `Discard this entry and continue as ${accountChanged.name} / Descartar y continuar`}
+            </button>
+          </div>
+        </div>
+      )}
+      {!swSupported && (
+        <div className="banner" style={{ margin: 0, borderRadius: 0, padding: '6px 12px', fontSize: 13 }}>
+          <p style={{ margin: 0 }}>
+            This device can't reopen the app while offline — keep this tab open during outages. Entries still save and sync. / Este dispositivo no puede reabrir la app sin conexión — mantenga esta pestaña abierta. Las entradas se guardan y sincronizan.
+          </p>
+        </div>
+      )}
+      {sessionExpired && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
+          <p style={{ margin: 0 }}>
+            Session expired — queued entries are safe and will sync after you sign in again. / Sesión expirada — las entradas guardadas se sincronizarán al volver a iniciar sesión.
+            <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => { clearAuth(); navigate('/login'); }}>
+              Sign in / Iniciar sesión
+            </button>
+          </p>
+        </div>
+      )}
+      {syncBroken && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
+          <p style={{ margin: 0 }}>
+            Offline sync is unavailable on this device — do not rely on offline entry. Tell a supervisor. / La sincronización sin conexión no está disponible en este dispositivo.
+          </p>
+        </div>
+      )}
+      {foreignCount > 0 && (
+        <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
+          <p style={{ margin: 0 }}>
+            {foreignCount} entr{foreignCount === 1 ? 'y' : 'ies'} from a different account {foreignCount === 1 ? 'is' : 'are'} waiting — that person should sign in on this device to sync them.
+            {/* Recovery path when the owner CAN'T sign in again (deactivated
+                account): deliberately re-attribute to the current user. Two
+                clicks, because it trades attribution accuracy for the data. */}
+            {!adoptArmed ? (
+              <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => setAdoptArmed(true)}>
+                Can't sign in? Sync under my account… / ¿No puede? Sincronizar en mi cuenta…
+              </button>
+            ) : (
+              <>
+                <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={handleAdoptForeign}>
+                  Confirm: record {foreignCount === 1 ? 'this entry' : 'these entries'} as mine / Confirmar
+                </button>
+                <button className="btn-ghost" style={{ marginLeft: 8, fontSize: 12 }} onClick={() => setAdoptArmed(false)}>
+                  Cancel / Cancelar
+                </button>
+              </>
+            )}
+          </p>
+        </div>
+      )}
       {deadLetters.length > 0 && (
         <div className="error banner" style={{ margin: 0, borderRadius: 0, padding: '8px 12px' }}>
           <p style={{ margin: 0 }}>

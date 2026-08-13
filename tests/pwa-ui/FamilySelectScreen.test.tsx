@@ -2,6 +2,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('../../src/pwa/lib/offline', () => ({
+  markDirectoryStale: vi.fn(),
+}));
 vi.mock('../../src/pwa/lib/api', () => {
   class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
   return { api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() }, ApiError };
@@ -9,6 +12,7 @@ vi.mock('../../src/pwa/lib/api', () => {
 
 import FamilySelectScreen from '../../src/pwa/components/enter/FamilySelectScreen';
 import { api } from '../../src/pwa/lib/api';
+import { markDirectoryStale } from '../../src/pwa/lib/offline';
 import type { FamilySearchResult } from '../../src/pwa/lib/types';
 
 const result = (id: string, name: string): FamilySearchResult => ({
@@ -50,6 +54,8 @@ describe('FamilySelectScreen add-another-family', () => {
         proxy_phone: '4805550001',
       });
     });
+    // The new proxy link must reach the offline directory too.
+    expect(markDirectoryStale).toHaveBeenCalled();
     // Added pre-checked: confirm includes it
     await user.click(screen.getByRole('button', { name: /Confirm/ }));
     expect(onConfirm).toHaveBeenCalledWith([expect.objectContaining({ id: 'extra1' })]);

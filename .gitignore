@@ -38,3 +38,9 @@ graphify-out/.graphify_python
 
 # coverage output
 coverage/
+
+# playwright
+test-results/
+playwright-report/
+
+

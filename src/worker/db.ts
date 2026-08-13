@@ -1,37 +1,7 @@
 import type { Family, Visit, NewFamily, NewVisit } from './schema';
-
-export function levenshtein(a: string, b: string): number {
-  const m = a.length, n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
-    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
-  );
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1]
-        ? dp[i - 1][j - 1]
-        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
-    }
-  }
-  return dp[m][n];
-}
-
-// Canonical form: exactly 10 digits. Strips a leading country code 1 from
-// 11-digit numbers. Returns null for anything else (rejects 7–9 digit and
-// 12+ digit inputs rather than silently accepting them, so the Twilio `To`
-// field is always valid as +1<10digits>).
-export function normalizePhone(phone: string | null | undefined): string | null {
-  if (!phone) return null;
-  const digits = phone.replace(/\D/g, '');
-  if (digits.length === 11 && digits[0] === '1') return digits.slice(1);
-  if (digits.length === 10) return digits;
-  return null;
-}
-
-// Lowercase + strip combining marks so LIKE searches match accented names.
-// Stored in name_normalized column; also applied to the query prefix before binding.
-export function normalizeName(s: string): string {
-  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-}
+import { levenshtein, normalizeName, normalizePhone, rankName, compareRank } from '../shared/fuzzy';
+// Re-exported: routes and tests import these from db.ts.
+export { levenshtein, normalizeName, normalizePhone };
 
 // D1 stores booleans as 0/1 integers; convert them back to JS booleans on
 // every read path so callers can use strict comparisons safely.
@@ -160,10 +130,6 @@ export interface FamilySearchResult extends Family {
   last_visit_date: string | null;
 }
 
-function escapeLike(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-}
-
 export async function searchFamilies(
   db: D1Database,
   params: SearchParams
@@ -186,28 +152,49 @@ export async function searchFamilies(
 
   if (name && name.trim().length >= 2) {
     const token = name.trim().split(/\s+/)[0];
-    const rawPrefix = token.slice(0, Math.min(4, token.length));
-    // Normalize the prefix so it matches the stored name_normalized column.
-    // For rows where name_normalized is NULL (pre-migration), fall back to
-    // LOWER(name) which handles ASCII names; non-ASCII old rows rely on the
-    // Levenshtein post-filter.
-    const prefix = escapeLike(normalizeName(rawPrefix));
-    const likeResults = await db.prepare(`
-      SELECT f.*, MAX(v.visit_date) as last_visit_date
-      FROM families f
-      LEFT JOIN visits v ON v.family_id = f.id
-      WHERE COALESCE(f.name_normalized, LOWER(f.name)) LIKE ? ESCAPE '\\'
-      GROUP BY f.id
-      LIMIT 100
-    `).bind(`${prefix}%`).all<Record<string, unknown>>();
+    const normToken = normalizeName(token);
+    const normFull = normalizeName(name.trim());
 
-    const nameRows = (likeResults.results ?? [])
-      .map(r => mapRow(r) as FamilySearchResult)
-      .filter(r => {
-        const storedFirst = normalizeName(r.name.split(/\s+/)[0]);
-        const searchToken = normalizeName(token);
-        return levenshtein(storedFirst, searchToken) <= 3;
-      });
+    // Levenshtein over EVERY stored name, no SQL prefilter. Earlier versions
+    // prefiltered with LIKE needles (prefix, then bigram variants), and every
+    // finite needle set left some legitimate one-edit typo unreachable
+    // ('Msith', then 'Sxith'). The contract is "matches within edit distance
+    // N are found" — the only way to guarantee it is to score every name.
+    // The matching/tier logic itself lives in shared/fuzzy.ts because the
+    // PWA's offline directory must behave IDENTICALLY. The dataset is a few
+    // thousand rows and this first pass pulls only id + normalized name, so
+    // the scan stays cheap; full rows are fetched afterward for the matches.
+    const allNames = await db.prepare(
+      `SELECT id, COALESCE(name_normalized, LOWER(name)) AS norm FROM families`
+    ).all<{ id: string; norm: string }>();
+
+    const matches: ({ id: string } & import('../shared/fuzzy').FuzzyRank)[] = [];
+    for (const r of allNames.results ?? []) {
+      const rank = rankName(r.norm, normToken, normFull);
+      if (rank) matches.push({ id: r.id, ...rank });
+    }
+    // Rank BEFORE any cap: exact tiers first, then closest by whichever
+    // metric matched. 270 near-miss 'Smath' rows must never crowd out an
+    // exact-surname 'Alexandria Verylongname Smith'.
+    matches.sort(compareRank);
+    // Fetch details for ALL ranked matches up to a response ceiling, in
+    // chunks under D1's per-statement bind-parameter limit. The ceiling only
+    // trims degenerate 1-2 char queries, and ranking guarantees anything it
+    // trims scored worse than 270 closer names.
+    const ids = matches.slice(0, 270).map(m => m.id);
+
+    const nameRows: FamilySearchResult[] = [];
+    for (let i = 0; i < ids.length; i += 90) {
+      const chunk = ids.slice(i, i + 90);
+      const detail = await db.prepare(`
+        SELECT f.*, MAX(v.visit_date) as last_visit_date
+        FROM families f
+        LEFT JOIN visits v ON v.family_id = f.id
+        WHERE f.id IN (${chunk.map(() => '?').join(',')})
+        GROUP BY f.id
+      `).bind(...chunk).all<Record<string, unknown>>();
+      for (const r of detail.results ?? []) nameRows.push(mapRow(r) as FamilySearchResult);
+    }
 
     const existing = new Set(rows.map(r => r.id));
     for (const r of nameRows) {
@@ -217,11 +204,22 @@ export async function searchFamilies(
       }
     }
 
+    // Display order uses the SAME tiers as the cap — an exact-surname match
+    // must not survive the cap only to sink beneath near-miss junk on screen.
+    const rankById = new Map(matches.map(m => [m.id, m]));
+    const FALLBACK = { tier: 3, minDist: 99, fullDist: 99 };
     rows.sort((a, b) => {
-      if (a.phone === normPhone) return -1;
-      if (b.phone === normPhone) return 1;
-      return levenshtein(normalizeName(a.name), normalizeName(name)) -
-             levenshtein(normalizeName(b.name), normalizeName(name));
+      // Guarded: on a name-only search normPhone is null, and null === null
+      // would otherwise rank every phoneless row "first", garbling the sort.
+      if (normPhone) {
+        if (a.phone === normPhone) return -1;
+        if (b.phone === normPhone) return 1;
+      }
+      const ra = rankById.get(a.id) ?? FALLBACK;
+      const rb = rankById.get(b.id) ?? FALLBACK;
+      return (ra.tier - rb.tier) || (ra.minDist - rb.minDist) || (ra.fullDist - rb.fullDist)
+        // Equal-rank ties: most recently seen family first.
+        || (b.last_visit_date ?? '').localeCompare(a.last_visit_date ?? '');
     });
   }
 
@@ -305,6 +303,10 @@ export async function insertVisit(
 export async function getVisitsByFamily(db: D1Database, familyId: string): Promise<Visit[]> {
   const result = await db.prepare(
     `SELECT * FROM visits WHERE family_id = ? ORDER BY visit_date DESC`
-  ).bind(familyId).all<Visit>();
-  return result.results ?? [];
+  ).bind(familyId).all<Record<string, unknown>>();
+  // D1 stores booleans as 0/1 — honor the declared Visit contract, which
+  // promises bag_received: boolean to API consumers.
+  return (result.results ?? []).map(r =>
+    ({ ...r, bag_received: r.bag_received === 1 || r.bag_received === true }) as unknown as Visit
+  );
 }

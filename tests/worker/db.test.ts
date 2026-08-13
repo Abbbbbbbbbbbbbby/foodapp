@@ -202,5 +202,147 @@ describe('insertVisit + getVisitsByFamily', () => {
     const visits = await getVisitsByFamily(db, familyId);
     expect(visits).toHaveLength(1);
     expect(visits[0].visit_date).toBe('2026-05-20');
+    // Declared contract: boolean, not D1's raw 0/1 (a browser probe
+    // received a literal 1 before this was mapped).
+    expect(visits[0].bag_received).toBe(false);
+    await db.prepare(`UPDATE visits SET bag_received = 1 WHERE family_id = ?`).bind(familyId).run();
+    const after = await getVisitsByFamily(db, familyId);
+    expect(after[0].bag_received).toBe(true);
+  });
+});
+
+function baseFamily() {
+  return {
+    name: 'X', phone: null, address: null, zip_code: null, date_of_birth: null,
+    language: null, ethnicity: null, hispanic: null, ami_bracket: null, num_people: null,
+    num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+    health_insurance: null, snap_benefits: null, receives_texts: null, want_text_updates: null,
+    id_confirmed: null, bag_received: null, first_visit_date: null, created_by: null,
+  };
+}
+
+describe('searchFamilies — broadened fuzzy matching (issue #6)', () => {
+  it('finds a transposed first name (Smiht → Smith)', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Smith Family' });
+    const results = await searchFamilies(db, { name: 'Smiht' });
+    expect(results.some(r => r.name === 'Smith Family')).toBe(true);
+  });
+
+  it('finds a LEADING-pair transposition (Msith → Smith)', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Smith Family' });
+    const results = await searchFamilies(db, { name: 'Msith' });
+    expect(results.some(r => r.name === 'Smith Family')).toBe(true);
+  });
+
+  it('finds ANY single-edit typo (Sxith → Smith): the distance contract holds with no prefilter escape hatch', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Smith Family' });
+    // Position-1 substitution defeated every finite bigram-needle scheme;
+    // the full-scan Levenshtein pass is what guarantees this.
+    const results = await searchFamilies(db, { name: 'Sxith' });
+    expect(results.some(r => r.name === 'Smith Family')).toBe(true);
+  });
+
+  it('finds a family by a NON-first token (last-name search)', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Jose Garcia' });
+    const results = await searchFamilies(db, { name: 'Garcia' });
+    expect(results.some(r => r.name === 'Jose Garcia')).toBe(true);
+  });
+
+  it('still excludes clearly unrelated names', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Zhang Wei' });
+    const results = await searchFamilies(db, { name: 'Garcia' });
+    expect(results.some(r => r.name === 'Zhang Wei')).toBe(false);
+  });
+
+  it('finds the real match even when the bigram matches more than the 300-row cap', async () => {
+    const db = (env as unknown as Env).DB;
+    // 305 decoys all containing the bigram 'ma' (but not starting with it).
+    // Ids are pinned so every decoy sorts BEFORE the target: the unranked
+    // query emitted rows in id order, so truncation deterministically
+    // returned only decoys and dropped the family being checked in.
+    const stmt = db.prepare('INSERT INTO families (id, name, name_normalized) VALUES (?, ?, ?)');
+    for (let batch = 0; batch < 5; batch++) {
+      await db.batch(Array.from({ length: 61 }, (_, i) => {
+        const n = batch * 61 + i;
+        const id = `${String(n).padStart(4, '0')}${'0'.repeat(28)}`;
+        return stmt.bind(id, `Amanda D${n}`, `amanda d${n}`);
+      }));
+    }
+    await stmt.bind('f'.repeat(32), 'Martinez Family', 'martinez family').run();
+    // Last-name-only variant: 'jose martinez' does NOT start with 'ma', so
+    // only the any-token-start rank tier keeps it inside the cap.
+    await stmt.bind('e'.repeat(32), 'Jose Martinez', 'jose martinez').run();
+
+    // Exact token: ranked into the cap by the full-token substring tier.
+    const exact = await searchFamilies(db, { name: 'Martinez' });
+    expect(exact.some(r => r.name === 'Martinez Family')).toBe(true);
+    expect(exact.some(r => r.name === 'Jose Martinez')).toBe(true);
+
+    // Misspelled token: no substring match, but the token-start tier still
+    // ranks both above the mid-word decoys.
+    const fuzzy = await searchFamilies(db, { name: 'Martines' });
+    expect(fuzzy.some(r => r.name === 'Martinez Family')).toBe(true);
+    expect(fuzzy.some(r => r.name === 'Jose Martinez')).toBe(true);
+  });
+
+  it('an exact full-name search survives 100+ families sharing the first name', async () => {
+    const db = (env as unknown as Env).DB;
+    // The common-first-name case: every decoy ties at token distance 0 for
+    // 'maria', so only full-query ranking keeps the exact match in the
+    // result set regardless of any candidate cap.
+    const stmt = db.prepare('INSERT INTO families (id, name, name_normalized) VALUES (?, ?, ?)');
+    for (let batch = 0; batch < 2; batch++) {
+      await db.batch(Array.from({ length: 55 }, (_, i) => {
+        const n = batch * 55 + i;
+        const id = `${String(n).padStart(4, '0')}${'a'.repeat(28)}`;
+        return stmt.bind(id, `Maria Decoy${n}`, `maria decoy${n}`);
+      }));
+    }
+    await stmt.bind('b'.repeat(32), 'Maria Target', 'maria target').run();
+
+    const results = await searchFamilies(db, { name: 'Maria Target' });
+    expect(results.some(r => r.name === 'Maria Target')).toBe(true);
+    // And the exact match outranks the first-name crowd.
+    expect(results[0].name).toBe('Maria Target');
+  });
+
+  it('an exact SURNAME match survives 280 near-miss decoys and ranks above them', async () => {
+    const db = (env as unknown as Env).DB;
+    // Jeff's repro: 270 'Smath' rows (tokenDist 1, SHORT full names) ranked
+    // above 'Alexandria Verylongname Smith' (tokenDist 0, LONG full name)
+    // under full-distance-primary ranking, pushing the exact surname past
+    // the cap. Exact-token tiering is what keeps it in and on top.
+    const stmt = db.prepare('INSERT INTO families (id, name, name_normalized) VALUES (?, ?, ?)');
+    for (let batch = 0; batch < 4; batch++) {
+      await db.batch(Array.from({ length: 70 }, (_, i) => {
+        const n = batch * 70 + i;
+        const id = `${String(n).padStart(4, '0')}${'c'.repeat(28)}`;
+        return stmt.bind(id, `Smath D${n}`, `smath d${n}`);
+      }));
+    }
+    await stmt.bind('d'.repeat(32), 'Alexandria Verylongname Smith', 'alexandria verylongname smith').run();
+
+    const results = await searchFamilies(db, { name: 'Smith' });
+    expect(results.some(r => r.name === 'Alexandria Verylongname Smith')).toBe(true);
+    expect(results[0].name).toBe('Alexandria Verylongname Smith');
+  });
+
+  it('applies the tighter distance threshold to short tokens', async () => {
+    const db = (env as unknown as Env).DB;
+    await insertFamily(db, { ...baseFamily(), name: 'Monaxyz Family' });
+    await insertFamily(db, { ...baseFamily(), name: 'Monaxyzq Family' });
+
+    // 4-char token → threshold 2: distance-3 'monaxyz' must NOT match.
+    const short = await searchFamilies(db, { name: 'Mona' });
+    expect(short.some(r => r.name === 'Monaxyz Family')).toBe(false);
+
+    // 5-char token → threshold 3: distance-3 'monaxyzq' MUST match.
+    const long = await searchFamilies(db, { name: 'Monax' });
+    expect(long.some(r => r.name === 'Monaxyzq Family')).toBe(true);
   });
 });

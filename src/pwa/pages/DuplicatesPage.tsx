@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { markDirectoryStale } from '../lib/offline';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 
@@ -128,6 +129,7 @@ function FlagCard({
     setError(null);
     try {
       await api.post(`/api/admin/duplicates/${flag.id}/merge`, { keep_id: keepId });
+      markDirectoryStale();
       onMerged(flag.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to merge');

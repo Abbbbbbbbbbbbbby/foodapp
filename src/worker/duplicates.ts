@@ -184,6 +184,16 @@ export async function mergeFamilies(
     ...visitAliases.map(a => db.prepare(
       `INSERT OR IGNORE INTO merged_keys (idempotency_key, kind, target_id) VALUES (?, 'visit', ?)`
     ).bind(a.key, a.targetId)),
+    // Family-ID alias: offline directories cache the discarded id; replayed
+    // visits against it must land on the survivor, not 500 on a missing FK.
+    db.prepare(
+      `INSERT OR REPLACE INTO merged_family_ids (old_id, target_id) VALUES (?, ?)`
+    ).bind(discardId, keepId),
+    // Chained merges: earlier old-ids pointing at the row THIS merge deletes
+    // must follow the survivor (A→B then B→C leaves A→C).
+    db.prepare(
+      `UPDATE merged_family_ids SET target_id = ? WHERE target_id = ?`
+    ).bind(keepId, discardId),
     // Chained-merge redirection: aliases from earlier merges that point at
     // records THIS merge deletes must follow the survivors.
     db.prepare(

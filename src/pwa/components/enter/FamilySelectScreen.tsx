@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { markDirectoryStale } from '../../lib/offline';
 import type { FamilySearchResult } from '../../lib/types';
 import { api, ApiError } from '../../lib/api';
 
@@ -81,6 +82,7 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
           proxy_name: pickupName.trim() || null,
           proxy_phone: pickupPhone,
         });
+        markDirectoryStale();
       } catch (e) {
         // Non-fatal: this pickup proceeds either way — but the panel must stay
         // open so the volunteer actually SEES that the save-for-next-time part

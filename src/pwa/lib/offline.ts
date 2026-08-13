@@ -1,7 +1,11 @@
+import { rankName, compareRank, normalizeName, normalizePhone } from '../../shared/fuzzy';
+import type { FuzzyRank } from '../../shared/fuzzy';
+
 const DB_NAME = 'foodapp_offline';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = 'pending';
 const DL_STORE = 'dead-letter';
+const DIR_STORE = 'directory';
 
 // crypto.randomUUID() not available in Safari 9; use Math.random-based v4 UUID
 export function generateUUID(): string {
@@ -18,6 +22,7 @@ export interface PendingItem {
   payload: unknown;
   createdAt: number;
   bag?: boolean;          // a bag was given for this submission's visit — applied after sync
+  queuedByUserId?: string; // who entered it — a different login must not flush it under their identity
 }
 
 export interface DeadLetterEntry {
@@ -39,10 +44,31 @@ function openDb(): Promise<IDBDatabase> {
       const oldVersion = (e as IDBVersionChangeEvent).oldVersion;
       if (oldVersion < 1) db.createObjectStore(STORE, { keyPath: 'id' });
       if (oldVersion < 2) db.createObjectStore(DL_STORE, { keyPath: 'id' });
+      if (oldVersion < 3) db.createObjectStore(DIR_STORE, { keyPath: 'id' });
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // A second tab on old code holding the previous version would otherwise
+      // block upgrades forever; close so the other tab's upgrade proceeds.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    // Surfaced instead of hanging: a blocked open means another tab pins an
+    // old version — reject so callers report 'sync unavailable' rather than
+    // silently never settling.
+    req.onblocked = () => reject(new Error('offline storage blocked by another tab — close other tabs of this app'));
     req.onerror = () => reject(req.error);
   });
+}
+
+// Write transactions can terminate via the abort event WITHOUT a preceding
+// error event (commit-time quota failure, browser storage eviction). Both
+// paths must reject, or the caller's await hangs forever.
+function rejectOnFailure(tx: IDBTransaction, reject: (err: unknown) => void) {
+  // tx.error can still be null on the error arm (it's populated at abort
+  // time) — fall back so logs never read "sync unavailable: null".
+  tx.onerror = () => reject(tx.error ?? new Error('offline storage transaction failed'));
+  tx.onabort = () => reject(tx.error ?? new Error('offline storage transaction aborted'));
 }
 
 function dispatchCountChange() {
@@ -56,16 +82,17 @@ function dispatchCountChange() {
 // Falls back to the queue item's own UUID when no key is supplied.
 export async function queueItem(
   item: Pick<PendingItem, 'type' | 'payload'>,
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  queuedByUserId?: string
 ): Promise<string> {
   const id = generateUUID();
   const key = idempotencyKey ?? id;
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).add({ ...item, id, idempotencyKey: key, createdAt: Date.now() });
+    tx.objectStore(STORE).add({ ...item, id, idempotencyKey: key, createdAt: Date.now(), queuedByUserId });
     tx.oncomplete = () => { dispatchCountChange(); resolve(id); };
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -83,7 +110,7 @@ export async function setItemBag(id: string, bag: boolean): Promise<void> {
       store.put({ ...item, bag });
     };
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -126,13 +153,181 @@ export async function getPendingCount(): Promise<number> {
   });
 }
 
+// ---- Offline family directory ----
+// A cached roster of known families so a RETURNING household can be found
+// during an outage. Without it, every offline check-in of an existing family
+// minted a duplicate ("register as new" was the only offline path).
+
+export interface DirectoryFamily {
+  id: string;
+  name: string;
+  name_normalized: string;   // server-normalized: iOS 9 can't fold accents
+  phone: string | null;      // already normalized to 10 digits server-side
+  proxy_phones: string[];    // designated pickup people's numbers
+  num_people: number | null;
+  last_visit_date: string | null;
+}
+
+// Refresh ordering: full refreshes race each other (reconnect fires one
+// directly and another via the flush) and race create-time upserts. A stale
+// response committing a clear-and-replace would erase newer data, so every
+// write claims an epoch and a full refresh only commits if nothing newer
+// claimed one while its response was in flight.
+let directoryEpoch = 0;
+export function nextDirectoryEpoch(): number {
+  return ++directoryEpoch;
+}
+
+// Full replace: the server response is the complete roster. Callers pass the
+// epoch they claimed BEFORE fetching; a superseded response is dropped.
+export async function cacheDirectory(families: DirectoryFamily[], epoch?: number): Promise<void> {
+  if (epoch !== undefined && epoch !== directoryEpoch) return; // fast path: already stale
+  const db = await openDb();
+  // Re-check AFTER the await: a newer refresh/upsert can claim an epoch
+  // while IndexedDB is opening, and this clear-and-replace must not resume
+  // over it. Between here and issuing the writes there is no further yield,
+  // so the epoch cannot move again before the transaction is created.
+  if (epoch !== undefined && epoch !== directoryEpoch) return;
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DIR_STORE, 'readwrite');
+    const store = tx.objectStore(DIR_STORE);
+    store.clear();
+    for (const f of families) store.put(f);
+    tx.oncomplete = () => resolve();
+    rejectOnFailure(tx, reject);
+  });
+}
+
+// Mutation invalidation: any online family/proxy mutation (edit, delete,
+// proxy add, import, merge) calls this so Layout re-pulls the roster —
+// otherwise offline lookup serves obsolete phones/names until the next
+// reconnect or flush.
+export function markDirectoryStale(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('directorystale'));
+  }
+}
+
+// Offline analog of GET /api/families/pickup: partition the cached roster
+// into the searcher's OWN family and the families that designated this
+// phone as a pickup proxy — flattening these into plain results lost the
+// proxy grouping and the pickup attribution.
+export async function directoryPickup(phone: string): Promise<{ own: DirectoryFamily | null; proxy: DirectoryFamily[] }> {
+  const normQueryPhone = normalizePhone(phone);
+  if (!normQueryPhone) return { own: null, proxy: [] };
+  const all = await readAllDirectory();
+  const own = all.find(f => f.phone === normQueryPhone) ?? null;
+  const proxy = all.filter(f => (f.proxy_phones ?? []).indexOf(normQueryPhone) !== -1 && f.id !== own?.id);
+  proxy.sort((a, b) => (b.last_visit_date ?? '').localeCompare(a.last_visit_date ?? ''));
+  return { own, proxy };
+}
+
+function readAllDirectory(): Promise<DirectoryFamily[]> {
+  return openDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(DIR_STORE, 'readonly');
+    const items: DirectoryFamily[] = [];
+    const req = tx.objectStore(DIR_STORE).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (cursor) { items.push(cursor.value as DirectoryFamily); cursor.continue(); }
+      else resolve(items);
+    };
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+// Merge-aware upsert for families learned OUTSIDE a full refresh (a family
+// just registered online in this session must be findable if the network
+// dies a minute later). Merge, don't replace: an incoming record without
+// proxy data must not wipe proxy phones a full refresh delivered earlier.
+export async function upsertDirectoryFamilies(families: DirectoryFamily[]): Promise<void> {
+  if (families.length === 0) return;
+  // Newer data than any refresh already in flight: invalidate them.
+  nextDirectoryEpoch();
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DIR_STORE, 'readwrite');
+    const store = tx.objectStore(DIR_STORE);
+    for (const f of families) {
+      const getReq = store.get(f.id);
+      getReq.onsuccess = () => {
+        const existing = getReq.result as DirectoryFamily | undefined;
+        store.put(existing
+          ? { ...existing, ...f, proxy_phones: f.proxy_phones.length ? f.proxy_phones : existing.proxy_phones }
+          : f);
+      };
+    }
+    tx.oncomplete = () => resolve();
+    rejectOnFailure(tx, reject);
+  });
+}
+
+// The SAME matching contract as the server's search (shared/fuzzy.ts): a
+// weaker offline matcher was a duplicate-family generator — 'Sxith' found
+// Smith online but not offline, and a '+1 480…' query missed the stored
+// 10-digit phone. Stored names arrive pre-normalized from the server; only
+// the QUERY is normalized here (with the shared accent-map fallback for the
+// no-String.normalize iOS 9 target).
+export async function searchDirectory(name: string, phone: string | null): Promise<DirectoryFamily[]> {
+  const all = await readAllDirectory();
+  const normQueryPhone = normalizePhone(phone);
+  const trimmed = name.trim();
+  const scored: { f: DirectoryFamily; phoneHit: boolean; rank: FuzzyRank | null }[] = [];
+  for (const f of all) {
+    const phoneHit = normQueryPhone !== null &&
+      (f.phone === normQueryPhone || (f.proxy_phones ?? []).indexOf(normQueryPhone) !== -1);
+    let rank: FuzzyRank | null = null;
+    if (trimmed.length >= 2) {
+      const normToken = normalizeName(trimmed.split(/\s+/)[0]);
+      const normFull = normalizeName(trimmed);
+      rank = rankName(f.name_normalized ?? normalizeName(f.name), normToken, normFull);
+    }
+    if (phoneHit || rank) scored.push({ f, phoneHit, rank });
+  }
+  scored.sort((a, b) =>
+    (Number(b.phoneHit) - Number(a.phoneHit))
+    || compareRank(a.rank ?? WORST_RANK, b.rank ?? WORST_RANK)
+    || (b.f.last_visit_date ?? '').localeCompare(a.f.last_visit_date ?? ''));
+  return scored.slice(0, 20).map(s => s.f);
+}
+const WORST_RANK: FuzzyRank = { tier: 3, minDist: 99, fullDist: 99 };
+
+// Recovery for held entries whose owner can no longer sign in (deactivated
+// or deleted account): explicitly re-attribute every foreign pending item to
+// the given user so the next flush syncs them under that account. This is a
+// deliberate human action behind a banner button — never automatic — because
+// it trades attribution accuracy for not losing the data.
+export async function adoptForeignItems(currentUserId: string): Promise<number> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    // Cursor read-modify-write inside ONE readwrite transaction: a separate
+    // snapshot-then-put would write back stale copies, erasing concurrent
+    // updates (a bag flag set between the read and the write).
+    let adopted = 0;
+    const tx = db.transaction(STORE, 'readwrite');
+    const req = tx.objectStore(STORE).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (!cursor) return;
+      const item = cursor.value as PendingItem;
+      if (item.queuedByUserId && item.queuedByUserId !== currentUserId) {
+        cursor.update({ ...item, queuedByUserId: currentUserId });
+        adopted++;
+      }
+      cursor.continue();
+    };
+    tx.oncomplete = () => { if (adopted > 0) dispatchCountChange(); resolve(adopted); };
+    rejectOnFailure(tx, reject);
+  });
+}
+
 export async function removeItem(id: string): Promise<void> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).delete(id);
     tx.oncomplete = () => { dispatchCountChange(); resolve(); };
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -158,7 +353,7 @@ async function addDeadLetter(item: PendingItem, errorStatus: number, errorMessag
     // duplicating the entry.
     tx.objectStore(DL_STORE).put(entry);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -191,7 +386,7 @@ export async function deleteDeadLetters(ids: string[]): Promise<void> {
     const store = tx.objectStore(DL_STORE);
     for (const id of ids) store.delete(id);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -201,7 +396,7 @@ export async function clearDeadLetters(): Promise<void> {
     const tx = db.transaction(DL_STORE, 'readwrite');
     tx.objectStore(DL_STORE).clear();
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    rejectOnFailure(tx, reject);
   });
 }
 
@@ -286,7 +481,10 @@ export interface FlushResult {
   flushed: number;        // synced and removed from queue
   errors: number;         // transient failures — still in queue, will retry
   deadLettered: number;   // permanent 4xx failures — removed from queue
-  needsReLogin: boolean;  // a 401 was received — caller should redirect to login
+  needsReLogin: boolean;  // a 401 was received — caller should prompt re-login
+  foreignItems: number;   // queued by a DIFFERENT user — held until they sign in
+  skipped?: true;         // another flush was in flight — NOT a clean result;
+                          // callers must not clear warning state based on it
 }
 
 // In-flight guard: prevents mount and 'online' event from overlapping.
@@ -295,16 +493,17 @@ export interface FlushResult {
 let flushing = false;
 let rerunRequested = false;
 
-export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
+export async function flushQueue(apiFn: ApiFn, currentUserId?: string): Promise<FlushResult> {
   if (flushing) {
     rerunRequested = true;
-    return { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false };
+    return { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0, skipped: true };
   }
   flushing = true;
-  const result: FlushResult = { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false };
+  const result: FlushResult = { flushed: 0, errors: 0, deadLettered: 0, needsReLogin: false, foreignItems: 0 };
   try {
    do {
     rerunRequested = false;
+    result.foreignItems = 0; // recounted each pass; foreign items persist
     const items = await getPending();
     for (const snapshot of items) {
       // Re-read just before syncing: setItemBag (or any update) landing after
@@ -317,6 +516,12 @@ export async function flushQueue(apiFn: ApiFn): Promise<FlushResult> {
         item = fresh;
       } catch {
         result.errors++;
+        continue;
+      }
+      // Shared-device protection: user A's entries must not be written under
+      // user B's identity. Items with no attribution (legacy) flush normally.
+      if (item.queuedByUserId && currentUserId && item.queuedByUserId !== currentUserId) {
+        result.foreignItems++;
         continue;
       }
       try {

@@ -15,11 +15,12 @@ class FakeApiError extends Error {
 // forever on the still-open handles.
 function freshDb(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('foodapp_offline', 2);
+    const req = indexedDB.open('foodapp_offline', 3);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains('pending')) db.createObjectStore('pending', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('dead-letter')) db.createObjectStore('dead-letter', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('directory')) db.createObjectStore('directory', { keyPath: 'id' });
     };
     req.onsuccess = () => {
       const db = req.result;
@@ -224,5 +225,275 @@ describe('flushQueue — review-round regressions', () => {
     // The annotated bag-only record — NOT a generic whole-submission failure
     expect(dls[0].errorMessage).toContain('family and visit SAVED');
     expect(await getPending()).toHaveLength(0);
+  });
+});
+
+describe('flushQueue — shared-device attribution (issue #6)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it("holds another user's items instead of flushing them under the current identity", async () => {
+    await queueItem({ type: 'family', payload: { data: { name: 'Mine' }, proxyData: null } }, 'k-mine', 'user-a');
+    await queueItem({ type: 'family', payload: { data: { name: 'Theirs' }, proxyData: null } }, 'k-theirs', 'user-b');
+
+    const posted: string[] = [];
+    const result = await flushQueue(async (_url, body) => {
+      const b = body as { idempotency_key?: string };
+      if (b.idempotency_key) posted.push(b.idempotency_key);
+      return { id: 'x' };
+    }, 'user-a');
+
+    expect(result.flushed).toBe(1);
+    expect(result.foreignItems).toBe(1);
+    expect(posted).toContain('k-mine');
+    expect(posted).not.toContain('k-theirs');
+    const pending = await getPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].queuedByUserId).toBe('user-b'); // held, not lost
+  });
+
+  it('legacy items without attribution still flush', async () => {
+    await queueItem({ type: 'family', payload: { data: { name: 'Legacy' }, proxyData: null } }, 'k-legacy');
+    const result = await flushQueue(async () => ({ id: 'x' }), 'user-a');
+    expect(result.flushed).toBe(1);
+    expect(result.foreignItems).toBe(0);
+  });
+});
+
+describe('flushQueue — in-flight guard (issue #6 re-review)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it('a concurrent call returns skipped:true, distinguishable from a clean flush', async () => {
+    await queueItem({ type: 'family', payload: { data: { name: 'Slow' }, proxyData: null } }, 'k-slow');
+
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const first = flushQueue(async () => { await gate; return { id: 'x' }; });
+
+    // While the first flush is blocked mid-item, a second trigger must not
+    // report "queue is clean" — callers would clear warning banners on that.
+    const second = await flushQueue(async () => ({ id: 'x' }));
+    expect(second.skipped).toBe(true);
+    expect(second.flushed).toBe(0);
+
+    release();
+    const result = await first;
+    expect(result.skipped).toBeUndefined(); // a real flush is never marked skipped
+    expect(result.flushed).toBe(1);
+  });
+});
+
+describe('adoptForeignItems — stranded-entry recovery (deactivated owner)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it("re-attributes another user's held items so they flush under the adopter", async () => {
+    const { adoptForeignItems } = await import('../../src/pwa/lib/offline');
+    await queueItem({ type: 'family', payload: { data: { name: 'Stranded' }, proxyData: null } }, 'k-stranded', 'deactivated-user');
+    await queueItem({ type: 'family', payload: { data: { name: 'Mine' }, proxyData: null } }, 'k-mine2', 'user-a');
+
+    // Held while attributed to someone else…
+    const before = await flushQueue(async () => ({ id: 'x' }), 'user-a');
+    expect(before.foreignItems).toBe(1);
+    expect(await getPending()).toHaveLength(1);
+
+    // …adopted (explicit user action), then flushes under the adopter.
+    const adopted = await adoptForeignItems('user-a');
+    expect(adopted).toBe(1);
+    const after = await flushQueue(async () => ({ id: 'x' }), 'user-a');
+    expect(after.flushed).toBe(1);
+    expect(after.foreignItems).toBe(0);
+    expect(await getPending()).toHaveLength(0);
+  });
+
+  it('adopting with no foreign items is a no-op', async () => {
+    const { adoptForeignItems } = await import('../../src/pwa/lib/offline');
+    await queueItem({ type: 'family', payload: { data: { name: 'Own' }, proxyData: null } }, 'k-own', 'user-a');
+    expect(await adoptForeignItems('user-a')).toBe(0);
+  });
+});
+
+describe('adoptForeignItems — concurrent-update safety', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it('preserves a bag flag set concurrently with adoption (no stale-snapshot overwrite)', async () => {
+    const { adoptForeignItems, setItemBag, getItem } = await import('../../src/pwa/lib/offline');
+    const id = await queueItem({ type: 'family', payload: { data: { name: 'Race Fam' }, proxyData: null } }, 'k-race', 'user-b');
+
+    // Interleave: whichever transaction commits first, the other must see
+    // its write — the cursor update reads the latest stored value, so the
+    // bag flag survives in both orders.
+    await Promise.all([
+      adoptForeignItems('user-a'),
+      setItemBag(id, true),
+    ]);
+
+    const item = await getItem(id);
+    expect(item?.queuedByUserId).toBe('user-a');
+    expect(item?.bag).toBe(true);
+  });
+});
+
+describe('offline family directory (returning-household lookup)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  const dirFam = (over: Record<string, unknown>) => ({
+    id: 'fx', name: 'Fam', name_normalized: 'fam', phone: null, proxy_phones: [],
+    num_people: null, last_visit_date: null, ...over,
+  });
+
+  it('caches the roster and finds a returning household by name or phone', async () => {
+    const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([
+      dirFam({ id: 'f1', name: 'José García Familia', name_normalized: 'jose garcia familia', phone: '4805551111', num_people: 4, last_visit_date: '2026-08-01' }),
+      dirFam({ id: 'f2', name: 'Chen Family', name_normalized: 'chen family', num_people: 2, last_visit_date: '2026-08-10' }),
+    ]);
+
+    // Accent-insensitive name match against the server-normalized name
+    const byName = await searchDirectory('García', null);
+    expect(byName.map(f => f.id)).toEqual(['f1']);
+    // Phone match must normalize the QUERY like the server does — a +1
+    // country code missed the stored 10-digit form before.
+    const byPhone = await searchDirectory('', '+1 (480) 555-1111');
+    expect(byPhone.map(f => f.id)).toEqual(['f1']);
+    // Recency breaks equal-rank ties
+    const both = await searchDirectory('familia', null);
+    expect(both.length).toBeGreaterThanOrEqual(1);
+    expect(both[0].id).toBe('f1');
+  });
+
+  it('matches with the SAME fuzziness as online search (Sxith → Smith offline)', async () => {
+    const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([
+      dirFam({ id: 'sm', name: 'Smith Family', name_normalized: 'smith family' }),
+    ]);
+    // A weaker offline matcher silently routed this to register-as-new —
+    // the duplicate-family path.
+    const results = await searchDirectory('Sxith', null);
+    expect(results.map(f => f.id)).toEqual(['sm']);
+  });
+
+  it('finds linked families by a designated pickup phone (proxy)', async () => {
+    const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([
+      dirFam({ id: 'own', name: 'Vargas Family', name_normalized: 'vargas family', phone: '6025558888', proxy_phones: ['4805559999'] }),
+      dirFam({ id: 'other', name: 'Unrelated Family', name_normalized: 'unrelated family', phone: '6025550000' }),
+    ]);
+    const results = await searchDirectory('', '480 555 9999');
+    expect(results.map(f => f.id)).toEqual(['own']);
+  });
+
+  it('a re-cache fully replaces the previous roster', async () => {
+    const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([dirFam({ id: 'old', name: 'Old Family', name_normalized: 'old family' })]);
+    await cacheDirectory([dirFam({ id: 'new', name: 'New Family', name_normalized: 'new family' })]);
+    expect(await searchDirectory('family', null)).toHaveLength(1);
+    expect((await searchDirectory('family', null))[0].id).toBe('new');
+  });
+});
+
+describe('shared fuzzy accent fallback (no String.normalize — iOS 9)', () => {
+  it('folds the Latin diacritics this population actually uses', async () => {
+    const { foldAccentsFallback, normalizeName } = await import('../../src/shared/fuzzy');
+    // The fallback must agree with the NFD path for these inputs.
+    for (const s of ['García', 'José', 'Muñoz', 'Peña', 'AGÜERO', 'François']) {
+      expect(foldAccentsFallback(s)).toBe(normalizeName(s));
+    }
+  });
+});
+
+describe('directoryPickup — offline proxy semantics', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  const dirFam2 = (over: Record<string, unknown>) => ({
+    id: 'fx', name: 'Fam', name_normalized: 'fam', phone: null, proxy_phones: [],
+    num_people: null, last_visit_date: null, ...over,
+  });
+
+  it('partitions the roster into own family and the families that designated this phone', async () => {
+    const { cacheDirectory, directoryPickup } = await import('../../src/pwa/lib/offline');
+    // One pickup person (4805550001): their OWN family plus TWO families
+    // that designated them — all must be presented together, like online.
+    await cacheDirectory([
+      dirFam2({ id: 'own', name: 'Mendez Family', name_normalized: 'mendez family', phone: '4805550001' }),
+      dirFam2({ id: 'p1', name: 'Vargas Family', name_normalized: 'vargas family', phone: '6025550002', proxy_phones: ['4805550001'], last_visit_date: '2026-08-01' }),
+      dirFam2({ id: 'p2', name: 'Cruz Family', name_normalized: 'cruz family', phone: '6025550003', proxy_phones: ['4805550001'], last_visit_date: '2026-08-10' }),
+      dirFam2({ id: 'x', name: 'Unrelated Family', name_normalized: 'unrelated family', phone: '6025550004' }),
+    ]);
+
+    const pickup = await directoryPickup('+1 480 555 0001');
+    expect(pickup.own?.id).toBe('own');
+    expect(pickup.proxy.map(f => f.id)).toEqual(['p2', 'p1']); // both, recency-sorted
+  });
+
+  it('proxy-only phone (no own family) still resolves the linked families', async () => {
+    const { cacheDirectory, directoryPickup } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([
+      dirFam2({ id: 'p1', name: 'Vargas Family', name_normalized: 'vargas family', phone: '6025550002', proxy_phones: ['4805550009'] }),
+    ]);
+    const pickup = await directoryPickup('4805550009');
+    expect(pickup.own).toBeNull();
+    expect(pickup.proxy.map(f => f.id)).toEqual(['p1']);
+  });
+});
+
+describe('directory epoch — stale refresh responses cannot commit', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it('a refresh that started before an upsert is dropped instead of erasing it', async () => {
+    const { cacheDirectory, upsertDirectoryFamilies, searchDirectory, nextDirectoryEpoch } = await import('../../src/pwa/lib/offline');
+    const fam = { id: 'fresh', name: 'Fresh Family', name_normalized: 'fresh family', phone: null, proxy_phones: [], num_people: null, last_visit_date: null };
+
+    // A full refresh claims its epoch, then (while its response is in
+    // flight) a create-time upsert lands newer data…
+    const staleEpoch = nextDirectoryEpoch();
+    await upsertDirectoryFamilies([fam]);
+    // …so the stale clear-and-replace must be a no-op.
+    await cacheDirectory([], staleEpoch);
+    expect((await searchDirectory('fresh', null)).map(f => f.id)).toEqual(['fresh']);
+
+    // A refresh with a CURRENT epoch still commits.
+    await cacheDirectory([], nextDirectoryEpoch());
+    expect(await searchDirectory('fresh', null)).toHaveLength(0);
+  });
+});
+
+describe('directory epoch — mid-open race (round-11)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  // HONESTY NOTE: the dangerous interleave needs the stale refresh's
+  // IndexedDB open to resolve AFTER a newer write committed. fake-indexeddb
+  // resolves opens FIFO, so that inversion is not constructible through the
+  // public API here (a gated-open monkeypatch was attempted and could not
+  // beat the fake's dispatch internals). The post-open re-check in
+  // cacheDirectory is therefore verified by reasoning — no yield exists
+  // between the re-check and transaction creation, and same-store readwrite
+  // transactions execute in creation order — plus this convergence test,
+  // which pins that concurrent refresh+upsert always ends with the newer
+  // data regardless of scheduling.
+  it('concurrent stale refresh and upsert converge to the newer data', async () => {
+    const { cacheDirectory, upsertDirectoryFamilies, searchDirectory, nextDirectoryEpoch } = await import('../../src/pwa/lib/offline');
+    const fam = { id: 'newer', name: 'Newer Family', name_normalized: 'newer family', phone: null, proxy_phones: [], num_people: null, last_visit_date: null };
+
+    const staleEpoch = nextDirectoryEpoch();
+    const staleRefresh = cacheDirectory([], staleEpoch);
+    const upsert = upsertDirectoryFamilies([fam]);
+    await Promise.all([staleRefresh, upsert]);
+
+    expect((await searchDirectory('newer', null)).map(f => f.id)).toEqual(['newer']);
   });
 });
