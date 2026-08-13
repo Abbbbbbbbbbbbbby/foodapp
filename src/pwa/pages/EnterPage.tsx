@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, apiWithToken, ApiError } from '../lib/api';
-import { queueItem, generateUUID, searchDirectory, directoryPickup, upsertDirectoryFamilies } from '../lib/offline';
+import { queueItem, generateUUID, searchDirectory, directoryPickup, upsertDirectoryFamilies, markDirectoryStale } from '../lib/offline';
 import { normalizeName, normalizePhone } from '../../shared/fuzzy';
 import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
@@ -45,12 +45,21 @@ export default function EnterPage() {
   // A family registered online THIS session must be findable if the network
   // dies before the next full directory refresh. Fire-and-forget: a cache
   // write failure only degrades offline lookup, never the check-in.
-  function rememberInDirectory(id: string, name: string, phone: string | null | undefined, numPeople: number | null | undefined) {
+  function rememberInDirectory(id: string, name: string, phone: string | null | undefined, numPeople: number | null | undefined, proxyPhone?: string | null) {
+    // The proxy designation must reach the offline index too: a family
+    // registered WITH a proxy at 9am must be findable by that proxy's phone
+    // during a 9:30 outage, or the neighbor gets the register-new dead end.
+    const normProxy = normalizePhone(proxyPhone);
     upsertDirectoryFamilies([{
       id, name, name_normalized: normalizeName(name),
-      phone: normalizePhone(phone) ?? null, proxy_phones: [],
+      phone: normalizePhone(phone) ?? null, proxy_phones: normProxy ? [normProxy] : [],
       num_people: numPeople ?? null, last_visit_date: localDateString(),
-    }]).catch(err => console.warn('directory upsert failed:', err));
+    }]).catch(err => {
+      console.warn('directory upsert failed — requesting a full re-pull:', err);
+      // A full refresh replaces the failed incremental write (and warns
+      // through Layout's existing path if storage is truly broken).
+      markDirectoryStale();
+    });
   }
 
   async function handleSearch(name: string, phone: string | null) {
@@ -111,7 +120,11 @@ export default function EnterPage() {
             });
             return;
           }
-        } catch { /* cache unreadable — fall through to register-as-new */ }
+        } catch (err) {
+          // Loud: a BROKEN cache must be distinguishable from an empty one —
+          // this path silently becomes the duplicate-family lane otherwise.
+          console.warn('offline directory lookup failed — falling back to register-as-new:', err);
+        }
         setError('Network error. Check connection and try again.');
         setOfflineSearch({ name, phone });
       }
@@ -152,7 +165,7 @@ export default function EnterPage() {
     const pinned = apiWithToken(auth.token);
     try {
       const result = await pinned.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
-      rememberInDirectory(result.id, data.name, data.phone, data.num_people);
+      rememberInDirectory(result.id, data.name, data.phone, data.num_people, proxyData?.proxy_phone);
       // Registered online: join this pickup pre-checked. The visit is logged
       // with the rest of the selection through the normal log-visit loop.
       const newFam = {
@@ -202,8 +215,11 @@ export default function EnterPage() {
     const visitIdemKey = generateUUID();
     const family = families.find(f => f.id === familyId);
     // A pickup by someone other than the family's own number is a PROXY
-    // pickup — record who actually picked up.
-    const pickedUpBy = view.pickupPhone && view.pickupPhone !== family?.phone ? view.pickupPhone : null;
+    // pickup — record who actually picked up. NORMALIZE both sides: the
+    // typed phone is raw ('480-555-0001') while the stored one is 10 bare
+    // digits — raw comparison misattributed a family's own pickup as proxy.
+    const normPickup = normalizePhone(view.pickupPhone);
+    const pickedUpBy = normPickup && normPickup !== family?.phone ? normPickup : null;
     const visitPayload = {
       family_id: familyId,
       visit_date: localDateString(),
@@ -316,7 +332,7 @@ export default function EnterPage() {
         idempotency_key: familyIdemKey,
       });
       familyId = result.id;
-      rememberInDirectory(familyId, data.name, data.phone, data.num_people);
+      rememberInDirectory(familyId, data.name, data.phone, data.num_people, proxyData?.proxy_phone);
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);

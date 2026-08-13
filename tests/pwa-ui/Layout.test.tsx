@@ -30,7 +30,7 @@ vi.mock('../../src/pwa/lib/api', () => ({
 }));
 
 import Layout from '../../src/pwa/components/Layout';
-import { getDeadLetters, deleteDeadLetters, flushQueue, adoptForeignItems } from '../../src/pwa/lib/offline';
+import { getDeadLetters, deleteDeadLetters, flushQueue, adoptForeignItems, cacheDirectory } from '../../src/pwa/lib/offline';
 import { api, apiWithToken } from '../../src/pwa/lib/api';
 import type { DeadLetterEntry } from '../../src/pwa/lib/offline';
 
@@ -319,5 +319,14 @@ describe('Layout directory staleness listener', () => {
     });
     // A fresh pinned client (and directory GET) was created for the re-pull.
     expect(vi.mocked(apiWithToken).mock.calls.length).toBeGreaterThan(callsAfterMount);
+  });
+
+  it('every refresh commits WITH its claimed epoch — the race protection cannot be silently dropped', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    renderLayout();
+    await screen.findByText('HOME CONTENT');
+    // cacheDirectory(families) with no epoch always commits; passing the
+    // claimed epoch is the entire round-9 stale-response guard.
+    await waitFor(() => expect(cacheDirectory).toHaveBeenCalledWith(expect.anything(), 1));
   });
 });

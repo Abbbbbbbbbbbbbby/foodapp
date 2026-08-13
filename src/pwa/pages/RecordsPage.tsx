@@ -206,6 +206,7 @@ function VisitCard({ visit, role, onUpdated, onDeleted }: VisitCardProps) {
     setSaving(true); setErr(null);
     try {
       await api.patch(`/api/records/visits/${visit.id}`, draft);
+      markDirectoryStale(); // visit_date feeds the directory's last_visit_date
       onUpdated(visit.id, draft);
       setEditing(false);
     } catch (e) {
@@ -215,6 +216,7 @@ function VisitCard({ visit, role, onUpdated, onDeleted }: VisitCardProps) {
 
   async function doDelete() {
     await api.delete(`/api/records/visits/${visit.id}`);
+    markDirectoryStale();
     onDeleted(visit.id);
   }
 

@@ -111,6 +111,45 @@ describe('EnterPage lookup error routing', () => {
     expect(screen.getByText(/last synced family list/)).toBeInTheDocument();
   });
 
+  it('log-visit payloads attribute pickups correctly: own family null, proxy family the NORMALIZED searched phone', async () => {
+    vi.mocked(api.get).mockRejectedValue(new TypeError('Failed to fetch'));
+    const { directoryPickup } = await import('../../src/pwa/lib/offline');
+    vi.mocked(directoryPickup).mockResolvedValue({
+      own: { id: 'own', name: 'Mendez Family', name_normalized: 'mendez family', phone: '4805550001', proxy_phones: [], num_people: 3, last_visit_date: null },
+      proxy: [
+        { id: 'p1', name: 'Vargas Family', name_normalized: 'vargas family', phone: '6025550002', proxy_phones: ['4805550001'], num_people: 5, last_visit_date: null },
+      ],
+    });
+    // Visits go through the identity-PINNED client, not the live api.
+    const { apiWithToken } = await import('../../src/pwa/lib/api');
+    const pinnedClient = apiWithToken('tok');
+    vi.mocked(pinnedClient.post).mockResolvedValue({ id: 'v-x' });
+    const user = userEvent.setup();
+    render(<EnterPage />);
+    const inputs = screen.getAllByRole('textbox');
+    // RAW formatted input — the stored phone is normalized; the comparison
+    // (and the recorded attribution) must normalize, or a family's OWN
+    // pickup is misrecorded as a proxy pickup.
+    await user.type(inputs[1], '(480) 555-0001');
+    await user.click(screen.getByRole('button', { name: /Search \/ Buscar/ }));
+
+    await screen.findByText(/Select families|Seleccionar familias/);
+    // Select BOTH families and confirm.
+    await user.click(screen.getByText('Mendez Family'));
+    await user.click(screen.getByText('Vargas Family'));
+    await user.click(screen.getByRole('button', { name: /Confirm \/ Confirmar \(2\)/ }));
+
+    // Log both visits.
+    await user.click(await screen.findByRole('button', { name: /No change \/ Sin cambios/ }));
+    await user.click(await screen.findByRole('button', { name: /No change \/ Sin cambios/ }));
+
+    const visitPosts = vi.mocked(pinnedClient.post).mock.calls.filter(c => c[0] === '/api/visits');
+    expect(visitPosts).toHaveLength(2);
+    const byFamily = Object.fromEntries(visitPosts.map(c => [(c[1] as { family_id: string }).family_id, c[1] as { picked_up_by_phone: string | null }]));
+    expect(byFamily['own'].picked_up_by_phone).toBeNull();            // their own pickup
+    expect(byFamily['p1'].picked_up_by_phone).toBe('4805550001');     // proxy pickup, normalized
+  });
+
   it('a server rejection (not connectivity) does NOT offer the offline path', async () => {
     vi.mocked(api.get).mockRejectedValue(new (ApiError as new (s: number, m: string) => Error)(400, 'bad query'));
     const user = userEvent.setup();

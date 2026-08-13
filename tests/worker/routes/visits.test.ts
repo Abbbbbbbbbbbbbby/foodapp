@@ -85,6 +85,21 @@ describe('POST /api/visits', () => {
     expect(res.status).toBe(400);
   });
 
+  it('stores picked_up_by_phone NORMALIZED (proxy pickup attribution)', async () => {
+    const key = `visit-proxy-${Date.now()}`;
+    const res = await workerExports.default.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      // Raw formatted input — replayed queue items and the wizard proxy
+      // path arrive like this; it must match proxies.proxy_phone later.
+      body: JSON.stringify({ family_id: testFamilyId, visit_date: '2026-02-01', picked_up_by_phone: '+1 (480) 555-7777', idempotency_key: key }),
+    });
+    expect(res.status).toBe(201);
+    const row = await env.DB.prepare(`SELECT picked_up_by_phone FROM visits WHERE idempotency_key = ?`)
+      .bind(key).first<{ picked_up_by_phone: string }>();
+    expect(row!.picked_up_by_phone).toBe('4805557777');
+  });
+
   it('creates visit and returns id', async () => {
     const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',

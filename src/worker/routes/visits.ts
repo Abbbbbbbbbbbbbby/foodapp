@@ -1,6 +1,6 @@
 import type { Env, NewVisit } from '../schema';
 import { getAuthContext } from '../middleware';
-import { insertVisit, getVisitsByFamily } from '../db';
+import { insertVisit, getVisitsByFamily, normalizePhone } from '../db';
 
 export async function handleVisitRoutes(
   request: Request,
@@ -54,7 +54,10 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
   const data: NewVisit = {
     family_id: familyId,
     visit_date: body.visit_date,
-    picked_up_by_phone: body.picked_up_by_phone ?? null,
+    // Normalize defensively: replayed queue items and the wizard proxy path
+    // arrive raw; family/proxy phones are normalized at write, and an
+    // un-normalized value here never matches them in any later report.
+    picked_up_by_phone: normalizePhone(body.picked_up_by_phone) ?? null,
     volunteer_id: ctx.userId,
   };
   const idempotencyKey = typeof body.idempotency_key === 'string' ? body.idempotency_key : undefined;
