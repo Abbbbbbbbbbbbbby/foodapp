@@ -311,6 +311,27 @@ describe('searchFamilies — broadened fuzzy matching (issue #6)', () => {
     expect(results[0].name).toBe('Maria Target');
   });
 
+  it('an exact SURNAME match survives 280 near-miss decoys and ranks above them', async () => {
+    const db = (env as unknown as Env).DB;
+    // Jeff's repro: 270 'Smath' rows (tokenDist 1, SHORT full names) ranked
+    // above 'Alexandria Verylongname Smith' (tokenDist 0, LONG full name)
+    // under full-distance-primary ranking, pushing the exact surname past
+    // the cap. Exact-token tiering is what keeps it in and on top.
+    const stmt = db.prepare('INSERT INTO families (id, name, name_normalized) VALUES (?, ?, ?)');
+    for (let batch = 0; batch < 4; batch++) {
+      await db.batch(Array.from({ length: 70 }, (_, i) => {
+        const n = batch * 70 + i;
+        const id = `${String(n).padStart(4, '0')}${'c'.repeat(28)}`;
+        return stmt.bind(id, `Smath D${n}`, `smath d${n}`);
+      }));
+    }
+    await stmt.bind('d'.repeat(32), 'Alexandria Verylongname Smith', 'alexandria verylongname smith').run();
+
+    const results = await searchFamilies(db, { name: 'Smith' });
+    expect(results.some(r => r.name === 'Alexandria Verylongname Smith')).toBe(true);
+    expect(results[0].name).toBe('Alexandria Verylongname Smith');
+  });
+
   it('applies the tighter distance threshold to short tokens', async () => {
     const db = (env as unknown as Env).DB;
     await insertFamily(db, { ...baseFamily(), name: 'Monaxyz Family' });

@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
 import { api, apiWithToken, ApiError } from '../lib/api';
-import { queueItem, generateUUID } from '../lib/offline';
+import { queueItem, generateUUID, searchDirectory } from '../lib/offline';
 import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
 import LookupForm from '../components/enter/LookupForm';
@@ -15,7 +15,7 @@ import SummaryScreen, { type SummaryFamily } from '../components/enter/SummarySc
 
 type EnterView =
   | { type: 'lookup' }
-  | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null }
+  | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null; offline?: boolean }
   | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
   | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra: FamilySearchResult[]; selectedIds: string[] } }
   | { type: 'log-visit'; families: FamilySearchResult[]; current: number }
@@ -26,6 +26,10 @@ type EnterView =
 
 export default function EnterPage() {
   const [view, setView] = useState<EnterView>({ type: 'lookup' });
+  // The identity this page was opened under. Submission handlers refuse to
+  // run for anyone else — defense in depth behind the account-change
+  // overlay, so no focus-management gap can submit a draft as another user.
+  const [mountUserId] = useState(() => getAuth()?.user.id);
   const [error, setError] = useState<string | null>(null);
   // Set when a search failed for connectivity reasons: offers the offline
   // continue path (without it, a dead network strands the volunteer at the
@@ -65,9 +69,20 @@ export default function EnterPage() {
       if (e instanceof ApiError) {
         setError(e.message);
       } else {
+        // Offline is a supported mode, not a dead end. FIRST try the cached
+        // family directory: a returning household must resolve to its
+        // EXISTING record (offline register-as-new mints a duplicate).
+        try {
+          const cached = await searchDirectory(name, phone);
+          if (cached.length > 0) {
+            setView({
+              type: 'results', offline: true, searchName: name, searchPhone: phone,
+              results: cached as unknown as FamilySearchResult[],
+            });
+            return;
+          }
+        } catch { /* cache unreadable — fall through to register-as-new */ }
         setError('Network error. Check connection and try again.');
-        // Offline is a supported mode, not a dead end: allow proceeding to
-        // register as new — the wizard queues everything for later sync.
         setOfflineSearch({ name, phone });
       }
     }
@@ -97,11 +112,11 @@ export default function EnterPage() {
     // offline attribution must come from the same auth snapshot, or a
     // cross-tab account switch splits them (posted as A, queued as B).
     const auth = getAuth();
-    if (!auth) {
-      // Should-never-happen (cross-tab sign-out racing this handler): fail
-      // loud rather than posting unauthenticated or queueing an item with no
-      // owner — unattributed items sync under whoever signs in next.
-      setError('Session ended — sign in again. Nothing was saved. / La sesión terminó — inicie sesión de nuevo. No se guardó nada.');
+    if (!auth || auth.user.id !== mountUserId) {
+      // Cross-tab sign-out or account switch racing this handler: fail loud
+      // rather than posting under another identity or queueing an item with
+      // the wrong (or no) owner.
+      setError('The signed-in account changed — nothing was saved. Sign back in as the original account to finish this entry. / La cuenta cambió — no se guardó nada. Vuelva a iniciar sesión con la cuenta original.');
       return;
     }
     const pinned = apiWithToken(auth.token);
@@ -159,11 +174,11 @@ export default function EnterPage() {
     let visitId: string | null = null;
     let queueId: string | null = null;
     const auth = getAuth();
-    if (!auth) {
-      // Should-never-happen (cross-tab sign-out racing this handler): fail
-      // loud rather than posting unauthenticated or queueing an item with no
-      // owner — unattributed items sync under whoever signs in next.
-      setError('Session ended — sign in again. Nothing was saved. / La sesión terminó — inicie sesión de nuevo. No se guardó nada.');
+    if (!auth || auth.user.id !== mountUserId) {
+      // Cross-tab sign-out or account switch racing this handler: fail loud
+      // rather than posting under another identity or queueing an item with
+      // the wrong (or no) owner.
+      setError('The signed-in account changed — nothing was saved. Sign back in as the original account to finish this entry. / La cuenta cambió — no se guardó nada. Vuelva a iniciar sesión con la cuenta original.');
       return;
     }
     const pinned = apiWithToken(auth.token);
@@ -245,11 +260,11 @@ export default function EnterPage() {
     // This submission spans TWO requests (family, then visit) plus offline
     // attribution — pin all of it to one auth snapshot.
     const auth = getAuth();
-    if (!auth) {
-      // Should-never-happen (cross-tab sign-out racing this handler): fail
-      // loud rather than posting unauthenticated or queueing an item with no
-      // owner — unattributed items sync under whoever signs in next.
-      setError('Session ended — sign in again. Nothing was saved. / La sesión terminó — inicie sesión de nuevo. No se guardó nada.');
+    if (!auth || auth.user.id !== mountUserId) {
+      // Cross-tab sign-out or account switch racing this handler: fail loud
+      // rather than posting under another identity or queueing an item with
+      // the wrong (or no) owner.
+      setError('The signed-in account changed — nothing was saved. Sign back in as the original account to finish this entry. / La cuenta cambió — no se guardó nada. Vuelva a iniciar sesión con la cuenta original.');
       return;
     }
     const pinned = apiWithToken(auth.token);
@@ -364,6 +379,12 @@ export default function EnterPage() {
         <LookupForm onSearch={handleSearch} />
       )}
       {view.type === 'results' && (
+        <>
+        {view.offline && (
+          <p className="banner">
+            No connection — results from the last synced family list. / Sin conexión — resultados de la última lista sincronizada.
+          </p>
+        )}
         <ResultsList
           results={view.results}
           onSelect={handleSelectResult}
@@ -374,6 +395,7 @@ export default function EnterPage() {
           }}
           onBack={() => setView({ type: 'lookup' })}
         />
+        </>
       )}
       {view.type === 'family-select' && (
         <FamilySelectScreen

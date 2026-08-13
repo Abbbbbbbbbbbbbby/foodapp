@@ -1,18 +1,31 @@
 import type { Family, Visit, NewFamily, NewVisit } from './schema';
 
-export function levenshtein(a: string, b: string): number {
+// Two-row DP with an optional distance bound. When `max` is given, returns
+// max + 1 as soon as the distance provably exceeds it (length difference
+// short-circuit + per-row early exit) — the search path runs this against
+// every stored name per request, so allocation and wasted rows matter for
+// Workers CPU-time limits.
+export function levenshtein(a: string, b: string, max = Infinity): number {
   const m = a.length, n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
-    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
-  );
+  if (Math.abs(m - n) > max) return max + 1;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = new Array<number>(n + 1);
+  let curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
   for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    let rowMin = curr[0];
     for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1]
-        ? dp[i - 1][j - 1]
-        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+      curr[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
+      if (curr[j] < rowMin) rowMin = curr[j];
     }
+    if (rowMin > max) return max + 1;
+    const swap = prev; prev = curr; curr = swap;
   }
-  return dp[m][n];
+  return prev[n] > max ? max + 1 : prev[n];
 }
 
 // Canonical form: exactly 10 digits. Strips a leading country code 1 from
@@ -199,27 +212,36 @@ export async function searchFamilies(
       `SELECT id, COALESCE(name_normalized, LOWER(name)) AS norm FROM families`
     ).all<{ id: string; norm: string }>();
 
-    const matches: { id: string; tokenDist: number; fullDist: number }[] = [];
+    const matches: { id: string; tier: number; minDist: number; fullDist: number }[] = [];
     for (const r of allNames.results ?? []) {
       // Match against EVERY token of the stored name, so a last-name
-      // search finds full-name records.
+      // search finds full-name records. Distances are bounded: past the
+      // threshold the exact value never matters, so stop computing.
       let tokenDist = Infinity;
       for (const t of r.norm.split(/\s+/)) {
-        const d = levenshtein(t, normToken);
+        const d = levenshtein(t, normToken, tokenThreshold);
         if (d < tokenDist) tokenDist = d;
+        if (tokenDist === 0) break;
       }
       // Also score the WHOLE query against the WHOLE stored name: a
       // multi-token query ('Maria Target') must rank its exact/near-exact
       // full match above the crowd of families sharing the first token.
-      const fullDist = levenshtein(r.norm, normFull);
+      const fullDist = levenshtein(r.norm, normFull, fullThreshold);
       if (tokenDist <= tokenThreshold || fullDist <= fullThreshold) {
-        matches.push({ id: r.id, tokenDist, fullDist });
+        // Explicit tiers, because neither distance alone ranks honestly:
+        // fullDist-primary buries exact SURNAME hits under short-name junk
+        // ('Maria Cruz' outranked 'Guadalupe Garcia' for query 'garcia');
+        // tokenDist-primary would bury exact FULL matches under every
+        // family sharing the first token.
+        //   0 = exact whole-name match, 1 = exact token match, 2 = fuzzy
+        const tier = fullDist === 0 ? 0 : tokenDist === 0 ? 1 : 2;
+        matches.push({ id: r.id, tier, minDist: Math.min(tokenDist, fullDist), fullDist });
       }
     }
-    // Rank BEFORE any cap, full-query distance first: exact multi-token
-    // matches survive no matter how many families share the first token
-    // (100 'Maria …' rows must never crowd out 'Maria Target').
-    matches.sort((a, b) => (a.fullDist - b.fullDist) || (a.tokenDist - b.tokenDist));
+    // Rank BEFORE any cap: exact tiers first, then closest by whichever
+    // metric matched. 270 near-miss 'Smath' rows must never crowd out an
+    // exact-surname 'Alexandria Verylongname Smith'.
+    matches.sort((a, b) => (a.tier - b.tier) || (a.minDist - b.minDist) || (a.fullDist - b.fullDist));
     // Fetch details for ALL ranked matches up to a response ceiling, in
     // chunks under D1's per-statement bind-parameter limit. The ceiling only
     // trims degenerate 1-2 char queries, and ranking guarantees anything it
@@ -247,6 +269,10 @@ export async function searchFamilies(
       }
     }
 
+    // Display order uses the SAME tiers as the cap — an exact-surname match
+    // must not survive the cap only to sink beneath near-miss junk on screen.
+    const rankById = new Map(matches.map(m => [m.id, m]));
+    const FALLBACK = { tier: 3, minDist: 99, fullDist: 99 };
     rows.sort((a, b) => {
       // Guarded: on a name-only search normPhone is null, and null === null
       // would otherwise rank every phoneless row "first", garbling the sort.
@@ -254,9 +280,10 @@ export async function searchFamilies(
         if (a.phone === normPhone) return -1;
         if (b.phone === normPhone) return 1;
       }
-      return (levenshtein(normalizeName(a.name), normalizeName(name)) -
-              levenshtein(normalizeName(b.name), normalizeName(name)))
-        // Equal-distance ties: most recently seen family first.
+      const ra = rankById.get(a.id) ?? FALLBACK;
+      const rb = rankById.get(b.id) ?? FALLBACK;
+      return (ra.tier - rb.tier) || (ra.minDist - rb.minDist) || (ra.fullDist - rb.fullDist)
+        // Equal-rank ties: most recently seen family first.
         || (b.last_visit_date ?? '').localeCompare(a.last_visit_date ?? '');
     });
   }

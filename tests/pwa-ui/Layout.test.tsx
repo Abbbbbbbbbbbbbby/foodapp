@@ -9,6 +9,7 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   getDeadLetters: vi.fn(async () => []),
   deleteDeadLetters: vi.fn(async () => undefined),
   adoptForeignItems: vi.fn(async () => 0),
+  cacheDirectory: vi.fn(async () => undefined),
 }));
 const authState = vi.hoisted(() => ({
   user: { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' } as
@@ -23,7 +24,7 @@ vi.mock('../../src/pwa/store/auth', () => ({
 }));
 vi.mock('../../src/pwa/lib/api', () => ({
   api: { post: vi.fn(), patch: vi.fn(), get: vi.fn() },
-  apiWithToken: vi.fn(() => ({ post: vi.fn(), patch: vi.fn() })),
+  apiWithToken: vi.fn(() => ({ post: vi.fn(), patch: vi.fn(), get: vi.fn(async () => ({ families: [] })) })),
   ApiError: class ApiError extends Error { constructor(public status: number, message: string) { super(message); } },
 }));
 
@@ -144,9 +145,13 @@ describe('Layout session and sync banners (issue #6)', () => {
     // call-count-only assertion but fails this one.
     const apiFn = vi.mocked(flushQueue).mock.calls[0][0] as
       (url: string, body: unknown, method?: 'POST' | 'PATCH') => Promise<unknown>;
-    const pinnedClient = vi.mocked(apiWithToken).mock.results[0].value;
     await apiFn('/api/families', { name: 'X' });
     await apiFn('/api/visits/v1/bag', { bag_received: true }, 'PATCH');
+    // apiWithToken is also used by the directory refresh — find the pinned
+    // instance the flush actually drove rather than assuming call order.
+    const pinnedClient = vi.mocked(apiWithToken).mock.results
+      .map(r => r.value).find(c => c.post.mock.calls.length > 0);
+    expect(pinnedClient).toBeTruthy();
     expect(pinnedClient.post).toHaveBeenCalledWith('/api/families', { name: 'X' });
     expect(pinnedClient.patch).toHaveBeenCalledWith('/api/visits/v1/bag', { bag_received: true });
     expect(api.post).not.toHaveBeenCalled();
@@ -245,5 +250,53 @@ describe('Layout cross-tab account-change overlay', () => {
     const dialog = screen.getByRole('alertdialog');
     expect(dialog).toHaveTextContent(/signed out in another tab/);
     expect(screen.getByRole('button', { name: /Discard this entry and go to sign-in/ })).toBeInTheDocument();
+  });
+});
+
+describe('Layout overlay real modality (round-7 P1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authState.user = { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' };
+  });
+
+  it('steals focus from a draft submit button and recaptures any focus escape', async () => {
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<button>Save draft</button>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    );
+    const draftButton = await screen.findByRole('button', { name: 'Save draft' });
+    draftButton.focus();
+    expect(document.activeElement).toBe(draftButton);
+
+    // Cross-tab switch: the reproduced attack was Enter on the still-focused
+    // draft button firing the handler BEHIND the overlay.
+    authState.user = { id: 'u2', name: 'Vol Two', phone: '4805550002', role: 'volunteer' };
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent('storage', { key: 'foodapp_auth' }));
+    });
+
+    // Focus was MOVED into the dialog — Enter now lands on the dialog control.
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    // An escape attempt (script, quirky browser, tab restore) is recaptured.
+    await act(async () => { draftButton.focus(); });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(draftButton);
+  });
+});
+
+describe('Layout offline-capability notice (no service worker)', () => {
+  it('devices without service workers see the keep-tab-open notice', async () => {
+    // jsdom has no navigator.serviceWorker — exactly the iOS 9 situation.
+    vi.mocked(getDeadLetters).mockResolvedValue([]);
+    renderLayout();
+    expect(await screen.findByText(/keep this tab open during outages/)).toBeInTheDocument();
   });
 });

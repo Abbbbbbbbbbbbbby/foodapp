@@ -21,10 +21,12 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   // SummaryScreen (rendered by EnterPage's done view) imports setItemBag —
   // the mock surface must match the real module or deeper flows throw.
   setItemBag: vi.fn(async () => undefined),
+  searchDirectory: vi.fn(async () => []),
 }));
 
 import EnterPage from '../../src/pwa/pages/EnterPage';
 import { api, ApiError } from '../../src/pwa/lib/api';
+import { searchDirectory } from '../../src/pwa/lib/offline';
 
 async function searchFor(user: ReturnType<typeof userEvent.setup>, name: string) {
   const inputs = screen.getAllByRole('textbox');
@@ -64,6 +66,22 @@ describe('EnterPage lookup error routing', () => {
     // offline queue is unreachable.
     await user.click(await screen.findByRole('button', { name: /continue and register as new/i }));
     expect((await screen.findAllByText(/How many families|¿Para cuántas familias/)).length).toBeGreaterThan(0);
+  });
+
+  it('an offline search with a cached directory hit shows the RETURNING household, not register-as-new', async () => {
+    vi.mocked(api.get).mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.mocked(searchDirectory).mockResolvedValue([
+      { id: 'f9', name: 'Garcia Familia', phone: null, num_people: 4, last_visit_date: '2026-08-01' },
+    ]);
+    const user = userEvent.setup();
+    render(<EnterPage />);
+    await searchFor(user, 'Garcia');
+
+    // Cached roster resolves the household to its EXISTING record — offline
+    // register-as-new for a returning family mints a duplicate.
+    expect(await screen.findByText(/last synced family list/)).toBeInTheDocument();
+    expect(screen.getByText(/Garcia Familia/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /continue and register as new/i })).not.toBeInTheDocument();
   });
 
   it('a server rejection (not connectivity) does NOT offer the offline path', async () => {

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { api } from '../../lib/api';
+import { apiWithToken } from '../../lib/api';
+import { getAuth } from '../../store/auth';
 import { setItemBag } from '../../lib/offline';
 
 export interface SummaryFamily {
@@ -55,6 +56,16 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
 
   async function handleSaveBags() {
     setBagError(null);
+    // One identity for the whole save (same contract as the submission
+    // handlers): the bag PATCHes and the resolve-recovery reads must all
+    // carry the token of whoever clicked, or a cross-tab switch mid-handler
+    // audit-attributes this user's bags to someone else.
+    const auth = getAuth();
+    if (!auth) {
+      setBagError('Session ended — sign in again. No bags were marked. / La sesión terminó — inicie sesión de nuevo.');
+      return;
+    }
+    const pinned = apiWithToken(auth.token);
     setMarking(true);
     const chosen = remainingIdx.filter(i => selected.has(i)).map(i => ({ i, f: needBag[i] }));
     const synced = chosen.filter(({ f }) => f.visitId);
@@ -62,7 +73,7 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     const unreachable = chosen.filter(({ f }) => !f.visitId && !f.queueId);
     // Settle per family: one failure must not block or misreport the others.
     const results = await Promise.allSettled([
-      ...synced.map(({ f }) => api.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true })),
+      ...synced.map(({ f }) => pinned.patch(`/api/visits/${f.visitId}/bag`, { bag_received: true })),
       // Offline submissions: record the bag on the queued item — the flush
       // applies it to the visit after sync.
       ...queued.map(({ f }) => setItemBag(f.queueId!, true)),
@@ -98,8 +109,8 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     for (const { i, f } of recoveries) {
       try {
         if (!f.visitKey) throw new Error('no key');
-        const { id: visitId } = await api.get<{ id: string }>(`/api/visits/resolve/${encodeURIComponent(f.visitKey)}`);
-        await api.patch(`/api/visits/${visitId}/bag`, { bag_received: true });
+        const { id: visitId } = await pinned.get<{ id: string }>(`/api/visits/resolve/${encodeURIComponent(f.visitKey)}`);
+        await pinned.patch(`/api/visits/${visitId}/bag`, { bag_received: true });
         newlySaved.push(i); // recovered — fully saved, no guidance needed
       } catch {
         // Couldn't recover automatically — fall back to the staff guidance

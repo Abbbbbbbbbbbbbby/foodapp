@@ -1,7 +1,8 @@
 const DB_NAME = 'foodapp_offline';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = 'pending';
 const DL_STORE = 'dead-letter';
+const DIR_STORE = 'directory';
 
 // crypto.randomUUID() not available in Safari 9; use Math.random-based v4 UUID
 export function generateUUID(): string {
@@ -40,6 +41,7 @@ function openDb(): Promise<IDBDatabase> {
       const oldVersion = (e as IDBVersionChangeEvent).oldVersion;
       if (oldVersion < 1) db.createObjectStore(STORE, { keyPath: 'id' });
       if (oldVersion < 2) db.createObjectStore(DL_STORE, { keyPath: 'id' });
+      if (oldVersion < 3) db.createObjectStore(DIR_STORE, { keyPath: 'id' });
     };
     req.onsuccess = () => {
       const db = req.result;
@@ -146,6 +148,67 @@ export async function getPendingCount(): Promise<number> {
     req.onsuccess = () => resolve(req.result as number);
     req.onerror = () => reject(req.error);
   });
+}
+
+// ---- Offline family directory ----
+// A cached roster of known families so a RETURNING household can be found
+// during an outage. Without it, every offline check-in of an existing family
+// minted a duplicate ("register as new" was the only offline path).
+
+export interface DirectoryFamily {
+  id: string;
+  name: string;
+  phone: string | null;
+  num_people: number | null;
+  last_visit_date: string | null;
+}
+
+// Accent-fold + lowercase, feature-tested: String.normalize is missing on
+// the iOS 9 target and core-js does not polyfill unicode normalization.
+function normalizeClient(s: string): string {
+  return typeof s.normalize === 'function'
+    ? s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    : s.toLowerCase();
+}
+
+// Full replace: the server response is the complete roster.
+export async function cacheDirectory(families: DirectoryFamily[]): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DIR_STORE, 'readwrite');
+    const store = tx.objectStore(DIR_STORE);
+    store.clear();
+    for (const f of families) store.put(f);
+    tx.oncomplete = () => resolve();
+    rejectOnFailure(tx, reject);
+  });
+}
+
+// Substring match on normalized name or digits-only phone — deliberately
+// simpler than the server's edit-distance search: it runs on old hardware
+// and a miss still falls back to "register as new", which is exactly what
+// happened on EVERY offline lookup before the cache existed.
+export async function searchDirectory(name: string, phone: string | null): Promise<DirectoryFamily[]> {
+  const db = await openDb();
+  const all: DirectoryFamily[] = await new Promise((resolve, reject) => {
+    const tx = db.transaction(DIR_STORE, 'readonly');
+    const items: DirectoryFamily[] = [];
+    const req = tx.objectStore(DIR_STORE).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (cursor) { items.push(cursor.value as DirectoryFamily); cursor.continue(); }
+      else resolve(items);
+    };
+    req.onerror = () => reject(req.error);
+  });
+  const needle = normalizeClient(name.trim());
+  const phoneDigits = (phone ?? '').replace(/\D/g, '');
+  const hits = all.filter(f =>
+    (needle.length >= 2 && normalizeClient(f.name).includes(needle)) ||
+    (phoneDigits.length >= 4 && (f.phone ?? '').includes(phoneDigits))
+  );
+  hits.sort((a, b) => (b.last_visit_date ?? '').localeCompare(a.last_visit_date ?? ''));
+  return hits.slice(0, 20);
 }
 
 // Recovery for held entries whose owner can no longer sign in (deactivated

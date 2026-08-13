@@ -15,11 +15,12 @@ class FakeApiError extends Error {
 // forever on the still-open handles.
 function freshDb(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('foodapp_offline', 2);
+    const req = indexedDB.open('foodapp_offline', 3);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains('pending')) db.createObjectStore('pending', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('dead-letter')) db.createObjectStore('dead-letter', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('directory')) db.createObjectStore('directory', { keyPath: 'id' });
     };
     req.onsuccess = () => {
       const db = req.result;
@@ -336,5 +337,38 @@ describe('adoptForeignItems — concurrent-update safety', () => {
     const item = await getItem(id);
     expect(item?.queuedByUserId).toBe('user-a');
     expect(item?.bag).toBe(true);
+  });
+});
+
+describe('offline family directory (returning-household lookup)', () => {
+  beforeEach(async () => {
+    await freshDb();
+  });
+
+  it('caches the roster and finds a returning household by partial name or phone', async () => {
+    const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([
+      { id: 'f1', name: 'José García Familia', phone: '4805551111', num_people: 4, last_visit_date: '2026-08-01' },
+      { id: 'f2', name: 'Chen Family', phone: null, num_people: 2, last_visit_date: '2026-08-10' },
+    ]);
+
+    // Accent-folded name substring
+    const byName = await searchDirectory('garcia', null);
+    expect(byName.map(f => f.id)).toEqual(['f1']);
+    // Phone digits
+    const byPhone = await searchDirectory('', '480-555-1111');
+    expect(byPhone.map(f => f.id)).toEqual(['f1']);
+    // Most recently seen ranks first
+    const both = await searchDirectory('fam', null); // matches both names
+    expect(both).toHaveLength(2);
+    expect(both[0].id).toBe('f2');
+  });
+
+  it('a re-cache fully replaces the previous roster', async () => {
+    const { cacheDirectory, searchDirectory } = await import('../../src/pwa/lib/offline');
+    await cacheDirectory([{ id: 'old', name: 'Old Family', phone: null, num_people: 1, last_visit_date: null }]);
+    await cacheDirectory([{ id: 'new', name: 'New Family', phone: null, num_people: 1, last_visit_date: null }]);
+    expect(await searchDirectory('family', null)).toHaveLength(1);
+    expect((await searchDirectory('family', null))[0].id).toBe('new');
   });
 });

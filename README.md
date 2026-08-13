@@ -6,7 +6,8 @@ Check-in app for a hunger relief food box line. Volunteers register with their p
 
 ## Architecture
 
-- **Frontend:** React PWA (`src/pwa/`), built with Vite. Targets old iPads (iOS 9.3.5) via `@vitejs/plugin-legacy`. A service worker precaches the app shell so it loads offline; writes queue in IndexedDB and flush when the network returns.
+- **Frontend:** React PWA (`src/pwa/`), built with Vite. Targets old iPads (iOS 9.3.5) via `@vitejs/plugin-legacy`. A service worker precaches the app shell so it loads offline; writes queue in IndexedDB and flush when the network returns. A cached family directory lets returning households be found (not duplicated) during outages.
+- **Offline support tiers:** on browsers with service workers (Safari 11.1+/iOS 11.3+, any modern Chrome/Edge/Firefox) the app also RESTARTS offline. The iOS 9 target has no service worker, so offline there is **active-tab-only**: an open tab queues and syncs fine, but reloading or launching during an outage fails until the network returns. The app shows a persistent notice on such devices.
 - **Backend:** Cloudflare Worker (`src/worker/`) serving `/api/*`, with the built PWA served as static assets. Data lives in D1 (SQLite); sessions in KV. SMS one-time codes go out through Twilio.
 - **Auth:** phone number + OTP. Anyone can self-register as a volunteer; SMS rate limits are the abuse control (this is intentional: food line data is not PII).
 

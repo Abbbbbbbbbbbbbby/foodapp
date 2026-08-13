@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { getUser, getAuth, clearAuth, getToken, AUTH_STORAGE_KEY } from '../store/auth';
-import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters, adoptForeignItems } from '../lib/offline';
+import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters, adoptForeignItems, cacheDirectory } from '../lib/offline';
+import type { DirectoryFamily } from '../lib/offline';
 import type { DeadLetterEntry } from '../lib/offline';
 import { apiWithToken } from '../lib/api';
 
@@ -35,6 +36,11 @@ export default function Layout() {
   const [syncBroken, setSyncBroken] = useState(false);
   const [foreignCount, setForeignCount] = useState(0);
   const [adoptArmed, setAdoptArmed] = useState(false);
+  // Feature-tested once: Safari gained service workers in 11.1 (iOS 11.3);
+  // the documented iPad 2 / iOS 9.3.5 target has none, so a reload or
+  // cold start during an outage cannot restore the app there. Say so
+  // instead of letting the device silently fail to a white screen.
+  const [swSupported] = useState(() => 'serviceWorker' in navigator);
   // Cross-tab identity change: 'signed-out', or the new user's name.
   const [accountChanged, setAccountChanged] = useState<{ name: string } | 'signed-out' | null>(null);
 
@@ -51,6 +57,50 @@ export default function Layout() {
     // Load any persisted dead-letter entries on mount
     getDeadLetters().then(setDeadLetters).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    // Refresh the offline family directory while we HAVE a connection — it
+    // is what lets a returning household be found during a later outage
+    // instead of being re-registered as a duplicate.
+    if (navigator.onLine === false) return;
+    const auth = getAuth();
+    if (!auth) return;
+    apiWithToken(auth.token).get<{ families: DirectoryFamily[] }>('/api/families/directory')
+      .then(r => cacheDirectory(r.families))
+      .catch(err => console.warn('family directory refresh failed (offline lookup will use the last cached copy):', err));
+  }, []);
+
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Real modality, not just aria-modal: without this, focus stays on
+    // whatever wizard button the volunteer last touched, and Enter fires
+    // the handler BEHIND the overlay — submitting the old draft under the
+    // newly signed-in account. Move focus in, contain Tab, and recapture
+    // anything that escapes (works without `inert`, which the iOS 9 target
+    // lacks).
+    if (!accountChanged) return;
+    const dialog = overlayRef.current;
+    if (!dialog) return;
+    const focusDialog = () => {
+      (dialog.querySelector('button') ?? dialog).focus();
+    };
+    focusDialog();
+    const onFocusIn = (e: FocusEvent) => {
+      if (!dialog.contains(e.target as Node)) focusDialog();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      // The dialog has a single focusable control — keep focus on it.
+      e.preventDefault();
+      focusDialog();
+    };
+    document.addEventListener('focusin', onFocusIn, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [accountChanged]);
 
   useEffect(() => {
     // Cross-tab account changes: another tab signing in/out rewrites the
@@ -203,6 +253,8 @@ export default function Layout() {
     <div className="layout">
       {accountChanged && (
         <div
+          ref={overlayRef}
+          tabIndex={-1}
           role="alertdialog"
           aria-modal="true"
           aria-label="Account changed in another tab"
@@ -230,6 +282,13 @@ export default function Layout() {
                 : `Discard this entry and continue as ${accountChanged.name} / Descartar y continuar`}
             </button>
           </div>
+        </div>
+      )}
+      {!swSupported && (
+        <div className="banner" style={{ margin: 0, borderRadius: 0, padding: '6px 12px', fontSize: 13 }}>
+          <p style={{ margin: 0 }}>
+            This device can't reopen the app while offline — keep this tab open during outages. Entries still save and sync. / Este dispositivo no puede reabrir la app sin conexión — mantenga esta pestaña abierta. Las entradas se guardan y sincronizan.
+          </p>
         </div>
       )}
       {sessionExpired && (

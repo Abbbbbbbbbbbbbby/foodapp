@@ -2,17 +2,26 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The component pins bag saves to one auth snapshot via apiWithToken — the
+// tests drive the pinned client's fns (a stable hoisted object so every
+// apiWithToken() call returns the same spies).
+const pinned = vi.hoisted(() => ({ patch: vi.fn(), get: vi.fn(), post: vi.fn() }));
 vi.mock('../../src/pwa/lib/api', () => ({
   api: { patch: vi.fn(), get: vi.fn(), post: vi.fn() },
+  apiWithToken: vi.fn(() => pinned),
   ApiError: class ApiError extends Error { constructor(public status: number, message: string) { super(message); } },
+}));
+vi.mock('../../src/pwa/store/auth', () => ({
+  getAuth: () => ({ token: 'tok', user: { id: 'u1', name: 'Vol One', phone: '4805550001', role: 'volunteer' } }),
 }));
 vi.mock('../../src/pwa/lib/offline', () => ({
   setItemBag: vi.fn(),
 }));
 
 import SummaryScreen, { type SummaryFamily } from '../../src/pwa/components/enter/SummaryScreen';
-import { api } from '../../src/pwa/lib/api';
+import { apiWithToken } from '../../src/pwa/lib/api';
 import { setItemBag } from '../../src/pwa/lib/offline';
+const api = pinned; // every existing assertion now targets the pinned client
 
 const fam = (over: Partial<SummaryFamily>): SummaryFamily => ({
   id: 'f1', name: 'Fam', num_people: 3, bag_received: null, visitId: 'v1', queueId: null, visitKey: 'vk-1', ...over,

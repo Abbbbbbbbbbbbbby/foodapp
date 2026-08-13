@@ -41,6 +41,7 @@ export const api = {
 // 401 and the items stay queued — fail loud, never mixed attribution.
 export function apiWithToken(token: string | null) {
   return {
+    get: <T>(path: string) => apiFetch<T>(path, undefined, token),
     post: <T>(path: string, body: unknown) =>
       apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) }, token),
     patch: <T>(path: string, body: unknown) =>

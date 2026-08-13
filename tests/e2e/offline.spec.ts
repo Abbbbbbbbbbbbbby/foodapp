@@ -100,3 +100,79 @@ test('offline check-in queues family, visit, and bag; reconnect syncs them to th
   // bag flag both fail here.
   expect(visits.visits[0].bag_received).toBe(true);
 });
+
+test('a RETURNING household checked in offline resolves to its existing record — no duplicate family', async ({ page, context }) => {
+  const phone = `482${String(Date.now() % 10_000_000).padStart(7, '0')}`;
+  await page.goto('/');
+
+  // ── Register + sign in (online) ──
+  await page.getByRole('link', { name: /Create account|Crear cuenta/i })
+    .or(page.getByRole('button', { name: /Create account|Crear cuenta/i })).first().click();
+  await page.getByRole('textbox', { name: /Full name|Nombre completo/i }).fill('E2E Returning Volunteer');
+  await page.getByRole('textbox', { name: /Phone|Teléfono/i }).fill(phone);
+  await page.getByRole('button', { name: /Create account|Crear cuenta/i }).click();
+  const code = await otpFor(page, phone);
+  await page.getByRole('textbox').first().fill(code);
+  await page.getByRole('button', { name: /Verify|Verificar|Sign in|Entrar/i }).first().click();
+
+  // ── First check-in ONLINE (creates the household) ──
+  const familyName = `E2E Returning Family ${Date.now().toString().slice(-6)}`;
+  await page.getByRole('button', { name: /Enter Data|Ingresar/i }).first().click();
+  await page.getByRole('textbox').first().fill(familyName);
+  await page.getByRole('button', { name: /Search \/ Buscar/ }).click();
+  const registerNew = page.getByRole('button', { name: /Register as new|Registrar como nuevo/i });
+  const howMany1 = page.getByRole('button', { name: /^1$/ });
+  await registerNew.or(howMany1).first().waitFor();
+  if (await registerNew.isVisible()) await registerNew.click();
+  await howMany1.click();
+  await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
+  await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
+  await page.getByRole('button', { name: /Next \/ Siguiente|don't have|No tengo/i }).first().click();
+  await page.getByRole('textbox').first().fill('85003');
+  await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
+  await page.getByRole('button', { name: /English/ }).first().click();
+  await page.getByRole('button', { name: /^2$/ }).first().click();
+  await page.getByRole('button', { name: /^0$/ }).first().click();
+  await page.getByRole('button', { name: /^0$/ }).first().click();
+  await page.getByRole('button', { name: /Prefer not to say|Prefiero no/i }).first().click();
+  await page.getByRole('button', { name: /^No$/ }).first().click();
+  await page.getByRole('button', { name: /^No$/ }).first().click();
+  await page.getByRole('button', { name: /^No$/ }).first().click();
+  await page.getByRole('button', { name: /^No$/ }).first().click();
+  await expect(page.getByText(/Summary \/ Resumen/)).toBeVisible();
+
+  // ── Reload while ONLINE: Layout remount refreshes the offline directory
+  //    so it now includes the family created above. ──
+  await page.reload();
+  await page.getByRole('button', { name: /Enter Data|Ingresar/i }).first().waitFor();
+
+  // ── OUTAGE. The same household returns (e.g. second distribution line). ──
+  await context.setOffline(true);
+  await page.getByRole('button', { name: /Enter Data|Ingresar/i }).first().click();
+  await page.getByRole('textbox').first().fill(familyName);
+  await page.getByRole('button', { name: /Search \/ Buscar/ }).click();
+
+  // Served from the cached roster, NOT the register-as-new dead end.
+  await expect(page.getByText(/last synced family list/)).toBeVisible();
+  await page.getByRole('button', { name: new RegExp(familyName) }).click();
+  // Family-select: toggle the household's card, then confirm.
+  await page.getByRole('button', { name: /Their own family/ }).click();
+  await page.getByRole('button', { name: /Confirm \/ Confirmar \(1\)/ }).click();
+  await page.getByRole('button', { name: /No change \/ Sin cambios/ }).click();
+
+  // Queued: the visit waits for the network.
+  await expect(page.getByText(/pending sync/)).toBeVisible();
+
+  // ── Reconnect and verify server-side ──
+  await context.setOffline(false);
+  await expect(page.getByText(/pending sync/)).not.toBeVisible({ timeout: 20_000 });
+
+  const search = await apiGet(page, `/api/families/search?name=${encodeURIComponent(familyName)}`) as {
+    results: { id: string; name: string }[];
+  };
+  const fams = search.results.filter(r => r.name === familyName);
+  expect(fams, 'exactly ONE family — the offline visit resolved to the existing record').toHaveLength(1);
+
+  const visits = await apiGet(page, `/api/visits?familyId=${fams[0].id}`) as { visits: { visit_date: string }[] };
+  expect(visits.visits, 'the online check-in visit plus the offline queued visit').toHaveLength(2);
+});
