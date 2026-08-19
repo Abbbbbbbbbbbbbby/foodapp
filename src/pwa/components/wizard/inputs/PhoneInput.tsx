@@ -22,7 +22,7 @@ export default function PhoneInput({ questionEn, questionEs, value, onChange, on
       />
       <div className="step-actions">
         <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
-        <button className="btn-secondary" onClick={onSkip}>
+        <button className="btn-ghost" onClick={onSkip}>
           I don't have one / No tengo
         </button>
         <button className="btn-primary" onClick={onNext}>

@@ -678,7 +678,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 8px 10px;
   font-size: 15px;
 }
@@ -745,7 +745,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 6px 14px;
   font-size: 13px;
   min-height: unset;
@@ -793,7 +793,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 .delete-cancel-btn {
   color: var(--text-muted);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 14px;
   padding: 8px 14px;
   min-height: unset;
@@ -803,7 +803,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   background: var(--surface-2);
   color: var(--danger);
   border: 1px solid var(--danger);
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 14px;
   font-weight: 600;
   padding: 8px 16px;
@@ -813,7 +813,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 .delete-final-btn {
   background: var(--danger);
   color: #fff;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 14px;
   font-weight: 700;
   padding: 8px 16px;
@@ -842,7 +842,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 
 .change-entry {
   background: var(--surface-2);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 10px 12px;
 }
 
@@ -961,7 +961,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 .import-warnings {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 10px 14px;
   margin-bottom: 16px;
   font-size: 13px;

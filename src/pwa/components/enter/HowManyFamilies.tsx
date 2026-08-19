@@ -40,7 +40,7 @@ export default function HowManyFamilies({ onSelect, onBack }: HowManyFamiliesPro
 
   return (
     <div className="how-many">
-      <button className="btn-ghost" onClick={onBack}>← Back</button>
+      <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
       <p className="question-en">How many families are you picking up for today?</p>
       <p className="question-es">¿Para cuántas familias está recogiendo hoy?</p>
       <div className="tap-grid">
