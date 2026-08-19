@@ -2,6 +2,18 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
 import * as babel from '@babel/core';
+import { execSync } from 'node:child_process';
+
+// Best-effort short git SHA for client_events.app_version. 'unknown' if git
+// history isn't available in the build environment (e.g. a shallow clone) —
+// never fails the build over a diagnostic-only value.
+function appVersion(): string {
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 // @vitejs/plugin-legacy injects a Safari 10.0/10.1 double-module fix that uses
 // WebKit's 'beforeload' event. On iOS 9.3.5, 'onbeforeload' exists but
@@ -61,6 +73,9 @@ export default defineConfig({
     forceEs5LegacyChunks(),
     stripSafari10Guard(),
   ],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion()),
+  },
   root: 'src/pwa',
   publicDir: 'public',
   build: {
