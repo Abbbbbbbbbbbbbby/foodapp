@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
+import type { FamilySearchResult, WizardFormData, ProxyData, EnterView } from '../lib/types';
 import { api, apiWithToken, ApiError } from '../lib/api';
 import { queueItem, generateUUID, searchDirectory, directoryPickup, upsertDirectoryFamilies, markDirectoryStale } from '../lib/offline';
 import type { DirectoryFamily } from '../lib/offline';
@@ -14,17 +14,6 @@ import HowManyFamilies from '../components/enter/HowManyFamilies';
 import ProxyQuestion from '../components/enter/ProxyQuestion';
 import Wizard from '../components/wizard/Wizard';
 import SummaryScreen, { type SummaryFamily } from '../components/enter/SummaryScreen';
-
-type EnterView =
-  | { type: 'lookup' }
-  | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null; offline?: boolean }
-  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
-  | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra: FamilySearchResult[]; selectedIds: string[] } }
-  | { type: 'log-visit'; families: FamilySearchResult[]; current: number; pickupPhone: string | null }
-  | { type: 'how-many'; searchName: string; searchPhone: string | null }
-  | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
-  | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
-  | { type: 'done'; families: SummaryFamily[]; error?: string };
 
 
 // Explicit, field-by-field lift of a cached directory row into the

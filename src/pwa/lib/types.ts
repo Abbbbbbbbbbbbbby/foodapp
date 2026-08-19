@@ -52,3 +52,18 @@ export interface ProxyData {
   proxy_name: string | null; // display metadata — the phone is the pickup-match key
   proxy_phone: string | null;
 }
+
+// import type only — erased at build time, so this does not create a real
+// module cycle with the component tree.
+import type { SummaryFamily } from '../components/enter/SummaryScreen';
+
+export type EnterView =
+  | { type: 'lookup' }
+  | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null; offline?: boolean }
+  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
+  | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra: FamilySearchResult[]; selectedIds: string[] } }
+  | { type: 'log-visit'; families: FamilySearchResult[]; current: number; pickupPhone: string | null }
+  | { type: 'how-many'; searchName: string; searchPhone: string | null }
+  | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
+  | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
+  | { type: 'done'; families: SummaryFamily[]; error?: string };
