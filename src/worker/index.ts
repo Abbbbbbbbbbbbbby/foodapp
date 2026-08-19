@@ -6,6 +6,7 @@ import { handleQuestionRoutes } from './routes/questions';
 import { handleAdminRoutes } from './routes/admin';
 import { handleRecordRoutes } from './routes/records';
 import { handleDuplicateRoutes } from './routes/duplicates';
+import { handleClientEventRoutes, purgeOldClientEvents } from './routes/clientEvents';
 
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
@@ -41,6 +42,9 @@ export default {
       const recordResponse = await handleRecordRoutes(request, env, url.pathname, execCtx);
       if (recordResponse) return cors(recordResponse);
 
+      const clientEventResponse = await handleClientEventRoutes(request, env, url.pathname);
+      if (clientEventResponse) return cors(clientEventResponse);
+
       // Unknown /api/* routes return JSON 404
       if (url.pathname.startsWith('/api/')) {
         return cors(Response.json({ error: 'Not found' }, { status: 404 }));
@@ -52,6 +56,10 @@ export default {
       console.error(err);
       return cors(Response.json({ error: 'Internal server error' }, { status: 500 }));
     }
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await purgeOldClientEvents(env.DB);
   },
 };
 

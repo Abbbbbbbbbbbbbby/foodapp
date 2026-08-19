@@ -10,6 +10,13 @@ const OTP_SEND_GLOBAL_PER_HOUR = 30;
 const OTP_SEND_GLOBAL_PER_DAY = 60;
 const OTP_VERIFY_MAX = 10; // per phone per hour
 
+// Client-supplied device_id, so the per-device cap only dampens an honest
+// client's bug (a crash loop flushing every 5s tops out around 720/hr) —
+// it is not an abuse boundary. The global cap is the real damping on a
+// rotating-device_id sender; both are approximate (eventual-consistency KV).
+const CLIENT_EVENTS_PER_DEVICE_PER_HOUR = 800;
+const CLIENT_EVENTS_GLOBAL_PER_HOUR = 5000;
+
 function hourSlot(): number {
   return Math.floor(Date.now() / 3_600_000);
 }
@@ -61,6 +68,29 @@ export async function checkOtpSendLimit(
     OTP_SEND_GLOBAL_PER_DAY - globalDay - 1
   );
   return { allowed: true, remaining };
+}
+
+export async function checkClientEventLimit(
+  kv: KVNamespace,
+  deviceId: string,
+  opts?: { skipGlobal?: boolean }
+): Promise<{ allowed: boolean }> {
+  const deviceKey = `rl:cev:${deviceId}:h${hourSlot()}`;
+  const globalKey = `rl:cev:global:h${hourSlot()}`;
+
+  const [deviceCount, globalCount] = await Promise.all([
+    getCount(kv, deviceKey),
+    getCount(kv, globalKey),
+  ]);
+
+  if (deviceCount >= CLIENT_EVENTS_PER_DEVICE_PER_HOUR) return { allowed: false };
+  if (!opts?.skipGlobal && globalCount >= CLIENT_EVENTS_GLOBAL_PER_HOUR) return { allowed: false };
+
+  await Promise.all([
+    increment(kv, deviceKey, 3600, deviceCount),
+    increment(kv, globalKey, 3600, globalCount),
+  ]);
+  return { allowed: true };
 }
 
 export async function checkVerifyLimit(

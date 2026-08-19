@@ -141,6 +141,14 @@ Apply production migrations BEFORE merging code that depends on them, because me
 
 `scripts/backfill-normalized.mjs` is a one-time idempotent backfill for `name_normalized` on rows imported before normalization existed (pass `--remote` for production; safe to re-run).
 
+### `client_events` — client telemetry data contract
+
+The check-in wizard runs entirely client-side with no network traffic between lookup and submit, so a crash or reload mid-entry was previously invisible. `migrations/0010_client_events.sql` adds a `client_events` table that the PWA POSTs to via `POST /api/client-events` (unauthenticated — a crashed or logged-out client must still be able to report). This table is the read contract for the planned admin console (issue #13); any schema change here must update this section in the same commit.
+
+Columns, one fact each: `id` (client-minted UUID, the idempotency key — inserts use `INSERT OR IGNORE`), `received_at`/`occurred_at`, `user_id` (nullable), `session_id` (per page load), `device_id` (persisted per device), `seq` (intra-session ordering — not in the original issue #12 column list, added for ordering breadcrumbs across a flush), `level` (`error|warn|info`), `kind` (`js_error|unhandled_rejection|react_boundary|view_change|wizard_step|draft_restored|draft_discarded|sw_update|visibility|api_failure` — `view_change` is also an addition beyond issue #12's original enum, splitting "which screen" from "which wizard step" into two single-fact kinds), `route`, `wizard_step` (1-based, matching the UI's "Step N of 11"), `view_type`, `message`, `stack`, `user_agent`, `online`, `app_version`, `extra` (bounded JSON).
+
+Caveats for a future consumer: events delivered via `navigator.sendBeacon` (page-unload) carry no `Authorization` header and are always unattributed (`user_id` is null) — session/device ids still correlate them to the rest of that session. Rows older than 30 days are purged by a daily cron (`scheduled` handler in `src/worker/index.ts`).
+
 ## Standing design decisions
 
 - **No role gating for data sensitivity.** Food line data is not PII (explicit decision). Anyone can self-register as a volunteer; SMS rate limits are the abuse control. Do not re-add auth gates for this reason.
