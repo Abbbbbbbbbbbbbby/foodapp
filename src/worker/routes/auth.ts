@@ -73,7 +73,7 @@ function clientIp(request: Request, env: Env): string | undefined {
 // hard so a pre-auth client can't buffer a huge body into the isolate before
 // the handler runs — the streamed cap aborts instead of buffering-then-checking.
 const MAX_AUTH_BODY_BYTES = 4096;
-async function readJsonCapped<T>(request: Request): Promise<T | null | 'too_large'> {
+async function readJsonCapped<T extends object>(request: Request): Promise<T | null | 'too_large'> {
   const raw = await readBodyCapped(request, MAX_AUTH_BODY_BYTES);
   if (raw === null) return 'too_large';
   try {
@@ -89,9 +89,13 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     console.warn('auth body rejected', 'too large', request.url);
     return Response.json({ error: 'Body too large' }, { status: 413 });
   }
-  if (parsed === null) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  if (parsed === null) {
+    console.warn('auth body rejected', 'invalid json', request.url);
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   const phone = normalizePhone(parsed.phone ?? null);
   if (!phone) {
+    console.warn('auth body rejected', 'phone required', request.url);
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
   const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test', ip: clientIp(request, env) });
@@ -117,13 +121,18 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     console.warn('auth body rejected', 'too large', request.url);
     return Response.json({ error: 'Body too large' }, { status: 413 });
   }
-  if (parsed === null) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  if (parsed === null) {
+    console.warn('auth body rejected', 'invalid json', request.url);
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   const name = parsed.name?.trim();
   const phone = normalizePhone(parsed.phone ?? null);
   if (!name) {
+    console.warn('auth body rejected', 'name required', request.url);
     return Response.json({ error: 'name is required' }, { status: 400 });
   }
   if (!phone) {
+    console.warn('auth body rejected', 'phone required', request.url);
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
   const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test', ip: clientIp(request, env) });
@@ -160,10 +169,14 @@ async function handleVerify(request: Request, env: Env): Promise<Response> {
     console.warn('auth body rejected', 'too large', request.url);
     return Response.json({ error: 'Body too large' }, { status: 413 });
   }
-  if (parsed === null) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  if (parsed === null) {
+    console.warn('auth body rejected', 'invalid json', request.url);
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
   const phone = normalizePhone(parsed.phone ?? null);
   const code = parsed.code?.trim();
   if (!phone || !code) {
+    console.warn('auth body rejected', 'phone and code required', request.url);
     return Response.json({ error: 'phone and code are required' }, { status: 400 });
   }
   const limit = await checkVerifyLimit(env.SESSIONS, phone, { ip: clientIp(request, env) });

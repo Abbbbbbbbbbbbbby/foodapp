@@ -13,7 +13,10 @@ export async function readBodyCapped(request: Request, maxBytes: number): Promis
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel();
+      // A cancel() throw (connection reset mid-abort) must not turn the
+      // "too large" verdict into a generic thrown 500 — swallow it and keep
+      // returning null so the caller still emits its 413/400.
+      try { await reader.cancel(); } catch { /* best-effort */ }
       return null;
     }
     chunks.push(value);

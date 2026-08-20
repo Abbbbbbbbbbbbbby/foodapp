@@ -61,8 +61,8 @@ export function buildApp(clientFactory: (env: AdminEnv) => AuthClient = realClie
   app.get('/events', async (c) => {
     const filters = parseFilters(c);
     // Number('Infinity') / Number('1e309') are truthy but non-finite and reach
-    // D1 as a NaN/Infinity OFFSET → datatype-mismatch 500. Require a positive
-    // safe integer; anything else is page 1.
+    // D1 as a non-finite OFFSET → datatype-mismatch 500. Require a positive
+    // safe integer; anything else (non-finite, NaN, float, negative) is page 1.
     const pageRaw = Number(c.req.query('page'));
     const page = Number.isSafeInteger(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
     const { rows, hasNext } = await listEvents(c.env.DB, filters, page);

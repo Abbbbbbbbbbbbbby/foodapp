@@ -1,4 +1,4 @@
-import { createClient } from '@openauthjs/openauth/client';
+import { createClient, type Client } from '@openauthjs/openauth/client';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import type { Context, MiddlewareHandler } from 'hono';
 import type { AdminEnv } from './types';
@@ -30,9 +30,17 @@ export interface AuthClient {
   verify(s: typeof subjects, access: string): Promise<{ err?: unknown; subject?: { properties: UserProps } }>;
 }
 
+// Compile-time drift guard: if the real OpenAuth Client stops being
+// structurally assignable to the subset AuthClient models, THIS fails to
+// typecheck — the signal that the interface diverged from the dependency
+// (authoritative-source-for-platform-capability). Kept as a type-level check
+// so no runtime cost.
+const _clientConforms: (c: Client) => AuthClient = (c) => c;
+void _clientConforms;
+
 export function realClient(env: AdminEnv): AuthClient {
   // No authGroup is ever appended: this is a DOMAIN-mode client.
-  return createClient({ clientID: env.OPENAUTH_CLIENT_ID, issuer: env.OPENAUTH_ISSUER }) as unknown as AuthClient;
+  return createClient({ clientID: env.OPENAUTH_CLIENT_ID, issuer: env.OPENAUTH_ISSUER });
 }
 
 function redirectUri(c: Ctx): string {

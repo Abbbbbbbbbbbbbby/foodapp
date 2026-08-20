@@ -109,6 +109,31 @@ describe('auth body size cap (pre-auth DoS)', () => {
     warn.mockRestore();
   });
 
+  it('register and verify also reject an oversized body with 413 (not just login)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const path of ['/api/auth/register', '/api/auth/verify']) {
+      const res = await workerExports.default.fetch(`http://127.0.0.1${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: '4805550410', pad: 'x'.repeat(8000) }),
+      });
+      expect(res.status, path).toBe(413);
+    }
+    warn.mockRestore();
+  });
+
+  it('an invalid-JSON auth body is rejected 400 AND logged (log-before-validate)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await workerExports.default.fetch('http://127.0.0.1/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{not valid json',
+    });
+    expect(res.status).toBe(400);
+    expect(warn).toHaveBeenCalledWith('auth body rejected', 'invalid json', expect.stringContaining('/api/auth/login'));
+    warn.mockRestore();
+  });
+
   it('a normal-size auth body still parses', async () => {
     const res = await workerExports.default.fetch('http://127.0.0.1/api/auth/login', {
       method: 'POST',

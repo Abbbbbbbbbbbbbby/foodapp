@@ -280,7 +280,7 @@ describe('response hardening + edge cases', () => {
 
   it('nonsense page params clamp to 1 instead of erroring', async () => {
     await seed([{ id: 'clamp-1' }]);
-    for (const p of ['-1', '0', 'abc', 'Infinity', '1e309', '99999999999999999999']) {
+    for (const p of ['-1', '0', 'abc', 'Infinity', '1e309', '99999999999999999999', '1.5', '-0']) {
       const res = await authedGet(`/events?page=${p}`);
       expect(res.status).toBe(200);
     }
@@ -351,6 +351,32 @@ describe('CSV export', () => {
     expect(body).toContain('(byte budget)');
     expect(body).not.toContain('(row cap)');
     expect(log).toHaveBeenCalledWith('csv export', expect.objectContaining({ truncation: 'byte-budget' }));
+    log.mockRestore();
+  });
+
+  it('byte-budget wins when BOTH the row cap and the byte budget are exceeded', async () => {
+    // >2000 rows AND oversized: truncatedByCap true, truncatedByBytes true.
+    // The abuse-relevant signal (byte-budget) must win in both log and artifact.
+    const t = Date.now();
+    await seed(Array.from({ length: 2100 }, (_, i) => ({
+      id: `both-${String(i).padStart(4, '0')}`, level: 'info',
+      message: 'y'.repeat(20_000),
+      received_at: new Date(t - i * 5).toISOString(),
+    })));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const body = await (await authedGet('/events.csv?level=info')).text();
+    expect(body).toContain('(byte budget)');
+    expect(body).not.toContain('(row cap)');
+    expect(log).toHaveBeenCalledWith('csv export', expect.objectContaining({ truncation: 'byte-budget' }));
+    log.mockRestore();
+  });
+
+  it('a normal untruncated export carries no marker and logs truncation none', async () => {
+    await seed([{ id: 'plain-1' }, { id: 'plain-2' }]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const body = await (await authedGet('/events.csv')).text();
+    expect(body).not.toContain('# TRUNCATED');
+    expect(log).toHaveBeenCalledWith('csv export', expect.objectContaining({ truncation: 'none' }));
     log.mockRestore();
   });
 

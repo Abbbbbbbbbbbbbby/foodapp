@@ -301,3 +301,34 @@ describe('ingest field bounds + test-env per-IP omission (issue #13)', () => {
     expect(ipKeys.keys.length).toBe(0);
   });
 });
+
+describe('body size limits (256 KiB) — Content-Length pre-check and streamed abort', () => {
+  beforeEach(clearEvents);
+
+  it('rejects 400 when Content-Length declares an oversized body (cheap pre-check)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // A Content-Length far over 256 KiB is rejected before the body is read.
+    const res = await workerExports.default.fetch('https://example.com/api/client-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': String(300 * 1024) },
+      body: JSON.stringify([makeEvent()]),
+    });
+    expect(res.status).toBe(400);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it('rejects 400 when the actual streamed body exceeds 256 KiB (no honest Content-Length)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // One event whose oversized message pushes the raw body past 256 KiB.
+    const huge = JSON.stringify([makeEvent({ message: 'z'.repeat(300 * 1024) })]);
+    const res = await workerExports.default.fetch('https://example.com/api/client-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: huge,
+    });
+    expect(res.status).toBe(400);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+});
