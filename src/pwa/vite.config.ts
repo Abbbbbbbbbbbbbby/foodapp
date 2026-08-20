@@ -37,6 +37,12 @@ function stripSafari10Guard(): Plugin {
 // iOS 9.3.5 on iPad 2 rejects them with "SyntaxError: unexpected token". This
 // plugin runs a second Babel pass on legacy chunks only, forcing these two
 // transforms down to ES5.
+//
+// plugin-transform-classes was added when the first class component
+// (ErrorBoundary, issue #12 — error boundaries require a class) entered the
+// bundle: the primary pass's downleveled class still had a spread-argument
+// constructor (`super(..._args)`), which plugin-transform-spread alone
+// cannot compile without also transforming the class itself.
 function forceEs5LegacyChunks(): Plugin {
   return {
     name: 'force-es5-legacy-chunks',
@@ -52,6 +58,7 @@ function forceEs5LegacyChunks(): Plugin {
           '@babel/plugin-transform-computed-properties',
           '@babel/plugin-transform-spread',
           '@babel/plugin-transform-destructuring',
+          '@babel/plugin-transform-classes',
         ],
         sourceMaps: false,
         compact: true,

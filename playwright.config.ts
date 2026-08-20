@@ -14,6 +14,13 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:8787',
     trace: 'retain-on-failure',
   },
+  // WebKit is the documented deployment target (iPad Safari); Chromium
+  // catches regressions fast. Both projects run serially against the same
+  // server/D1 (see `workers: 1` above).
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+    { name: 'webkit', use: { browserName: 'webkit' } },
+  ],
   webServer: {
     command: 'npm run e2e:server',
     url: 'http://127.0.0.1:8787/api/health',

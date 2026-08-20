@@ -270,9 +270,18 @@ async function flushViaFetch(): Promise<void> {
   }
 }
 
+// Deliberately does NOT read the persisted `telemetry` store first (unlike
+// flushViaFetch). Verified 2026-08-19 against real Chromium under
+// Playwright: an `await` on an IndexedDB read before the sendBeacon call
+// loses the race against page teardown on reload/unload often enough that
+// the beacon send silently never happens — sometimes the read resolves,
+// sometimes its continuation just never runs. Anything already in the
+// persisted store gets picked up by the NEXT page's startup drain (a
+// regular, non-unload flushViaFetch call) instead; this function only
+// drains what's in the in-memory buffer, synchronously up through the
+// sendBeacon calls themselves, so it can't lose that race.
 async function flushViaBeacon(): Promise<void> {
-  const stored = await safeReadStore();
-  const combined = [...stored, ...memoryBuffer];
+  const combined = [...memoryBuffer];
   memoryBuffer.length = 0;
   if (combined.length === 0) return;
   if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') {
@@ -289,12 +298,12 @@ async function flushViaBeacon(): Promise<void> {
     } catch {
       ok = false;
     }
-    if (ok) {
-      await removeFromStoreSafe(chunk);
-    } else {
+    if (!ok) {
       // The browser's beacon queue rejected this chunk (a known WebKit
       // weak spot at unload) — further beacon sends in this unload are
-      // unlikely to fare better. Persist everything remaining and stop.
+      // unlikely to fare better. Best-effort persist of what's left; if
+      // the page tears down before this completes too, those events are
+      // lost — the same accepted risk already documented for WebKit.
       const remaining = chunks.slice(i).flat();
       await persistToStore(remaining);
       return;
@@ -384,6 +393,16 @@ function installVisibilityHandlers(): void {
   try {
     if (typeof window !== 'undefined') {
       window.addEventListener('pagehide', () => {
+        try {
+          // Verified (2026-08-19, Chromium under Playwright): a same-tab
+          // reload fires 'pagehide' but NOT 'visibilitychange' — so this
+          // breadcrumb can't rely on the visibilitychange handler above for
+          // the reload/unload case. Emit it directly here, synchronously,
+          // before the flush call reads the buffer.
+          trackEvent('visibility', 'info', { extra: { state: 'pagehide' } });
+        } catch {
+          // never throw
+        }
         void flushTelemetry({ beacon: true });
       });
     }
