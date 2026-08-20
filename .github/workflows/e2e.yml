@@ -1,8 +1,9 @@
 name: E2E Smoke
-# Boots the real worker + local D1 via wrangler dev and drives the volunteer
-# journeys (online, offline queue, returning household) in Chromium. Runs on
-# every PR and on main pushes — pushes to main auto-deploy, so these journeys
-# must gate production, not just be available on demand.
+# Boots the real workers + local D1 via wrangler dev and drives the volunteer
+# journeys (Chromium + WebKit projects) plus the foodbox-admin console smoke
+# (admin-chromium project on :8788). Runs on every PR and on main pushes —
+# pushes to main auto-deploy, so these journeys must gate production, not
+# just be available on demand.
 on:
   workflow_dispatch:
   pull_request:

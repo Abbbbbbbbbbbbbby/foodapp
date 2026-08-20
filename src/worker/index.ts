@@ -21,6 +21,10 @@ const ALLOWED_ORIGINS = new Set([
   'http://localhost:8787',
   'http://127.0.0.1:8787',
   'http://localhost:5173',
+  // wrangler dev's local-upstream mapping can strip the port from the
+  // browser's Origin header — accept the portless local forms too.
+  'http://localhost',
+  'http://127.0.0.1',
 ]);
 
 // Pre-auth POST endpoints a hostile page could drive cross-origin.
