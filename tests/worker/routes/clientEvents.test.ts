@@ -36,7 +36,7 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
 async function clearEvents() {
   const e = env as unknown as Env;
   await e.DB.prepare(`DELETE FROM client_events`).run();
-  const list = await e.SESSIONS.list({ prefix: 'rl:cev:' });
+  const list = await e.SESSIONS.list({ prefix: 'rl:' }); // covers rl:cev: AND the new rl:ip:cev: keys
   await Promise.all(list.keys.map(k => e.SESSIONS.delete(k.name)));
 }
 
@@ -241,11 +241,63 @@ describe('GET /api/test/client-events — production gate', () => {
   it('is unreachable when ENVIRONMENT is not "test"', async () => {
     const { handleClientEventRoutes } = await import('../../../src/worker/routes/clientEvents');
     const e = env as unknown as Env;
-    const req = new Request('https://example.com/api/test/client-events');
+    // Local hostname: this route is host-gated on top of the ENVIRONMENT gate.
+    const req = new Request('http://127.0.0.1/api/test/client-events');
     const gated = await handleClientEventRoutes(req, { ...e, ENVIRONMENT: 'production' }, '/api/test/client-events');
     expect(gated?.status).toBe(404);
 
     const open = await handleClientEventRoutes(req, { ...e, ENVIRONMENT: 'test' }, '/api/test/client-events');
     expect(open?.status).toBe(200);
+  });
+
+  it('404s on a non-local hostname even when ENVIRONMENT is "test"', async () => {
+    const { handleClientEventRoutes } = await import('../../../src/worker/routes/clientEvents');
+    const e = env as unknown as Env;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const req = new Request('https://example.com/api/test/client-events');
+    const denied = await handleClientEventRoutes(req, { ...e, ENVIRONMENT: 'test' }, '/api/test/client-events');
+    expect(denied?.status).toBe(404);
+    expect(warn).toHaveBeenCalledWith('test route denied on host', 'example.com');
+    warn.mockRestore();
+  });
+});
+
+describe('ingest field bounds + test-env per-IP omission (issue #13)', () => {
+  beforeEach(clearEvents);
+
+  it('oversized identifier fields are stored truncated (id/session/device 128, occurred_at 64)', async () => {
+    const e = env as unknown as Env;
+    const bigId = 'x'.repeat(5000);
+    const res = await workerExports.default.fetch('https://example.com/api/client-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([makeEvent({
+        id: bigId,
+        session_id: 's'.repeat(9000),
+        device_id: 'd'.repeat(9000),
+        occurred_at: 'o'.repeat(9000),
+      })]),
+    });
+    expect(res.status).toBe(200);
+    const row = await e.DB.prepare(
+      `SELECT length(id) AS lid, length(session_id) AS lsid, length(device_id) AS ldid, length(occurred_at) AS locc
+       FROM client_events WHERE id = ?`
+    ).bind(bigId.slice(0, 128)).first<{ lid: number; lsid: number; ldid: number; locc: number }>();
+    expect(row?.lid).toBe(128);
+    expect(row?.lsid).toBe(128);
+    expect(row?.ldid).toBe(128);
+    expect(row?.locc).toBe(64);
+  });
+
+  it('in the test environment no per-IP key is created even when CF-Connecting-IP is present', async () => {
+    const e = env as unknown as Env;
+    const res = await workerExports.default.fetch('https://example.com/api/client-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '9.9.9.9' },
+      body: JSON.stringify([makeEvent({ device_id: 'ip-omission-dev' })]),
+    });
+    expect(res.status).toBe(200);
+    const ipKeys = await e.SESSIONS.list({ prefix: 'rl:ip:' });
+    expect(ipKeys.keys.length).toBe(0);
   });
 });

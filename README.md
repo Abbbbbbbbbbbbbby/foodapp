@@ -2,7 +2,7 @@
 
 Check-in app for the Creighton Community Foundation hunger-relief food box line. Volunteers sign in with their phone number, look up or register families as cars come through, and record each visit and bag count. Built to keep working when the WiFi doesn't.
 
-**Live (production):** https://foodbox-data-app.jeff-be7.workers.dev
+**Live (production):** https://foodboxdata.creightoncommunityfoundation.org (the old workers.dev alias stays active until a follow-up PR disables it)
 
 ## What the program does
 
@@ -88,7 +88,7 @@ Cloudflare Workers Builds (git integration)
    npx wrangler deploy
    |
    v
-production at foodbox-data-app.jeff-be7.workers.dev
+production at foodboxdata.creightoncommunityfoundation.org
 ```
 
 - Every push to `main` deploys to production. Branch pushes get preview builds.

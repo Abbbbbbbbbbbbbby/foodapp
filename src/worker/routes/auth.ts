@@ -38,9 +38,33 @@ export async function handleAuthRoutes(
   }
   const testOtpMatch = pathname.match(/^\/api\/test\/latest-otp\/([0-9]+)$/);
   if (testOtpMatch && request.method === 'GET' && env.ENVIRONMENT === 'test') {
+    // Belt-and-suspenders host gate: even with ENVIRONMENT=test (one env-var
+    // flip away in the dashboard), this OTP-reading route must never answer
+    // on a public hostname. Log before falling through — rejected input must
+    // be visible (never silently dropped).
+    if (!isLocalHostname(request)) {
+      console.warn('test route denied on host', new URL(request.url).hostname);
+      return null;
+    }
     return handleTestLatestOtp(env, testOtpMatch[1]);
   }
   return null;
+}
+
+
+// Test-only routes answer exclusively on local hostnames, regardless of
+// ENVIRONMENT. Exported for the client-events test route to share.
+export function isLocalHostname(request: Request): boolean {
+  const hostname = new URL(request.url).hostname;
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+}
+
+// Per-IP rate-limit dimension. Omitted (undefined) in the test environment:
+// local .wrangler/state KV persists across e2e runs, and every local request
+// shares one bucket, so repeated runs would eventually 429.
+function clientIp(request: Request, env: Env): string | undefined {
+  if (env.ENVIRONMENT === 'test') return undefined;
+  return request.headers.get('CF-Connecting-IP') ?? 'unknown';
 }
 
 async function handleLogin(request: Request, env: Env): Promise<Response> {
@@ -54,7 +78,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (!phone) {
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
-  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test' });
+  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test', ip: clientIp(request, env) });
   if (!limit.allowed) {
     return Response.json({ error: 'Too many code requests. Try again later.' }, { status: 429 });
   }
@@ -86,7 +110,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   if (!phone) {
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
-  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test' });
+  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test', ip: clientIp(request, env) });
   if (!limit.allowed) {
     return Response.json({ error: 'Too many code requests. Try again later.' }, { status: 429 });
   }
@@ -126,7 +150,7 @@ async function handleVerify(request: Request, env: Env): Promise<Response> {
   if (!phone || !code) {
     return Response.json({ error: 'phone and code are required' }, { status: 400 });
   }
-  const limit = await checkVerifyLimit(env.SESSIONS, phone);
+  const limit = await checkVerifyLimit(env.SESSIONS, phone, { ip: clientIp(request, env) });
   if (!limit.allowed) {
     return Response.json({ error: 'Too many verification attempts. Try again later.' }, { status: 429 });
   }

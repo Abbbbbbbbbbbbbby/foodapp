@@ -16,6 +16,11 @@
     "run_worker_first": ["/api/*"]
   },
 
+  // Production hostname (Workers Custom Domain — wrangler creates the DNS record
+  // + certificate at deploy; the hostname must not already have a DNS record).
+  // workers.dev stays enabled until tablets re-bookmark; a follow-up PR flips it off.
+  "routes": [{ "pattern": "foodboxdata.creightoncommunityfoundation.org", "custom_domain": true }],
+
   "observability": {
     "enabled": true
   },

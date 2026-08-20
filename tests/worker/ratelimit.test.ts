@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
-import { describe, it, expect, beforeEach } from 'vitest';
-import { checkOtpSendLimit, checkVerifyLimit } from '../../src/worker/ratelimit';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { checkOtpSendLimit, checkVerifyLimit, checkClientEventLimit } from '../../src/worker/ratelimit';
 import type { Env } from '../../src/worker/schema';
 
 const kv = () => (env as unknown as Env).SESSIONS;
@@ -45,5 +45,58 @@ describe('SMS rate limits', () => {
     expect(r.allowed).toBe(true); // treated as 0, then incremented to a real number
     const stored = await kv().get(`rl:otp:send:4805550004:h${hourSlot}`);
     expect(stored).toBe('1');
+  });
+});
+
+describe('per-IP caps (opts.ip) — issue #13 abuse hardening', () => {
+  it('OTP send: 15/hr per IP across rotating phones, 16th denied and logged', async () => {
+    const store = kv();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 0; i < 15; i++) {
+      const r = await checkOtpSendLimit(store, `48055581${String(i).padStart(2, '0')}`, { skipGlobal: true, ip: '1.2.3.4' });
+      expect(r.allowed).toBe(true);
+    }
+    const denied = await checkOtpSendLimit(store, '4805558199', { skipGlobal: true, ip: '1.2.3.4' });
+    expect(denied.allowed).toBe(false);
+    expect(warn).toHaveBeenCalledWith('rate-limited', { scope: 'ip', kind: 'otp-send' });
+    warn.mockRestore();
+  });
+
+  it('distinct IPs are isolated buckets', async () => {
+    const store = kv();
+    for (let i = 0; i < 15; i++) {
+      await checkOtpSendLimit(store, `48055582${String(i).padStart(2, '0')}`, { skipGlobal: true, ip: '1.1.1.1' });
+    }
+    const other = await checkOtpSendLimit(store, '4805558299', { skipGlobal: true, ip: '2.2.2.2' });
+    expect(other.allowed).toBe(true);
+  });
+
+  it('omitted ip = no per-IP check (backward-compatible 2-arg behavior)', async () => {
+    const store = kv();
+    for (let i = 0; i < 20; i++) {
+      const r = await checkOtpSendLimit(store, `48055583${String(i).padStart(2, '0')}`, { skipGlobal: true });
+      expect(r.allowed).toBe(true); // 20 > the 15/IP cap, but no ip was given
+    }
+  });
+
+  it('OTP verify: 60/hr per IP across rotating phones, 61st denied', async () => {
+    const store = kv();
+    for (let i = 0; i < 60; i++) {
+      const r = await checkVerifyLimit(store, `48055584${String(i).padStart(2, '0')}`.slice(0, 10), { ip: '3.3.3.3' });
+      expect(r.allowed).toBe(true);
+    }
+    const denied = await checkVerifyLimit(store, '4805558499', { ip: '3.3.3.3' });
+    expect(denied.allowed).toBe(false);
+  });
+
+  it('client-events: per-IP cap of 4000 events/hr, crossing batch denied', async () => {
+    const store = kv();
+    // Rotate device ids so the 800/device cap never trips; charge 3990 to the IP.
+    for (let i = 0; i < 5; i++) {
+      const r = await checkClientEventLimit(store, `dev-${i}`, 798, { skipGlobal: true, ip: '4.4.4.4' });
+      expect(r.allowed).toBe(true);
+    }
+    const denied = await checkClientEventLimit(store, 'dev-final', 20, { skipGlobal: true, ip: '4.4.4.4' });
+    expect(denied.allowed).toBe(false);
   });
 });
