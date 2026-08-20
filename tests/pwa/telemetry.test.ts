@@ -166,35 +166,58 @@ describe('store cap eviction', () => {
   });
 });
 
-describe('beacon chunking respects the 64 KiB sendBeacon limit (review finding)', () => {
-  it('splits a large buffer into sub-64KiB beacon chunks, distinct from the larger fetch-path chunk size', async () => {
-    const { telemetry } = await freshModules();
+describe('beacon flush sends at most one chunk per flush (review finding, cycle 2)', () => {
+  it('sends exactly one sub-64KiB chunk via sendBeacon and persists the rest to the store, rather than looping multiple sendBeacon calls', async () => {
+    // The 64 KiB sendBeacon limit is a SHARED quota across all in-flight
+    // keepalive requests for the page (verified against the Beacon spec),
+    // not a fresh budget per call — looping several sendBeacon() calls in
+    // one flush risks the second+ being silently rejected even though
+    // each individual chunk is under the cap. Only one call is correct.
+    const { telemetry, offline } = await freshModules();
     const beaconCalls: number[] = [];
     const sendBeacon = vi.fn((_url: string, data: BodyInit) => {
-      // Blob.size gives the real byte length of what would be sent.
-      beaconCalls.push((data as Blob).size);
+      beaconCalls.push((data as Blob).size); // real byte length of what was sent
       return true;
     });
     Object.defineProperty(navigator, 'sendBeacon', { value: sendBeacon, configurable: true });
 
-    // Each event's stack is truncated server-side at 8000 chars, but the
-    // CLIENT buffer isn't truncated before flush — a handful of large
-    // stack traces alone exceeds 64KiB, which is exactly the scenario
-    // that broke before this fix (large chunk -> sendBeacon returns false
-    // -> unreliable async persist during unload). Level 'warn', not
-    // 'error' — 'error' would trigger an immediate FETCH-path auto-flush
-    // (a different code path, different chunk-size constant) before this
-    // test's explicit beacon flush runs.
+    // Each event's stack is truncated to 8000 chars client-side (matching
+    // the server's own truncation); ten of them together needs more than
+    // one 56KB chunk to hold them all. Level 'warn', not 'error' — 'error'
+    // would trigger an immediate FETCH-path auto-flush (a different code
+    // path, different chunk-size constant) before this test's explicit
+    // beacon flush runs.
     for (let i = 0; i < 10; i++) {
       telemetry.trackEvent('api_failure', 'warn', { stack: 's'.repeat(9_000) });
     }
     await telemetry.flushTelemetry({ beacon: true });
 
-    expect(sendBeacon).toHaveBeenCalled();
-    expect(beaconCalls.length).toBeGreaterThan(1); // had to split into multiple chunks
-    for (const size of beaconCalls) {
-      expect(size).toBeLessThan(64 * 1024);
-    }
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    expect(beaconCalls[0]).toBeLessThan(64 * 1024);
+    // The events that didn't fit in the one beacon-safe chunk are
+    // persisted, not dropped — they'll go out on the next flush.
+    const stored = await offline.readAllStore(offline.TELEMETRY_STORE);
+    expect(stored.length).toBeGreaterThan(0);
+  });
+
+  it('a single wildly-oversized event is truncated at construction, so it alone can never exceed the beacon chunk cap (review finding, cycle 2)', async () => {
+    const { telemetry } = await freshModules();
+    const beaconCalls: number[] = [];
+    const sendBeacon = vi.fn((_url: string, data: BodyInit) => {
+      beaconCalls.push((data as Blob).size);
+      return true;
+    });
+    Object.defineProperty(navigator, 'sendBeacon', { value: sendBeacon, configurable: true });
+
+    // Far larger than any per-chunk cap — proves truncation happens at
+    // event-construction time (buildEvent), not just at the chunking
+    // boundary, since a single event this size could never fit even if
+    // chunkEvents put it alone in its own chunk.
+    telemetry.trackEvent('js_error', 'warn', { stack: 's'.repeat(500_000), message: 'm'.repeat(50_000) });
+    await telemetry.flushTelemetry({ beacon: true });
+
+    expect(beaconCalls.length).toBe(1);
+    expect(beaconCalls[0]).toBeLessThan(64 * 1024);
   });
 });
 

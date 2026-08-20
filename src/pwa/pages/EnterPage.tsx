@@ -748,6 +748,10 @@ export default function EnterPage() {
           onComplete={handleInlineRegisterComplete}
           onBack={() => {
             if (view.type !== 'inline-register') return;
+            // Abandoning this attempt — a key minted by a prior failed
+            // submission for THIS slot must not leak into whatever gets
+            // entered next (review finding, PR #14 cycle 2).
+            submissionKeysRef.current = {};
             const { returnTo } = view;
             setView({
               type: 'family-select', own: returnTo.own, proxy: returnTo.proxy,
@@ -780,6 +784,7 @@ export default function EnterPage() {
           onAnswer={handleProxyAnswer}
           onBack={() => {
             if (view.type === 'proxy-question') {
+              submissionKeysRef.current = {};
               setView({ type: 'how-many', searchName: view.prefillName, searchPhone: view.prefillPhone });
             }
           }}
@@ -796,6 +801,14 @@ export default function EnterPage() {
           onComplete={handleWizardComplete}
           onBack={() => {
             if (view.type === 'wizard') {
+              // Abandoning this attempt — a key minted by a prior failed
+              // submission for THIS family slot must not leak into
+              // whatever gets entered next (review finding, PR #14
+              // cycle 2): the volunteer could go Back, change the name
+              // or answers, and re-submit — reusing the old key would
+              // make the server replay the ABANDONED data via
+              // idempotency, silently discarding the new entry.
+              submissionKeysRef.current = {};
               setView({
                 type: 'proxy-question',
                 familyIndex: view.familyIndex,

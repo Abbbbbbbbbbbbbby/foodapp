@@ -108,6 +108,21 @@ function safeStringify(v: unknown): string | null {
   }
 }
 
+// Mirrors the server's truncation limits (src/worker/routes/clientEvents.ts)
+// so a single event can never exceed chunkEvents' per-chunk byte cap — the
+// server truncates these fields anyway, so truncating client-side loses no
+// information it would have kept, and closes the gap where an untruncated
+// single event could exceed the 56KB beacon chunk limit on its own (review
+// finding, PR #14 cycle 2).
+const CLIENT_MAX_MESSAGE_CHARS = 1_000;
+const CLIENT_MAX_STACK_CHARS = 8_000;
+const CLIENT_MAX_EXTRA_CHARS = 2_048;
+
+function truncate(s: string | null, max: number): string | null {
+  if (s === null) return null;
+  return s.length > max ? s.slice(0, max) : s;
+}
+
 function buildEvent(kind: EventKind, level: EventLevel, fields?: TrackFields): StoredEvent {
   ensureIds();
   return {
@@ -121,12 +136,12 @@ function buildEvent(kind: EventKind, level: EventLevel, fields?: TrackFields): S
     route: fields?.route ?? telemetryContext.route ?? (typeof location !== 'undefined' ? location.pathname : null) ?? null,
     wizard_step: fields?.wizardStep !== undefined ? fields.wizardStep : telemetryContext.wizardStep ?? null,
     view_type: fields?.viewType !== undefined ? fields.viewType : telemetryContext.viewType ?? null,
-    message: fields?.message ?? null,
-    stack: fields?.stack ?? null,
+    message: truncate(fields?.message ?? null, CLIENT_MAX_MESSAGE_CHARS),
+    stack: truncate(fields?.stack ?? null, CLIENT_MAX_STACK_CHARS),
     user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
     online: typeof navigator !== 'undefined' ? navigator.onLine : null,
     app_version: APP_VERSION,
-    extra: fields?.extra !== undefined ? safeStringify(fields.extra) : null,
+    extra: truncate(fields?.extra !== undefined ? safeStringify(fields.extra) : null, CLIENT_MAX_EXTRA_CHARS),
   };
 }
 
@@ -307,26 +322,35 @@ async function flushViaBeacon(): Promise<void> {
     await persistToStore(combined);
     return;
   }
+  // The 64 KiB sendBeacon limit is a SHARED quota across ALL in-flight
+  // keepalive requests for the page (verified against the Beacon spec:
+  // "the amount of data that can be queued to be sent by keepalive
+  // enabled requests" — cumulative, not per-call). Sending several ~56KB
+  // chunks back-to-back in one flush would very likely have the second
+  // one rejected while the first is still in flight, even though each
+  // chunk alone is under the cap. Send AT MOST ONE chunk per beacon
+  // flush; anything left over is persisted for the next drain (review
+  // finding, PR #14 cycle 2, corroborated by an independent MDN check).
   const chunks = chunkEvents(combined, MAX_BEACON_CHUNK_BYTES);
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    let ok = false;
-    try {
-      const blob = new Blob([JSON.stringify(chunk)], { type: 'text/plain' });
-      ok = navigator.sendBeacon('/api/client-events', blob);
-    } catch {
-      ok = false;
-    }
-    if (!ok) {
-      // The browser's beacon queue rejected this chunk (a known WebKit
-      // weak spot at unload) — further beacon sends in this unload are
-      // unlikely to fare better. Best-effort persist of what's left; if
-      // the page tears down before this completes too, those events are
-      // lost — the same accepted risk already documented for WebKit.
-      const remaining = chunks.slice(i).flat();
-      await persistToStore(remaining);
-      return;
-    }
+  const [firstChunk, ...restChunks] = chunks;
+  if (!firstChunk) return;
+  let ok = false;
+  try {
+    const blob = new Blob([JSON.stringify(firstChunk)], { type: 'text/plain' });
+    ok = navigator.sendBeacon('/api/client-events', blob);
+  } catch {
+    ok = false;
+  }
+  if (ok) {
+    await removeFromStoreSafe(firstChunk);
+    if (restChunks.length) await persistToStore(restChunks.flat());
+  } else {
+    // Rejected outright (a known WebKit weak spot at unload, or the
+    // shared quota was already exhausted by something else) — persist
+    // everything; if the page tears down before this completes too,
+    // those events are lost, the same accepted risk already documented
+    // for WebKit.
+    await persistToStore(combined);
   }
 }
 
