@@ -24,6 +24,19 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   searchDirectory: vi.fn(async () => []),
   directoryPickup: vi.fn(async () => ({ own: null, proxy: [] })),
   upsertDirectoryFamilies: vi.fn(async () => undefined),
+  markDirectoryStale: vi.fn(async () => undefined),
+  // draft.ts and telemetry.ts (imported transitively by EnterPage) pull
+  // these store primitives from lib/offline — without a stub here they'd
+  // be undefined, which draft.ts/telemetry.ts's own try/catch wrapping
+  // absorbs silently, but stubbing them keeps the mock surface honest and
+  // lets a resume-flow test actually observe a draft write.
+  putInStore: vi.fn(async () => undefined),
+  getFromStore: vi.fn(async () => undefined),
+  deleteFromStore: vi.fn(async () => undefined),
+  readAllStore: vi.fn(async () => []),
+  DRAFT_STORE: 'drafts',
+  TELEMETRY_STORE: 'telemetry',
+  DB_VERSION: 4,
 }));
 
 import EnterPage from '../../src/pwa/pages/EnterPage';
@@ -182,5 +195,64 @@ describe('EnterPage lookup error routing', () => {
     await searchFor(user, 'Brand New Person');
 
     expect((await screen.findAllByText(/How many families|¿Para cuántas familias/)).length).toBeGreaterThan(0);
+  });
+});
+
+describe('EnterPage — draft resume prompt', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('offers to resume a saved draft on mount, and Resume restores the view without a fresh search', async () => {
+    const { getFromStore, deleteFromStore } = await import('../../src/pwa/lib/offline');
+    vi.mocked(getFromStore).mockResolvedValueOnce({
+      user_id: 'u1',
+      updatedAt: Date.now(),
+      view: {
+        type: 'family-select',
+        own: { id: 'fam-1', name: 'Resumed Family', phone: null, num_people: 3, last_visit_date: null } as never,
+        proxy: [],
+        pickupName: 'Resumed Family',
+        pickupPhone: null,
+      },
+      wizard: null,
+      pendingFamilies: [],
+      pendingVisitIds: [],
+    });
+    render(<EnterPage />);
+
+    const resumeBtn = await screen.findByRole('button', { name: /^Resume/i });
+    expect(screen.getByText(/Resume the unfinished check-in/)).toBeInTheDocument();
+    await userEvent.setup().click(resumeBtn);
+
+    // Restored straight into family-select — the family name renders —
+    // with no lookup search ever performed.
+    expect(await screen.findByText('Resumed Family')).toBeInTheDocument();
+    expect(api.get).not.toHaveBeenCalled();
+    expect(deleteFromStore).not.toHaveBeenCalled();
+  });
+
+  it('Discard clears the draft and stays on the lookup screen', async () => {
+    const { getFromStore, deleteFromStore } = await import('../../src/pwa/lib/offline');
+    vi.mocked(getFromStore).mockResolvedValueOnce({
+      user_id: 'u1',
+      updatedAt: Date.now(),
+      view: { type: 'how-many', searchName: 'Discard Me', searchPhone: null },
+      wizard: null,
+      pendingFamilies: [],
+      pendingVisitIds: [],
+    });
+    render(<EnterPage />);
+
+    const discardBtn = await screen.findByRole('button', { name: /^Discard/i });
+    await userEvent.setup().click(discardBtn);
+
+    expect(deleteFromStore).toHaveBeenCalled();
+    // Still on lookup — the how-many screen never rendered.
+    expect(screen.queryByText(/How many families|¿Para cuántas familias/)).not.toBeInTheDocument();
+  });
+
+  it('does not offer a resume prompt when no draft exists', async () => {
+    render(<EnterPage />);
+    await screen.findByRole('button', { name: /Search \/ Buscar/i });
+    expect(screen.queryByRole('button', { name: /^Resume/i })).not.toBeInTheDocument();
   });
 });

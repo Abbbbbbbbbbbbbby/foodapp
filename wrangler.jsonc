@@ -41,5 +41,10 @@
 
   "vars": {
     "ENVIRONMENT": "production"
+  },
+
+  // Daily purge of client_events rows older than 30 days (see purgeOldClientEvents).
+  "triggers": {
+    "crons": ["0 9 * * *"]
   }
 }

@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  queueItem, getPending, getDeadLetters, clearDeadLetters, flushQueue,
+  queueItem, getPending, getDeadLetters, clearDeadLetters, flushQueue, DB_VERSION,
 } from '../../src/pwa/lib/offline';
 
 class FakeApiError extends Error {
@@ -15,12 +15,14 @@ class FakeApiError extends Error {
 // forever on the still-open handles.
 function freshDb(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('foodapp_offline', 3);
+    const req = indexedDB.open('foodapp_offline', DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains('pending')) db.createObjectStore('pending', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('dead-letter')) db.createObjectStore('dead-letter', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('directory')) db.createObjectStore('directory', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('telemetry')) db.createObjectStore('telemetry', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts', { keyPath: 'user_id' });
     };
     req.onsuccess = () => {
       const db = req.result;

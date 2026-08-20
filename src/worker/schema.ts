@@ -70,6 +70,33 @@ export interface Env {
   MESSAGE_EVERYWHERE_API_KEY: string;
 }
 
+export type ClientEventKind =
+  | 'js_error' | 'unhandled_rejection' | 'react_boundary' | 'view_change'
+  | 'wizard_step' | 'draft_restored' | 'draft_discarded' | 'sw_update'
+  | 'visibility' | 'api_failure';
+export type ClientEventLevel = 'error' | 'warn' | 'info';
+
+export interface ClientEvent {
+  id: string;
+  received_at: string;
+  occurred_at: string | null;
+  user_id: string | null;
+  session_id: string;
+  device_id: string;
+  seq: number | null;
+  level: ClientEventLevel;
+  kind: ClientEventKind;
+  route: string | null;
+  wizard_step: number | null;
+  view_type: string | null;
+  message: string | null;
+  stack: string | null;
+  user_agent: string | null;
+  online: number | null;
+  app_version: string | null;
+  extra: string | null;
+}
+
 export type NewFamily = Omit<Family, 'id' | 'created_at' | 'updated_at'>;
 export type NewVisit = Omit<Visit, 'id' | 'created_at' | 'bag_received'> & { bag_received?: boolean };
 

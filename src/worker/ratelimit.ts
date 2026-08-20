@@ -10,6 +10,13 @@ const OTP_SEND_GLOBAL_PER_HOUR = 30;
 const OTP_SEND_GLOBAL_PER_DAY = 60;
 const OTP_VERIFY_MAX = 10; // per phone per hour
 
+// Client-supplied device_id, so the per-device cap only dampens an honest
+// client's bug (a crash loop flushing every 5s tops out around 720/hr) —
+// it is not an abuse boundary. The global cap is the real damping on a
+// rotating-device_id sender; both are approximate (eventual-consistency KV).
+const CLIENT_EVENTS_PER_DEVICE_PER_HOUR = 800;
+const CLIENT_EVENTS_GLOBAL_PER_HOUR = 5000;
+
 function hourSlot(): number {
   return Math.floor(Date.now() / 3_600_000);
 }
@@ -24,8 +31,8 @@ async function getCount(kv: KVNamespace, key: string): Promise<number> {
   return isNaN(n) ? 0 : n;
 }
 
-async function increment(kv: KVNamespace, key: string, ttl: number, current: number): Promise<void> {
-  await kv.put(key, String(current + 1), { expirationTtl: ttl });
+async function increment(kv: KVNamespace, key: string, ttl: number, current: number, by = 1): Promise<void> {
+  await kv.put(key, String(current + by), { expirationTtl: ttl });
 }
 
 export async function checkOtpSendLimit(
@@ -61,6 +68,39 @@ export async function checkOtpSendLimit(
     OTP_SEND_GLOBAL_PER_DAY - globalDay - 1
   );
   return { allowed: true, remaining };
+}
+
+export async function checkClientEventLimit(
+  kv: KVNamespace,
+  deviceId: string,
+  // Counts EVENTS, not requests — a single POST can carry up to 50 events
+  // (clientEvents.ts's MAX_EVENTS_PER_BATCH), so counting requests let the
+  // advertised per-hour caps be exceeded by up to 50x.
+  eventCount: number,
+  opts?: { skipGlobal?: boolean }
+): Promise<{ allowed: boolean }> {
+  // Fixed 'device:' segment before the interpolated deviceId: a
+  // client-supplied device_id of "global" must never be able to produce
+  // the same key as globalKey below (it can't — no deviceId string can
+  // retroactively remove the "device:" prefix already written ahead of
+  // it), or that device's traffic collapses into the shared global
+  // counter and can cheaply exhaust it for every other client.
+  const deviceKey = `rl:cev:device:${deviceId}:h${hourSlot()}`;
+  const globalKey = `rl:cev:global:h${hourSlot()}`;
+
+  const [deviceCount, globalCount] = await Promise.all([
+    getCount(kv, deviceKey),
+    getCount(kv, globalKey),
+  ]);
+
+  if (deviceCount + eventCount > CLIENT_EVENTS_PER_DEVICE_PER_HOUR) return { allowed: false };
+  if (!opts?.skipGlobal && globalCount + eventCount > CLIENT_EVENTS_GLOBAL_PER_HOUR) return { allowed: false };
+
+  await Promise.all([
+    increment(kv, deviceKey, 3600, deviceCount, eventCount),
+    increment(kv, globalKey, 3600, globalCount, eventCount),
+  ]);
+  return { allowed: true };
 }
 
 export async function checkVerifyLimit(

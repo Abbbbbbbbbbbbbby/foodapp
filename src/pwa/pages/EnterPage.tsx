@@ -1,11 +1,14 @@
-import { useState, useRef } from 'react';
-import type { FamilySearchResult, WizardFormData, ProxyData } from '../lib/types';
+import { useState, useRef, useEffect } from 'react';
+import type { FamilySearchResult, WizardFormData, ProxyData, EnterView } from '../lib/types';
 import { api, apiWithToken, ApiError } from '../lib/api';
 import { queueItem, generateUUID, searchDirectory, directoryPickup, upsertDirectoryFamilies, markDirectoryStale } from '../lib/offline';
 import type { DirectoryFamily } from '../lib/offline';
 import { normalizeName, normalizePhone } from '../../shared/fuzzy';
 import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
+import { saveDraftNow, saveDraftDebounced, loadDraft, deleteDraft } from '../lib/draft';
+import type { EntryDraft, PendingVisitRef } from '../lib/draft';
+import { trackEvent, setTelemetryContext } from '../lib/telemetry';
 import LookupForm from '../components/enter/LookupForm';
 import ResultsList from '../components/enter/ResultsList';
 import FamilySelectScreen from '../components/enter/FamilySelectScreen';
@@ -14,17 +17,6 @@ import HowManyFamilies from '../components/enter/HowManyFamilies';
 import ProxyQuestion from '../components/enter/ProxyQuestion';
 import Wizard from '../components/wizard/Wizard';
 import SummaryScreen, { type SummaryFamily } from '../components/enter/SummaryScreen';
-
-type EnterView =
-  | { type: 'lookup' }
-  | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null; offline?: boolean }
-  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
-  | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra: FamilySearchResult[]; selectedIds: string[] } }
-  | { type: 'log-visit'; families: FamilySearchResult[]; current: number; pickupPhone: string | null }
-  | { type: 'how-many'; searchName: string; searchPhone: string | null }
-  | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
-  | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
-  | { type: 'done'; families: SummaryFamily[]; error?: string };
 
 
 // Explicit, field-by-field lift of a cached directory row into the
@@ -59,7 +51,183 @@ export default function EnterPage() {
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
   // Accumulates visit IDs for the log-visit (existing family) flow
-  const pendingVisitIds = useRef<{ visitId: string | null; queueId: string | null; visitKey: string }[]>([]);
+  const pendingVisitIds = useRef<PendingVisitRef[]>([]);
+
+  // Draft persistence (issue #12): a resumable snapshot of this in-progress
+  // entry, so a crash/reload/tab-discard mid-wizard doesn't lose it.
+  // draftReady gates every write until the mount-time draft check resolves —
+  // otherwise the initial {type:'lookup'} render (which never writes, per
+  // the carve-out below) races a real draft-check finish and could clobber
+  // it before the resume prompt is even offered.
+  const draftReady = useRef(false);
+  const [resumePrompt, setResumePrompt] = useState<{ draft: EntryDraft } | null>(null);
+  // The wizard's OWN step/data live in Wizard's component state, invisible
+  // to EnterPage except through this callback-populated ref — needed both
+  // to snapshot a draft mid-wizard and to know when a resumed wizard should
+  // seed itself back to the right step.
+  const currentWizardStateRef = useRef<{ step: number; data: Partial<WizardFormData> } | null>(null);
+  const wizardPrevStepRef = useRef<number | null>(null);
+  // Restored wizard seed data, consumed exactly once by the Wizard render
+  // that follows a resume — cleared in the [view] effect right after that
+  // render commits, so a later family's wizard in the same multi-family
+  // loop doesn't inherit a stale step.
+  const restoredWizardRef = useRef<{ initialData: Partial<WizardFormData>; initialStep: number } | null>(null);
+  // In-flight submission idempotency keys — see mintOrReuseKey below.
+  const submissionKeysRef = useRef<{ familyIdemKey?: string; visitIdemKey?: string }>({});
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
+
+  function buildDraft(viewToSave: EnterView): EntryDraft | null {
+    if (!mountUserId) return null;
+    const keys = submissionKeysRef.current;
+    return {
+      user_id: mountUserId,
+      updatedAt: Date.now(),
+      view: viewToSave,
+      wizard: currentWizardStateRef.current,
+      pendingSubmission: Object.keys(keys).length > 0 ? keys : null,
+      pendingFamilies: pendingFamilies.current,
+      pendingVisitIds: pendingVisitIds.current,
+    };
+  }
+
+  async function persistDraftNow(viewToSave: EnterView): Promise<void> {
+    const draft = buildDraft(viewToSave);
+    if (draft) await saveDraftNow(draft);
+  }
+
+  // Reuses the SAME idempotency key across a crash-resume for a submission
+  // that may already have committed server-side — the server's existing
+  // idempotency handling then makes the retry a safe no-op instead of a
+  // duplicate family/visit. Cleared once the family+visit pair this key
+  // belongs to is fully resolved (success OR safely offline-queued — the
+  // offline queue has its own independent idempotency guarantee), so the
+  // NEXT family in a multi-family loop mints its own fresh key.
+  function mintOrReuseKey(kind: 'familyIdemKey' | 'visitIdemKey'): string {
+    const existing = submissionKeysRef.current[kind];
+    if (existing) return existing;
+    const fresh = generateUUID();
+    submissionKeysRef.current = { ...submissionKeysRef.current, [kind]: fresh };
+    return fresh;
+  }
+
+  function clearSubmissionKey(kind: 'familyIdemKey' | 'visitIdemKey'): void {
+    const next = { ...submissionKeysRef.current };
+    delete next[kind];
+    submissionKeysRef.current = next;
+  }
+
+  function draftDisplayName(v: EnterView): string {
+    switch (v.type) {
+      case 'results': return v.searchName;
+      case 'family-select': return v.pickupName;
+      case 'inline-register': return v.prefillName;
+      case 'log-visit': return v.families[v.current]?.name ?? '';
+      case 'how-many': return v.searchName;
+      case 'proxy-question': return v.prefillName;
+      case 'wizard': return v.initialData.name ?? '';
+      default: return '';
+    }
+  }
+
+  // Mount-time draft check.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!mountUserId) { draftReady.current = true; return; }
+      const draft = await loadDraft(mountUserId);
+      if (cancelled) return;
+      if (draft && draft.view.type !== 'lookup' && draft.view.type !== 'done') {
+        setResumePrompt({ draft });
+        // draftReady stays false — the resume/discard handlers set it once
+        // the volunteer has actually made a choice.
+      } else {
+        draftReady.current = true;
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // View-transition persistence + breadcrumbs. Carve-out: 'lookup' never
+  // writes (there's nothing to resume into), 'done' only deletes (a
+  // write-then-delete in one pass would have unspecified ordering).
+  useEffect(() => {
+    restoredWizardRef.current = null; // consumed by the render that just committed
+    if (view.type !== 'wizard' && view.type !== 'inline-register') {
+      wizardPrevStepRef.current = null;
+      currentWizardStateRef.current = null;
+    }
+    if (!draftReady.current || !mountUserId) return;
+    if (view.type === 'lookup') return;
+    if (view.type === 'done') {
+      void deleteDraft(mountUserId);
+      return;
+    }
+    const draft = buildDraft(view);
+    if (draft) void saveDraftNow(draft);
+    trackEvent('view_change', 'info', { viewType: view.type });
+    setTelemetryContext({ viewType: view.type, route: '/enter' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // pagehide: a synchronous best-effort save of whatever is current, in
+  // case the tab is being discarded/reloaded before the next state change
+  // would otherwise have persisted it.
+  useEffect(() => {
+    function onPageHide() {
+      if (!draftReady.current || !mountUserId) return;
+      const v = viewRef.current;
+      if (v.type === 'lookup' || v.type === 'done') return;
+      const draft = buildDraft(v);
+      if (draft) void saveDraftNow(draft);
+    }
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleWizardStateChange(step: number, data: Partial<WizardFormData>) {
+    currentWizardStateRef.current = { step, data };
+    if (!draftReady.current || !mountUserId) return;
+    const draft = buildDraft(viewRef.current);
+    if (!draft) return;
+    if (wizardPrevStepRef.current !== step) {
+      wizardPrevStepRef.current = step;
+      void saveDraftNow(draft);
+      trackEvent('wizard_step', 'info', { wizardStep: step + 1 });
+      setTelemetryContext({ wizardStep: step + 1 });
+    } else {
+      saveDraftDebounced(draft);
+    }
+  }
+
+  async function handleResumeDraft() {
+    if (!resumePrompt) return;
+    const { draft } = resumePrompt;
+    pendingFamilies.current = draft.pendingFamilies;
+    pendingVisitIds.current = draft.pendingVisitIds;
+    submissionKeysRef.current = draft.pendingSubmission ?? {};
+    if (draft.wizard) {
+      restoredWizardRef.current = {
+        initialData: (draft.wizard.data as Partial<WizardFormData>) ?? {},
+        initialStep: draft.wizard.step,
+      };
+      currentWizardStateRef.current = draft.wizard as { step: number; data: Partial<WizardFormData> };
+      wizardPrevStepRef.current = draft.wizard.step;
+    }
+    setResumePrompt(null);
+    draftReady.current = true;
+    setView(draft.view);
+    trackEvent('draft_restored', 'info', { viewType: draft.view.type });
+  }
+
+  async function handleDiscardDraft() {
+    if (mountUserId) await deleteDraft(mountUserId);
+    setResumePrompt(null);
+    draftReady.current = true;
+    trackEvent('draft_discarded', 'info');
+  }
 
 
   // A family registered online THIS session must be findable if the network
@@ -179,7 +347,11 @@ export default function EnterPage() {
     setError(null);
     const today = localDateString();
     const familyPayload = { ...data, first_visit_date: today, proxy: proxyData ?? undefined };
-    const familyIdemKey = generateUUID();
+    // Reused across a crash-resume (see handleWizardComplete) rather than
+    // minted fresh, and persisted before the POST — a resumed retry then
+    // safely no-ops through the server's idempotency handling.
+    const familyIdemKey = mintOrReuseKey('familyIdemKey');
+    await persistDraftNow(view);
     // One identity for the whole submission: the request's token and the
     // offline attribution must come from the same auth snapshot, or a
     // cross-tab account switch splits them (posted as A, queued as B).
@@ -195,6 +367,7 @@ export default function EnterPage() {
     try {
       const result = await pinned.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
       rememberInDirectory(result.id, data.name, data.phone, data.num_people, proxyData?.proxy_phone);
+      clearSubmissionKey('familyIdemKey');
       // Registered online: join this pickup pre-checked. The visit is logged
       // with the rest of the selection through the normal log-visit loop.
       const newFam = {
@@ -216,6 +389,7 @@ export default function EnterPage() {
       // visit, so it must NOT also join this pickup's log-visit loop.
       try {
         await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth.user.id);
+        clearSubmissionKey('familyIdemKey'); // offline queue now owns idempotency
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -241,7 +415,13 @@ export default function EnterPage() {
   async function handleLogVisit(familyId: string) {
     if (view.type !== 'log-visit') return;
     const { families, current } = view;
-    const visitIdemKey = generateUUID();
+    // Reused across a crash-resume rather than minted fresh (see
+    // handleWizardComplete) — a resumed retry of the SAME family-in-loop
+    // then safely no-ops through the server's idempotency handling instead
+    // of logging a duplicate visit. One slot is sufficient: this loop logs
+    // one family's visit at a time, sequentially, never concurrently.
+    const visitIdemKey = mintOrReuseKey('visitIdemKey');
+    await persistDraftNow(view);
     const family = families.find(f => f.id === familyId);
     // A pickup by someone other than the family's own number is a PROXY
     // pickup — record who actually picked up. NORMALIZE both sides: the
@@ -282,6 +462,10 @@ export default function EnterPage() {
         return;
       }
     }
+    // Resolved (succeeded, or now owned by the offline queue's own
+    // idempotency) — clear before advancing so the NEXT family in this
+    // loop mints its own fresh key.
+    clearSubmissionKey('visitIdemKey');
     pendingVisitIds.current.push({ visitId, queueId, visitKey: visitIdemKey });
     if (current + 1 < families.length) {
       setView({ type: 'log-visit', families, current: current + 1, pickupPhone: view.pickupPhone });
@@ -336,10 +520,18 @@ export default function EnterPage() {
       first_visit_date: today,
       proxy: proxyData ?? undefined,
     };
-    // Generate both keys before the first attempt so the server can de-dup
-    // even if the network drops after it committed but before the reply arrived.
-    const familyIdemKey = generateUUID();
-    const visitIdemKey = generateUUID();
+    // Mint (or reuse, if resumed from a draft) both keys before the first
+    // attempt so the server can de-dup even if the network drops after it
+    // committed but before the reply arrived — AND so a tab crash/reload
+    // right here doesn't produce a genuine duplicate on retry: persisting
+    // them now (synchronously, before any POST) means a resumed retry
+    // reuses the SAME keys through the server's existing idempotency
+    // handling instead of minting fresh ones. Both keys are cleared
+    // together right before advanceWizard() below, once this family's
+    // submission is fully resolved one way or another.
+    const familyIdemKey = mintOrReuseKey('familyIdemKey');
+    const visitIdemKey = mintOrReuseKey('visitIdemKey');
+    await persistDraftNow(view);
 
     // This submission spans TWO requests (family, then visit) plus offline
     // attribution — pin all of it to one auth snapshot.
@@ -376,6 +568,11 @@ export default function EnterPage() {
         return;
       }
       pendingFamilies.current.push({ id: '', name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId: null, queueId: familyQueueId, visitKey: `${familyIdemKey}-visit` });
+      // The offline queue now owns idempotency for this submission via its
+      // own persisted key — clear ours so the NEXT family in this loop
+      // mints fresh ones rather than reusing this family's.
+      clearSubmissionKey('familyIdemKey');
+      clearSubmissionKey('visitIdemKey');
       advanceWizard(familyIndex, total);
       return;
     }
@@ -407,6 +604,11 @@ export default function EnterPage() {
     }
 
     pendingFamilies.current.push({ id: familyId, name: data.name, num_people: data.num_people ?? null, bag_received: null, visitId, queueId: visitQueueId, visitKey: visitIdemKey });
+    // Fully resolved (visit succeeded, errored terminally, or is now owned
+    // by the offline queue's own idempotency) — clear before advancing so
+    // the next family in a multi-family loop mints fresh keys.
+    clearSubmissionKey('familyIdemKey');
+    clearSubmissionKey('visitIdemKey');
     advanceWizard(familyIndex, total, visitError);
   }
 
@@ -437,6 +639,33 @@ export default function EnterPage() {
           families={view.families}
           onNext={() => setView({ type: 'lookup' })}
         />
+      </div>
+    );
+  }
+
+  // Resume prompt is exclusive, not an overlay: rendering it alongside the
+  // (still fully interactive) lookup screen let a volunteer act on stale
+  // UI while undecided, and clicking Resume afterward would unconditionally
+  // clobber whatever they'd just done — review finding, PR #14. Render
+  // ONLY the prompt until Resume/Discard resolves it.
+  if (resumePrompt) {
+    const name = draftDisplayName(resumePrompt.draft.view) || 'this family / esta familia';
+    const isWizard = resumePrompt.draft.view.type === 'wizard' || resumePrompt.draft.view.type === 'inline-register';
+    const step = (resumePrompt.draft.wizard?.step ?? 0) + 1;
+    return (
+      <div className="enter-page">
+        <p className="banner" role="alertdialog" aria-label="Resume entry">
+          {isWizard
+            ? <>Resume the entry for {name}? (step {step} of 11) / ¿Continuar el registro de {name}? (paso {step} de 11)</>
+            : <>Resume the unfinished check-in for {name}? / ¿Continuar el registro sin terminar de {name}?</>}
+          <br />
+          <button className="btn-primary" onClick={handleResumeDraft} style={{ marginTop: 8, marginRight: 8 }}>
+            Resume / Continuar
+          </button>
+          <button className="btn-ghost" onClick={handleDiscardDraft} style={{ marginTop: 8 }}>
+            Discard / Descartar
+          </button>
+        </p>
       </div>
     );
   }
@@ -510,13 +739,19 @@ export default function EnterPage() {
         <Wizard
           familyIndex={0}
           total={1}
-          initialData={{ name: view.prefillName }}
+          initialData={restoredWizardRef.current?.initialData ?? { name: view.prefillName }}
+          initialStep={restoredWizardRef.current?.initialStep}
+          onStateChange={handleWizardStateChange}
           proxyData={view.returnTo.pickupPhone
             ? { proxy_name: view.returnTo.pickupName.trim() || null, proxy_phone: view.returnTo.pickupPhone }
             : null}
           onComplete={handleInlineRegisterComplete}
           onBack={() => {
             if (view.type !== 'inline-register') return;
+            // Abandoning this attempt — a key minted by a prior failed
+            // submission for THIS slot must not leak into whatever gets
+            // entered next (review finding, PR #14 cycle 2).
+            submissionKeysRef.current = {};
             const { returnTo } = view;
             setView({
               type: 'family-select', own: returnTo.own, proxy: returnTo.proxy,
@@ -549,6 +784,7 @@ export default function EnterPage() {
           onAnswer={handleProxyAnswer}
           onBack={() => {
             if (view.type === 'proxy-question') {
+              submissionKeysRef.current = {};
               setView({ type: 'how-many', searchName: view.prefillName, searchPhone: view.prefillPhone });
             }
           }}
@@ -558,11 +794,21 @@ export default function EnterPage() {
         <Wizard
           familyIndex={view.familyIndex}
           total={view.total}
-          initialData={view.initialData}
+          initialData={restoredWizardRef.current?.initialData ?? view.initialData}
+          initialStep={restoredWizardRef.current?.initialStep}
+          onStateChange={handleWizardStateChange}
           proxyData={view.proxyData}
           onComplete={handleWizardComplete}
           onBack={() => {
             if (view.type === 'wizard') {
+              // Abandoning this attempt — a key minted by a prior failed
+              // submission for THIS family slot must not leak into
+              // whatever gets entered next (review finding, PR #14
+              // cycle 2): the volunteer could go Back, change the name
+              // or answers, and re-submit — reusing the old key would
+              // make the server replay the ABANDONED data via
+              // idempotency, silently discarding the new entry.
+              submissionKeysRef.current = {};
               setView({
                 type: 'proxy-question',
                 familyIndex: view.familyIndex,

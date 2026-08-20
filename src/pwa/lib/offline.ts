@@ -2,10 +2,12 @@ import { rankName, compareRank, normalizeName, normalizePhone } from '../../shar
 import type { FuzzyRank } from '../../shared/fuzzy';
 
 const DB_NAME = 'foodapp_offline';
-const DB_VERSION = 3;
+export const DB_VERSION = 4;
 const STORE = 'pending';
 const DL_STORE = 'dead-letter';
 const DIR_STORE = 'directory';
+export const TELEMETRY_STORE = 'telemetry';
+export const DRAFT_STORE = 'drafts';
 
 // crypto.randomUUID() not available in Safari 9; use Math.random-based v4 UUID
 export function generateUUID(): string {
@@ -45,6 +47,10 @@ function openDb(): Promise<IDBDatabase> {
       if (oldVersion < 1) db.createObjectStore(STORE, { keyPath: 'id' });
       if (oldVersion < 2) db.createObjectStore(DL_STORE, { keyPath: 'id' });
       if (oldVersion < 3) db.createObjectStore(DIR_STORE, { keyPath: 'id' });
+      if (oldVersion < 4) {
+        db.createObjectStore(TELEMETRY_STORE, { keyPath: 'id' });
+        db.createObjectStore(DRAFT_STORE, { keyPath: 'user_id' });
+      }
     };
     req.onsuccess = () => {
       const db = req.result;
@@ -75,6 +81,59 @@ function dispatchCountChange() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('offlinecountchange'));
   }
+}
+
+// Generic single-store helpers shared by draft.ts and telemetry.ts — kept
+// separate from the pending-queue functions above/below so flushQueue,
+// getPendingCount, and dead-letter handling stay untouched by this file's
+// other two stores.
+export async function putInStore<T>(storeName: string, value: T): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).put(value);
+    tx.oncomplete = () => resolve();
+    rejectOnFailure(tx, reject);
+  });
+}
+
+export async function getFromStore<T>(storeName: string, key: IDBValidKey): Promise<T | undefined> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const req = tx.objectStore(storeName).get(key);
+    req.onsuccess = () => resolve(req.result as T | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function readAllStore<T>(storeName: string): Promise<T[]> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const items: T[] = [];
+    const req = tx.objectStore(storeName).openCursor();
+    req.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (cursor) {
+        items.push(cursor.value as T);
+        cursor.continue();
+      } else {
+        resolve(items);
+      }
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteFromStore(storeName: string, key: IDBValidKey): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).delete(key);
+    tx.oncomplete = () => resolve();
+    rejectOnFailure(tx, reject);
+  });
 }
 
 // Accept an explicit idempotency key (generated before the first attempt) so

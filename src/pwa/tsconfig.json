@@ -19,5 +19,8 @@
     "**/*.ts",
     "**/*.tsx",
     "../shared/**/*.ts"
+  ],
+  "exclude": [
+    "vite.config.ts"
   ]
 }

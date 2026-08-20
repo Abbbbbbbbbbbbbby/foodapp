@@ -2,6 +2,18 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
 import * as babel from '@babel/core';
+import { execSync } from 'node:child_process';
+
+// Best-effort short git SHA for client_events.app_version. 'unknown' if git
+// history isn't available in the build environment (e.g. a shallow clone) —
+// never fails the build over a diagnostic-only value.
+function appVersion(): string {
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 // @vitejs/plugin-legacy injects a Safari 10.0/10.1 double-module fix that uses
 // WebKit's 'beforeload' event. On iOS 9.3.5, 'onbeforeload' exists but
@@ -25,6 +37,12 @@ function stripSafari10Guard(): Plugin {
 // iOS 9.3.5 on iPad 2 rejects them with "SyntaxError: unexpected token". This
 // plugin runs a second Babel pass on legacy chunks only, forcing these two
 // transforms down to ES5.
+//
+// plugin-transform-classes was added when the first class component
+// (ErrorBoundary, issue #12 — error boundaries require a class) entered the
+// bundle: the primary pass's downleveled class still had a spread-argument
+// constructor (`super(..._args)`), which plugin-transform-spread alone
+// cannot compile without also transforming the class itself.
 function forceEs5LegacyChunks(): Plugin {
   return {
     name: 'force-es5-legacy-chunks',
@@ -40,6 +58,7 @@ function forceEs5LegacyChunks(): Plugin {
           '@babel/plugin-transform-computed-properties',
           '@babel/plugin-transform-spread',
           '@babel/plugin-transform-destructuring',
+          '@babel/plugin-transform-classes',
         ],
         sourceMaps: false,
         compact: true,
@@ -61,6 +80,9 @@ export default defineConfig({
     forceEs5LegacyChunks(),
     stripSafari10Guard(),
   ],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion()),
+  },
   root: 'src/pwa',
   publicDir: 'public',
   build: {
