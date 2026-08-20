@@ -70,3 +70,27 @@ describe('origin gate on pre-auth POSTs', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('same-origin passthrough (preview deployments)', () => {
+  it('an Origin matching the request URL origin passes even when not allowlisted', async () => {
+    // Simulates a Workers Builds preview hostname POSTing to itself.
+    const res = await workerExports.default.fetch('https://preview-abc.example.dev/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://preview-abc.example.dev' },
+      body: JSON.stringify({ phone: '4805550302' }),
+    });
+    expect(res.status).not.toBe(403);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://preview-abc.example.dev');
+  });
+
+  it('a cross-origin unlisted Origin on the same host pattern is still rejected', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await workerExports.default.fetch('https://preview-abc.example.dev/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example.dev' },
+      body: JSON.stringify({ phone: '4805550303' }),
+    });
+    expect(res.status).toBe(403);
+    warn.mockRestore();
+  });
+});

@@ -17,9 +17,21 @@ export function buildApp(clientFactory: (env: AdminEnv) => AuthClient = realClie
   // manual deploy legitimately precedes the secret.
   app.use('*', async (c, next) => {
     if (!c.env.FOODBOX_ADMIN_SESSION_SECRET && c.req.path !== '/healthz') {
+      // Log every request during this outage state — a dropped/renamed secret
+      // must be findable in Workers Logs, not only in response bodies.
+      console.error('FOODBOX_ADMIN_SESSION_SECRET not configured — serving 503', c.req.path);
       return c.text('Service unavailable: session secret not configured', 503);
     }
     return next();
+  });
+
+  // The console renders event data on shared desktops: never cache authed
+  // responses (back button after logout), never allow framing.
+  app.use('*', async (c, next) => {
+    await next();
+    c.res.headers.set('Cache-Control', 'no-store');
+    c.res.headers.set('X-Frame-Options', 'DENY');
+    c.res.headers.set('Content-Security-Policy', "frame-ancestors 'none'");
   });
 
   app.get('/healthz', (c) => c.text('ok'));
@@ -57,11 +69,12 @@ export function buildApp(clientFactory: (env: AdminEnv) => AuthClient = realClie
   // Registered before /events/:id so ".csv" never matches as an id.
   app.get('/events.csv', async (c) => {
     const filters = parseFilters(c);
-    const { rows, truncated } = await exportEvents(c.env.DB, filters);
+    const { rows, truncated: truncatedByCap } = await exportEvents(c.env.DB, filters);
+    const { csv, rowsWritten, truncated } = toCsv(rows, truncatedByCap);
     // A truncated export must be visible in logs AND in the artifact itself.
-    console.log('csv export', { rowCount: rows.length, truncated, filters });
+    console.log('csv export', { rowCount: rowsWritten, truncated, filters });
     const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
-    return c.body(toCsv(rows, truncated), 200, {
+    return c.body(csv, 200, {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="client-events-${stamp}.csv"`,
     });

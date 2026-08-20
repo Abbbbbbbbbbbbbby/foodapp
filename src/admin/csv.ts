@@ -1,24 +1,46 @@
 import { EVENT_COLUMNS, type ClientEventRow } from './db';
 
-// RFC 4180 quoting plus an Excel formula-injection guard: a stored message
-// like "=SUM(...)" must open as text, not execute, so cells starting with
-// = + - @ get a leading apostrophe.
+// RFC 4180 quoting plus an Excel formula-injection guard. Every field here is
+// attacker-controlled (ingest is unauthenticated), so the guard follows the
+// OWASP CSV-injection list: a cell is dangerous if, after any leading
+// tab/CR/LF whitespace Excel skips, it starts with = + - or @. The apostrophe
+// goes on the ORIGINAL string so the leading control characters are
+// neutralized inside the quoted value too.
 function csvCell(v: unknown): string {
   if (v === null || v === undefined) return '';
   let s = String(v);
-  if (/^[=+\-@]/.test(s)) s = `'${s}`;
+  if (/^[\t\r\n ]*[=+\-@]/.test(s)) s = `'${s}`;
   if (/[",\r\n]/.test(s)) s = `"${s.replace(/"/g, '""')}"`;
   return s;
 }
 
-export function toCsv(rows: ClientEventRow[], truncated: boolean): string {
+// Peak-memory budget for the buffered artifact: max-size hostile rows through
+// D1 results + escaped copies + the final join can otherwise brush the 128 MB
+// isolate limit at the 2000-row cap. 8M chars ≈ ≤16 MB UTF-8 keeps every
+// intermediate comfortably small.
+const MAX_CSV_CHARS = 8_000_000;
+
+export function toCsv(
+  rows: ClientEventRow[], truncatedByCap: boolean
+): { csv: string; rowsWritten: number; truncated: boolean } {
   const lines = [EVENT_COLUMNS.join(',')];
+  let chars = lines[0].length;
+  let rowsWritten = 0;
+  let truncatedByBytes = false;
   for (const row of rows) {
-    lines.push(EVENT_COLUMNS.map(col => csvCell(row[col])).join(','));
+    const line = EVENT_COLUMNS.map(col => csvCell(row[col])).join(',');
+    if (chars + line.length > MAX_CSV_CHARS) {
+      truncatedByBytes = true;
+      break;
+    }
+    lines.push(line);
+    chars += line.length + 2;
+    rowsWritten++;
   }
+  const truncated = truncatedByCap || truncatedByBytes;
   if (truncated) {
     // The artifact itself must carry its incompleteness, not just the log.
-    lines.push(`# TRUNCATED at ${rows.length} rows — narrow the filters`);
+    lines.push(`# TRUNCATED at ${rowsWritten} rows — narrow the filters`);
   }
-  return lines.join('\r\n') + '\r\n';
+  return { csv: lines.join('\r\n') + '\r\n', rowsWritten, truncated };
 }

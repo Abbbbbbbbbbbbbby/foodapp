@@ -32,6 +32,14 @@ function isOriginGatedPost(method: string, pathname: string): boolean {
   return method === 'POST' && (pathname.startsWith('/api/auth/') || pathname === '/api/client-events');
 }
 
+// Same-origin requests are always allowed regardless of the allowlist:
+// browsers send Origin on ALL non-GET requests including same-origin ones,
+// so a Workers Builds preview hostname would otherwise 403 its own login.
+// Any host this worker itself serves is by definition not a hostile page.
+function isAllowedOrigin(origin: string, url: URL): boolean {
+  return origin === url.origin || ALLOWED_ORIGINS.has(origin);
+}
+
 export default {
   async fetch(request: Request, env: Env, execCtx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -42,7 +50,7 @@ export default {
 
     if (isOriginGatedPost(request.method, url.pathname)) {
       const origin = request.headers.get('Origin');
-      if (origin !== null && !ALLOWED_ORIGINS.has(origin)) {
+      if (origin !== null && !isAllowedOrigin(origin, url)) {
         // Log before rejecting: rejected input must be visible in Workers Logs.
         console.warn('cross-origin rejected', origin, url.pathname);
         return cors(Response.json({ error: 'Origin not allowed' }, { status: 403 }), request);
@@ -106,10 +114,10 @@ export default {
 
 export function cors(response: Response, request: Request): Response {
   const origin = request.headers.get('Origin');
-  // Same-origin and non-browser callers send no Origin and need no CORS headers.
-  // Reflect only allowlisted origins; an unlisted origin gets no CORS headers at
-  // all, so its page can't read the response.
-  if (origin === null || !ALLOWED_ORIGINS.has(origin)) return response;
+  // Non-browser callers send no Origin and need no CORS headers. Reflect
+  // same-origin and allowlisted origins; anything else gets no CORS headers,
+  // so its page can't read the response.
+  if (origin === null || !isAllowedOrigin(origin, new URL(request.url))) return response;
   const h = new Headers(response.headers);
   h.set('Access-Control-Allow-Origin', origin);
   h.set('Vary', 'Origin');

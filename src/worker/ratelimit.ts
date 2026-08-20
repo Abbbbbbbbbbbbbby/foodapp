@@ -66,13 +66,20 @@ export async function checkOtpSendLimit(
     ipKey !== null ? getCount(kv, ipKey) : Promise.resolve(0),
   ]);
 
-  if (phoneCount >= OTP_SEND_PER_PHONE_PER_HOUR) return { allowed: false, remaining: 0 };
-  if (ipKey !== null && ipCount >= OTP_SEND_PER_IP_PER_HOUR) {
-    console.warn('rate-limited', { scope: 'ip', kind: 'otp-send' });
+  // Every denial logs its scope (and the ip when relevant): "is the venue NAT
+  // hitting a cap or is this one abuser?" must be answerable from Workers Logs.
+  if (phoneCount >= OTP_SEND_PER_PHONE_PER_HOUR) {
+    console.warn('rate-limited', { scope: 'phone', kind: 'otp-send' });
     return { allowed: false, remaining: 0 };
   }
-  if (!opts?.skipGlobal && globalHour >= OTP_SEND_GLOBAL_PER_HOUR) return { allowed: false, remaining: 0 };
-  if (!opts?.skipGlobal && globalDay >= OTP_SEND_GLOBAL_PER_DAY) return { allowed: false, remaining: 0 };
+  if (ipKey !== null && ipCount >= OTP_SEND_PER_IP_PER_HOUR) {
+    console.warn('rate-limited', { scope: 'ip', kind: 'otp-send', ip: opts?.ip });
+    return { allowed: false, remaining: 0 };
+  }
+  if (!opts?.skipGlobal && (globalHour >= OTP_SEND_GLOBAL_PER_HOUR || globalDay >= OTP_SEND_GLOBAL_PER_DAY)) {
+    console.warn('rate-limited', { scope: 'global', kind: 'otp-send' });
+    return { allowed: false, remaining: 0 };
+  }
 
   await Promise.all([
     increment(kv, phoneKey, 3600, phoneCount),
@@ -114,12 +121,18 @@ export async function checkClientEventLimit(
     ipKey !== null ? getCount(kv, ipKey) : Promise.resolve(0),
   ]);
 
-  if (deviceCount + eventCount > CLIENT_EVENTS_PER_DEVICE_PER_HOUR) return { allowed: false };
-  if (ipKey !== null && ipCount + eventCount > CLIENT_EVENTS_PER_IP_PER_HOUR) {
-    console.warn('rate-limited', { scope: 'ip', kind: 'client-events' });
+  if (deviceCount + eventCount > CLIENT_EVENTS_PER_DEVICE_PER_HOUR) {
+    console.warn('rate-limited', { scope: 'device', kind: 'client-events' });
     return { allowed: false };
   }
-  if (!opts?.skipGlobal && globalCount + eventCount > CLIENT_EVENTS_GLOBAL_PER_HOUR) return { allowed: false };
+  if (ipKey !== null && ipCount + eventCount > CLIENT_EVENTS_PER_IP_PER_HOUR) {
+    console.warn('rate-limited', { scope: 'ip', kind: 'client-events', ip: opts?.ip });
+    return { allowed: false };
+  }
+  if (!opts?.skipGlobal && globalCount + eventCount > CLIENT_EVENTS_GLOBAL_PER_HOUR) {
+    console.warn('rate-limited', { scope: 'global', kind: 'client-events' });
+    return { allowed: false };
+  }
 
   await Promise.all([
     increment(kv, deviceKey, 3600, deviceCount, eventCount),
@@ -140,9 +153,12 @@ export async function checkVerifyLimit(
     getCount(kv, key),
     ipKey !== null ? getCount(kv, ipKey) : Promise.resolve(0),
   ]);
-  if (count >= OTP_VERIFY_MAX) return { allowed: false };
+  if (count >= OTP_VERIFY_MAX) {
+    console.warn('rate-limited', { scope: 'phone', kind: 'otp-verify' });
+    return { allowed: false };
+  }
   if (ipKey !== null && ipCount >= OTP_VERIFY_PER_IP_PER_HOUR) {
-    console.warn('rate-limited', { scope: 'ip', kind: 'otp-verify' });
+    console.warn('rate-limited', { scope: 'ip', kind: 'otp-verify', ip: opts?.ip });
     return { allowed: false };
   }
   await increment(kv, key, 3600, count);

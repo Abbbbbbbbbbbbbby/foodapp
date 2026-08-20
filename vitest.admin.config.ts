@@ -20,11 +20,11 @@ export default defineConfig({
       },
     }),
   ],
-  esbuild: {
-    // Explicit JSX config for the pool's esbuild pass — do not rely on it
-    // discovering src/admin/tsconfig.json (planned fallback made primary).
-    jsx: 'automatic',
-    jsxImportSource: 'hono/jsx',
+  // Vitest 4 transforms with oxc, not esbuild (an esbuild block here is
+  // silently ignored — the runner warns and falls back to tsconfig
+  // discovery). Configure the transform actually in use.
+  oxc: {
+    jsx: { runtime: 'automatic', importSource: 'hono/jsx' },
   },
   test: {
     setupFiles: ['./tests/admin/setup.ts'],

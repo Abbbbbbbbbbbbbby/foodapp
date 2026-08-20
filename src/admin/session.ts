@@ -52,3 +52,33 @@ export async function verifySession(token: string, secret: string, now = Date.no
     return null;
   }
 }
+
+// Generic short-lived signed value (same HMAC scheme as the session cookie).
+// Used for the OAuth state/verifier challenge cookie — integrity-protected so
+// a fixated cookie can't smuggle an attacker-chosen state/verifier pair.
+export async function signCompact<T>(obj: T, secret: string, ttlSeconds: number, now = Date.now()): Promise<string> {
+  const payload = b64url(enc(JSON.stringify({ v: obj, exp: Math.floor(now / 1000) + ttlSeconds })));
+  const sig = await crypto.subtle.sign('HMAC', await hmacKey(secret, 'sign'), enc(payload));
+  return `${payload}.${b64url(sig)}`;
+}
+
+export async function verifyCompact<T>(token: string, secret: string, now = Date.now()): Promise<T | null> {
+  const i = token.lastIndexOf('.');
+  if (i < 0) return null;
+  const payload = token.slice(0, i);
+  let sig: Uint8Array;
+  try {
+    sig = fromB64url(token.slice(i + 1));
+  } catch {
+    return null;
+  }
+  const ok = await crypto.subtle.verify('HMAC', await hmacKey(secret, 'verify'), sig, enc(payload));
+  if (!ok) return null;
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(fromB64url(payload))) as { v?: T; exp?: unknown };
+    if (typeof parsed.exp !== 'number' || parsed.exp <= Math.floor(now / 1000)) return null;
+    return parsed.v ?? null;
+  } catch {
+    return null;
+  }
+}

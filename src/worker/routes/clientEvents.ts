@@ -56,6 +56,32 @@ export async function handleClientEventRoutes(
   return null;
 }
 
+// Streams the body, counting real wire bytes, and aborts past maxBytes
+// (returns null) instead of buffering first and checking after.
+async function readBodyCapped(request: Request, maxBytes: number): Promise<string | null> {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
 function truncate(v: unknown, max: number): string | null {
   if (typeof v !== 'string') return null;
   return v.length > max ? v.slice(0, max) : v;
@@ -72,16 +98,13 @@ async function handleIngest(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'Body too large' }, { status: 400 });
   }
 
-  // Read the raw body — every rejection below logs it, so a malformed or
-  // oversized batch is never silently dropped, only rejected loudly.
-  const raw = await request.text();
-  // .length is UTF-16 code units, not bytes — this app's own bilingual
-  // (EN/ES) strings routinely contain accented characters, so measure the
-  // real wire size with TextEncoder rather than undercounting.
-  const rawBytes = new TextEncoder().encode(raw).length;
-
-  if (rawBytes > MAX_BODY_BYTES) {
-    console.error('client-events rejected', 400, raw.slice(0, 64_000));
+  // Read the raw body with a HARD byte cap enforced DURING the read — a
+  // request without Content-Length would otherwise buffer unbounded into the
+  // isolate's 128 MB before the post-read check ever ran. Every rejection
+  // below logs, so a malformed or oversized batch is never silently dropped.
+  const raw = await readBodyCapped(request, MAX_BODY_BYTES);
+  if (raw === null) {
+    console.error('client-events rejected', 400, `body exceeded ${MAX_BODY_BYTES} bytes mid-read`);
     return Response.json({ error: 'Body too large' }, { status: 400 });
   }
 

@@ -58,7 +58,7 @@ describe('per-IP caps (opts.ip) — issue #13 abuse hardening', () => {
     }
     const denied = await checkOtpSendLimit(store, '4805558199', { skipGlobal: true, ip: '1.2.3.4' });
     expect(denied.allowed).toBe(false);
-    expect(warn).toHaveBeenCalledWith('rate-limited', { scope: 'ip', kind: 'otp-send' });
+    expect(warn).toHaveBeenCalledWith('rate-limited', { scope: 'ip', kind: 'otp-send', ip: '1.2.3.4' });
     warn.mockRestore();
   });
 
@@ -87,6 +87,19 @@ describe('per-IP caps (opts.ip) — issue #13 abuse hardening', () => {
     }
     const denied = await checkVerifyLimit(store, '4805558499', { ip: '3.3.3.3' });
     expect(denied.allowed).toBe(false);
+  });
+
+  it('a denied call does not charge the bucket (no self-extending lockout)', async () => {
+    const store = kv();
+    for (let i = 0; i < 15; i++) {
+      await checkOtpSendLimit(store, `48055585${String(i).padStart(2, '0')}`, { skipGlobal: true, ip: '5.5.5.5' });
+    }
+    // Two denied attempts must leave the counter at the cap, not extend it —
+    // otherwise a venue NAT lockout self-extends as volunteers retry.
+    await checkOtpSendLimit(store, '4805558598', { skipGlobal: true, ip: '5.5.5.5' });
+    await checkOtpSendLimit(store, '4805558599', { skipGlobal: true, ip: '5.5.5.5' });
+    const hourSlot = Math.floor(Date.now() / 3_600_000);
+    expect(await store.get(`rl:ip:otp:5.5.5.5:h${hourSlot}`)).toBe('15');
   });
 
   it('client-events: per-IP cap of 4000 events/hr, crossing batch denied', async () => {

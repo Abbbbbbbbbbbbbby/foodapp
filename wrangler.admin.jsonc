@@ -12,6 +12,11 @@
   // Certificate at deploy.
   "routes": [{ "pattern": "admin.foodboxdata.creightoncommunityfoundation.org", "custom_domain": true }],
 
+  // The console lives on its custom domain only — no second guessable
+  // workers.dev hostname (the OAuth callback derives from the request host,
+  // so an extra hostname would also mint cookies for it).
+  "workers_dev": false,
+
   "observability": { "enabled": true },
 
   // Same production foodapp DB as the PWA worker. The console issues SELECTs

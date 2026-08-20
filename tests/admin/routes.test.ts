@@ -20,12 +20,27 @@ async function authedGet(path: string, email = `staff@${CCF}`): Promise<Response
   });
 }
 
+const FAKE_STATE = 'state-abc-123';
 function fakeClient(props: UserProps): AuthClient {
   return {
-    authorize: async () => ({ url: 'https://issuer.example/authorize' }),
+    authorize: async () => ({
+      url: 'https://issuer.example/authorize',
+      challenge: { state: FAKE_STATE, verifier: 'fake-verifier' },
+    }),
     exchange: async () => ({ tokens: { access: 'fake-access' } }),
     verify: async () => ({ subject: { properties: props } }),
   };
+}
+
+// Runs the full flow: /auth/login mints the signed challenge cookie, then the
+// callback is invoked with that cookie and the issuer-echoed state. Returns
+// the callback response.
+async function callbackWithState(app: ReturnType<typeof buildApp>, state = FAKE_STATE): Promise<Response> {
+  const login = await app.request('http://127.0.0.1/auth/login', {}, e());
+  const oauthCookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+  return app.request(`http://127.0.0.1/auth/callback?code=x&state=${encodeURIComponent(state)}`, {
+    headers: { Cookie: oauthCookie },
+  }, e());
 }
 
 async function clearEvents() {
@@ -80,19 +95,52 @@ describe('auth gating', () => {
 describe('OAuth callback with injected fake client', () => {
   it('a good domain subject gets a session cookie and lands on /', async () => {
     const app = buildApp(() => fakeClient({ email: `abby@${CCF}`, authzBasis: 'domain', googleDomain: CCF }));
-    const res = await app.request('http://127.0.0.1/auth/callback?code=x', {}, e());
+    const res = await callbackWithState(app);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe('/');
-    expect(res.headers.get('Set-Cookie')).toContain(SESSION_COOKIE);
+    const setCookie = res.headers.get('Set-Cookie') ?? '';
+    expect(setCookie).toContain(SESSION_COOKIE);
+    // Pin the session-theft hardening attributes, not just the name.
+    expect(setCookie).toMatch(/HttpOnly/i);
+    expect(setCookie).toMatch(/Secure/i);
+    expect(setCookie).toMatch(/SameSite=Lax/i);
+    expect(setCookie).toMatch(/Path=\//i);
+  });
+
+  it('a callback without the challenge cookie is denied and logged (login-CSRF binding)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = buildApp(() => fakeClient({ email: `abby@${CCF}`, authzBasis: 'domain', googleDomain: CCF }));
+    const res = await app.request(`http://127.0.0.1/auth/callback?code=x&state=${FAKE_STATE}`, {}, e());
+    expect(res.headers.get('Location')).toBe('/denied');
+    expect(warn).toHaveBeenCalledWith('admin login denied', expect.objectContaining({ hadCookie: false }));
+    warn.mockRestore();
+  });
+
+  it('a callback with a mismatched state is denied', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = buildApp(() => fakeClient({ email: `abby@${CCF}`, authzBasis: 'domain', googleDomain: CCF }));
+    const res = await callbackWithState(app, 'some-other-state');
+    expect(res.headers.get('Location')).toBe('/denied');
+    warn.mockRestore();
+  });
+
+  it('a subject without an email is denied and logged (no empty-session loop)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = buildApp(() => fakeClient({ authzBasis: 'allowlist' }));
+    const res = await callbackWithState(app);
+    expect(res.headers.get('Location')).toBe('/denied');
+    expect(res.headers.get('Set-Cookie') ?? '').not.toContain(`${SESSION_COOKIE}=e`);
+    expect(warn).toHaveBeenCalledWith('admin login denied', expect.objectContaining({ reason: 'no email in subject' }));
+    warn.mockRestore();
   });
 
   it('a group_membership subject is denied and the denial is logged', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const app = buildApp(() => fakeClient({ email: `x@${CCF}`, authzBasis: 'group_membership', googleDomain: CCF }));
-    const res = await app.request('http://127.0.0.1/auth/callback?code=x', {}, e());
+    const res = await callbackWithState(app);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe('/denied');
-    expect(res.headers.get('Set-Cookie')).toBeNull();
+    expect(res.headers.get('Set-Cookie') ?? '').not.toContain(`${SESSION_COOKIE}=e`);
     expect(warn).toHaveBeenCalledWith('admin login denied', expect.objectContaining({ authzBasis: 'group_membership' }));
     warn.mockRestore();
   });
@@ -100,7 +148,7 @@ describe('OAuth callback with injected fake client', () => {
   it('a wrong-domain subject is denied and logged', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const app = buildApp(() => fakeClient({ email: 'x@evil.example', authzBasis: 'domain', googleDomain: 'evil.example' }));
-    const res = await app.request('http://127.0.0.1/auth/callback?code=x', {}, e());
+    const res = await callbackWithState(app);
     expect(res.headers.get('Location')).toBe('/denied');
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
@@ -220,6 +268,39 @@ describe('event detail + breadcrumbs', () => {
   });
 });
 
+describe('response hardening + edge cases', () => {
+  beforeEach(clearEvents);
+
+  it('authed responses carry no-store and frame-denial headers', async () => {
+    const res = await authedGet('/');
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    expect(res.headers.get('X-Frame-Options')).toBe('DENY');
+    expect(res.headers.get('Content-Security-Policy')).toContain("frame-ancestors 'none'");
+  });
+
+  it('nonsense page params clamp to 1 instead of erroring', async () => {
+    await seed([{ id: 'clamp-1' }]);
+    for (const p of ['-1', '0', 'abc']) {
+      const res = await authedGet(`/events?page=${p}`);
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it('breadcrumbs work for an anchor with null occurred_at (real error events)', async () => {
+    const t0 = Date.parse('2026-08-20T10:00:00Z');
+    await seed([0, 1, 2].map(i => ({
+      id: `na-${i}`, session_id: 's-na', seq: i,
+      occurred_at: new Date(t0 + i * 1000).toISOString(),
+      received_at: new Date(t0 + i * 1000).toISOString(),
+    })));
+    await seed([{ id: 'na-anchor', session_id: 's-na', seq: 3, level: 'error',
+      occurred_at: null, received_at: new Date(t0 + 3000).toISOString() }]);
+    const html = await (await authedGet('/events/na-anchor')).text();
+    expect(html).toContain('na-2');
+    expect(html).toContain('na-0');
+  });
+});
+
 describe('CSV export', () => {
   beforeEach(clearEvents);
 
@@ -236,6 +317,23 @@ describe('CSV export', () => {
     expect(body).toContain('"has,comma and\nnewline"');
     expect(body).toContain(`'=SUM(A1:A9)`);
     expect(body).not.toContain('# TRUNCATED');
+  });
+
+  it('guards whitespace-prefixed formulas (OWASP tab/CR/LF vectors) and handles an empty result set', async () => {
+    await seed([
+      { id: 'csv-tab', message: '\t=cmd|/C calc!A1' },
+      { id: 'csv-cr', message: '\r@SUM(1,2)' },
+    ]);
+    const res = await authedGet('/events.csv');
+    const body = await res.text();
+    // The apostrophe lands ahead of the leading control character. A bare tab
+    // needs no RFC-4180 quoting; a CR does, so that cell is also quoted.
+    expect(body).toContain(`'\t=cmd|/C calc!A1`);
+    expect(body).toContain(`"'\r@SUM(1,2)"`);
+
+    await clearEvents();
+    const empty = await (await authedGet('/events.csv')).text();
+    expect(empty.trim()).toBe('id,received_at,occurred_at,user_id,session_id,device_id,seq,level,kind,route,wizard_step,view_type,message,stack,user_agent,online,app_version,extra');
   });
 
   it('filters apply and the truncation marker appears at the cap', async () => {
