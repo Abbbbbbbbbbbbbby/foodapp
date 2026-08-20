@@ -1,4 +1,5 @@
 import { getToken } from '../store/auth';
+import { trackEvent } from './telemetry';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -12,13 +13,21 @@ async function apiFetch<T>(path: string, options?: RequestInit, tokenOverride?: 
   const token = tokenOverride !== undefined ? tokenOverride : getToken();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(path, {
-    ...options,
-    headers: { ...headers, ...(options?.headers as Record<string, string> ?? {}) },
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...options,
+      headers: { ...headers, ...(options?.headers as Record<string, string> ?? {}) },
+    });
+  } catch (err) {
+    trackEvent('api_failure', 'warn', { route: path, message: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(res.status, body.error ?? res.statusText);
+    const message = body.error ?? res.statusText;
+    trackEvent('api_failure', 'warn', { route: path, message: `${res.status} ${message}` });
+    throw new ApiError(res.status, message);
   }
   return res.json() as Promise<T>;
 }

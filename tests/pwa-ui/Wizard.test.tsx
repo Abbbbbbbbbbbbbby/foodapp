@@ -66,4 +66,52 @@ describe('Wizard', () => {
     expect(onComplete).toHaveBeenCalledWith(true, null);
     expect(screen.queryByText(/Would you like to receive weekly text updates/)).not.toBeInTheDocument();
   });
+
+  it('initialStep seeds the wizard past step 1 (draft resume)', () => {
+    render(
+      <Wizard
+        familyIndex={0}
+        total={1}
+        initialData={{ name: 'Resumed Person', phone: '4805550001' }}
+        initialStep={4}
+        proxyData={null}
+        onComplete={vi.fn()}
+        onBack={() => {}}
+      />
+    );
+    expect(screen.getByText(/Step 5 of 11/)).toBeInTheDocument();
+  });
+
+  it('onStateChange fires with the current (0-based) step and data on mount and on advance', async () => {
+    const user = userEvent.setup();
+    const onStateChange = vi.fn();
+    render(
+      <Wizard
+        familyIndex={0}
+        total={1}
+        initialData={{ name: 'Prefilled Person' }}
+        proxyData={null}
+        onComplete={vi.fn()}
+        onBack={() => {}}
+        onStateChange={onStateChange}
+      />
+    );
+    await waitFor(() => {
+      expect(onStateChange).toHaveBeenCalledWith(0, expect.objectContaining({ name: 'Prefilled Person' }));
+    });
+    onStateChange.mockClear();
+    await user.click(screen.getByRole('button', { name: /Next|Continue|Siguiente/i }));
+    await waitFor(() => {
+      expect(onStateChange).toHaveBeenCalledWith(1, expect.anything());
+    });
+  });
+
+  it('a matching __throwAtWizardStep (1-based) throws during render', () => {
+    window.__throwAtWizardStep = 1; // step index 0 → displayed "Step 1"
+    // Swallow React's expected error-boundary console noise for this render.
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => renderWizard()).toThrow(/e2e test hook/);
+    consoleSpy.mockRestore();
+    delete window.__throwAtWizardStep;
+  });
 });

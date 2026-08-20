@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { WizardFormData, ProxyData, YesNoDeclined } from '../../lib/types';
+import { setTelemetryContext } from '../../lib/telemetry';
 import TextInput from './inputs/TextInput';
 import PhoneInput from './inputs/PhoneInput';
 import NumberInput from './inputs/NumberInput';
@@ -90,12 +91,32 @@ interface WizardProps {
   proxyData: ProxyData | null;
   onComplete: (data: WizardFormData, proxy: ProxyData | null) => Promise<void>;
   onBack: () => void;
+  initialStep?: number;
+  onStateChange?: (step: number, data: Partial<WizardFormData>) => void;
 }
 
-export default function Wizard({ familyIndex, total, initialData, proxyData, onComplete, onBack }: WizardProps) {
-  const [step, setStep] = useState(0);
+export default function Wizard({ familyIndex, total, initialData, proxyData, onComplete, onBack, initialStep, onStateChange }: WizardProps) {
+  const [step, setStep] = useState(initialStep ?? 0);
   const [data, setData] = useState<Partial<WizardFormData>>({ ...initialData });
   const [submitting, setSubmitting] = useState(false);
+
+  // Render-body write (not an effect): a crash during THIS render must still
+  // report the step it crashed on, not the previous one — an effect would
+  // never run if the render itself throws. wizard_step is 1-based
+  // everywhere (matches "Step N of 11" below and the DB column).
+  setTelemetryContext({ wizardStep: step + 1 });
+  // The e2e error-boundary spec sets window.__throwAtWizardStep (1-based,
+  // displayed step) before walking in — this line intentionally ships in
+  // the production bundle (inert without console/devtools access) so no
+  // second build mode is needed for that test.
+  if (typeof window !== 'undefined' && window.__throwAtWizardStep === step + 1) {
+    throw new Error(`[e2e test hook] forced throw at wizard step ${step + 1}`);
+  }
+
+  useEffect(() => {
+    onStateChange?.(step, data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, data]);
 
   function set<K extends keyof WizardFormData>(key: K, value: WizardFormData[K]) {
     setData(prev => ({ ...prev, [key]: value }));

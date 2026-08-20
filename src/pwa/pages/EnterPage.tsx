@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { FamilySearchResult, WizardFormData, ProxyData, EnterView } from '../lib/types';
 import { api, apiWithToken, ApiError } from '../lib/api';
 import { queueItem, generateUUID, searchDirectory, directoryPickup, upsertDirectoryFamilies, markDirectoryStale } from '../lib/offline';
@@ -6,6 +6,9 @@ import type { DirectoryFamily } from '../lib/offline';
 import { normalizeName, normalizePhone } from '../../shared/fuzzy';
 import { getAuth } from '../store/auth';
 import { localDateString } from '../lib/date';
+import { saveDraftNow, saveDraftDebounced, loadDraft, deleteDraft } from '../lib/draft';
+import type { EntryDraft, PendingVisitRef } from '../lib/draft';
+import { trackEvent, setTelemetryContext } from '../lib/telemetry';
 import LookupForm from '../components/enter/LookupForm';
 import ResultsList from '../components/enter/ResultsList';
 import FamilySelectScreen from '../components/enter/FamilySelectScreen';
@@ -48,7 +51,152 @@ export default function EnterPage() {
   // Accumulates new families across multiple wizard completions for the summary screen
   const pendingFamilies = useRef<SummaryFamily[]>([]);
   // Accumulates visit IDs for the log-visit (existing family) flow
-  const pendingVisitIds = useRef<{ visitId: string | null; queueId: string | null; visitKey: string }[]>([]);
+  const pendingVisitIds = useRef<PendingVisitRef[]>([]);
+
+  // Draft persistence (issue #12): a resumable snapshot of this in-progress
+  // entry, so a crash/reload/tab-discard mid-wizard doesn't lose it.
+  // draftReady gates every write until the mount-time draft check resolves —
+  // otherwise the initial {type:'lookup'} render (which never writes, per
+  // the carve-out below) races a real draft-check finish and could clobber
+  // it before the resume prompt is even offered.
+  const draftReady = useRef(false);
+  const [resumePrompt, setResumePrompt] = useState<{ draft: EntryDraft } | null>(null);
+  // The wizard's OWN step/data live in Wizard's component state, invisible
+  // to EnterPage except through this callback-populated ref — needed both
+  // to snapshot a draft mid-wizard and to know when a resumed wizard should
+  // seed itself back to the right step.
+  const currentWizardStateRef = useRef<{ step: number; data: Partial<WizardFormData> } | null>(null);
+  const wizardPrevStepRef = useRef<number | null>(null);
+  // Restored wizard seed data, consumed exactly once by the Wizard render
+  // that follows a resume — cleared in the [view] effect right after that
+  // render commits, so a later family's wizard in the same multi-family
+  // loop doesn't inherit a stale step.
+  const restoredWizardRef = useRef<{ initialData: Partial<WizardFormData>; initialStep: number } | null>(null);
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
+
+  function buildDraft(viewToSave: EnterView): EntryDraft | null {
+    if (!mountUserId) return null;
+    return {
+      user_id: mountUserId,
+      updatedAt: Date.now(),
+      view: viewToSave,
+      wizard: currentWizardStateRef.current,
+      pendingFamilies: pendingFamilies.current,
+      pendingVisitIds: pendingVisitIds.current,
+    };
+  }
+
+  function draftDisplayName(v: EnterView): string {
+    switch (v.type) {
+      case 'results': return v.searchName;
+      case 'family-select': return v.pickupName;
+      case 'inline-register': return v.prefillName;
+      case 'log-visit': return v.families[v.current]?.name ?? '';
+      case 'how-many': return v.searchName;
+      case 'proxy-question': return v.prefillName;
+      case 'wizard': return v.initialData.name ?? '';
+      default: return '';
+    }
+  }
+
+  // Mount-time draft check.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!mountUserId) { draftReady.current = true; return; }
+      const draft = await loadDraft(mountUserId);
+      if (cancelled) return;
+      if (draft && draft.view.type !== 'lookup' && draft.view.type !== 'done') {
+        setResumePrompt({ draft });
+        // draftReady stays false — the resume/discard handlers set it once
+        // the volunteer has actually made a choice.
+      } else {
+        draftReady.current = true;
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // View-transition persistence + breadcrumbs. Carve-out: 'lookup' never
+  // writes (there's nothing to resume into), 'done' only deletes (a
+  // write-then-delete in one pass would have unspecified ordering).
+  useEffect(() => {
+    restoredWizardRef.current = null; // consumed by the render that just committed
+    if (view.type !== 'wizard' && view.type !== 'inline-register') {
+      wizardPrevStepRef.current = null;
+      currentWizardStateRef.current = null;
+    }
+    if (!draftReady.current || !mountUserId) return;
+    if (view.type === 'lookup') return;
+    if (view.type === 'done') {
+      void deleteDraft(mountUserId);
+      return;
+    }
+    const draft = buildDraft(view);
+    if (draft) void saveDraftNow(draft);
+    trackEvent('view_change', 'info', { viewType: view.type });
+    setTelemetryContext({ viewType: view.type, route: '/enter' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // pagehide: a synchronous best-effort save of whatever is current, in
+  // case the tab is being discarded/reloaded before the next state change
+  // would otherwise have persisted it.
+  useEffect(() => {
+    function onPageHide() {
+      if (!draftReady.current || !mountUserId) return;
+      const v = viewRef.current;
+      if (v.type === 'lookup' || v.type === 'done') return;
+      const draft = buildDraft(v);
+      if (draft) void saveDraftNow(draft);
+    }
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleWizardStateChange(step: number, data: Partial<WizardFormData>) {
+    currentWizardStateRef.current = { step, data };
+    if (!draftReady.current || !mountUserId) return;
+    const draft = buildDraft(viewRef.current);
+    if (!draft) return;
+    if (wizardPrevStepRef.current !== step) {
+      wizardPrevStepRef.current = step;
+      void saveDraftNow(draft);
+      trackEvent('wizard_step', 'info', { wizardStep: step + 1 });
+      setTelemetryContext({ wizardStep: step + 1 });
+    } else {
+      saveDraftDebounced(draft);
+    }
+  }
+
+  async function handleResumeDraft() {
+    if (!resumePrompt) return;
+    const { draft } = resumePrompt;
+    pendingFamilies.current = draft.pendingFamilies;
+    pendingVisitIds.current = draft.pendingVisitIds;
+    if (draft.wizard) {
+      restoredWizardRef.current = {
+        initialData: (draft.wizard.data as Partial<WizardFormData>) ?? {},
+        initialStep: draft.wizard.step,
+      };
+      currentWizardStateRef.current = draft.wizard as { step: number; data: Partial<WizardFormData> };
+      wizardPrevStepRef.current = draft.wizard.step;
+    }
+    setResumePrompt(null);
+    draftReady.current = true;
+    setView(draft.view);
+    trackEvent('draft_restored', 'info', { viewType: draft.view.type });
+  }
+
+  async function handleDiscardDraft() {
+    if (mountUserId) await deleteDraft(mountUserId);
+    setResumePrompt(null);
+    draftReady.current = true;
+    trackEvent('draft_discarded', 'info');
+  }
 
 
   // A family registered online THIS session must be findable if the network
@@ -433,6 +581,25 @@ export default function EnterPage() {
   return (
     <div className="enter-page">
       {error && <p className="error banner">{error}</p>}
+      {resumePrompt && (() => {
+        const name = draftDisplayName(resumePrompt.draft.view) || 'this family / esta familia';
+        const isWizard = resumePrompt.draft.view.type === 'wizard' || resumePrompt.draft.view.type === 'inline-register';
+        const step = (resumePrompt.draft.wizard?.step ?? 0) + 1;
+        return (
+          <p className="banner" role="alertdialog" aria-label="Resume entry">
+            {isWizard
+              ? <>Resume the entry for {name}? (step {step} of 11) / ¿Continuar el registro de {name}? (paso {step} de 11)</>
+              : <>Resume the unfinished check-in for {name}? / ¿Continuar el registro sin terminar de {name}?</>}
+            <br />
+            <button className="btn-primary" onClick={handleResumeDraft} style={{ marginTop: 8, marginRight: 8 }}>
+              Resume / Continuar
+            </button>
+            <button className="btn-ghost" onClick={handleDiscardDraft} style={{ marginTop: 8 }}>
+              Discard / Descartar
+            </button>
+          </p>
+        );
+      })()}
       {offlineSearch && view.type === 'lookup' && (
         <p className="banner">
           <button
@@ -499,7 +666,9 @@ export default function EnterPage() {
         <Wizard
           familyIndex={0}
           total={1}
-          initialData={{ name: view.prefillName }}
+          initialData={restoredWizardRef.current?.initialData ?? { name: view.prefillName }}
+          initialStep={restoredWizardRef.current?.initialStep}
+          onStateChange={handleWizardStateChange}
           proxyData={view.returnTo.pickupPhone
             ? { proxy_name: view.returnTo.pickupName.trim() || null, proxy_phone: view.returnTo.pickupPhone }
             : null}
@@ -547,7 +716,9 @@ export default function EnterPage() {
         <Wizard
           familyIndex={view.familyIndex}
           total={view.total}
-          initialData={view.initialData}
+          initialData={restoredWizardRef.current?.initialData ?? view.initialData}
+          initialStep={restoredWizardRef.current?.initialStep}
+          onStateChange={handleWizardStateChange}
           proxyData={view.proxyData}
           onComplete={handleWizardComplete}
           onBack={() => {

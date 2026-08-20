@@ -7,14 +7,22 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Food Line Check-In</title>
     <script>
+      // Early errors (before React/telemetry.ts have loaded) are queued for
+      // telemetry.ts's initTelemetry() to drain, and shown as a banner — the
+      // page and #root are NEVER wiped, so an in-progress entry (React state
+      // + the debounced IndexedDB draft write) survives. telemetry.ts
+      // installs its own window.onerror once loaded, chaining this one; it
+      // suppresses this banner for errors already handled by the React
+      // ErrorBoundary (no duplicate banner).
       window.onerror = function(msg, src, line, col, err) {
-        var d = document.getElementById('root');
-        if (!d) return;
-        var pre = document.createElement('pre');
-        pre.style.cssText = 'color:#f4f4f4;padding:16px;font-size:13px;white-space:pre-wrap;word-break:break-all';
-        pre.textContent = 'JS Error:\n' + msg + '\n' + (src || '') + ':' + line + '\n' + (err && err.stack ? err.stack : '');
-        d.innerHTML = '';
-        d.appendChild(pre);
+        window.__earlyErrors = window.__earlyErrors || [];
+        window.__earlyErrors.push({ msg: String(msg), stack: err && err.stack ? err.stack : undefined });
+        if (document.getElementById('early-error-banner')) return;
+        var b = document.createElement('div');
+        b.id = 'early-error-banner';
+        b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2000;background:#3a1414;color:#f4f4f4;padding:8px 12px;font:13px -apple-system,sans-serif;text-align:center';
+        b.textContent = 'Something went wrong — reload if the app is stuck. / Algo salió mal — recargue si la aplicación no responde.';
+        document.body.appendChild(b);
       };
     </script>
   </head>
