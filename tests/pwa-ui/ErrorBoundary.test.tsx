@@ -2,9 +2,16 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// hasSavedDraft is scoped per user_id (review finding, PR #14) — the mock
+// still ignores its argument (draftState.saved stands in for "does THIS
+// user have a draft"), since these tests only ever exercise a single
+// signed-in user at a time.
 const draftState = vi.hoisted(() => ({ saved: false }));
 vi.mock('../../src/pwa/lib/draft', () => ({
-  hasSavedDraft: () => draftState.saved,
+  hasSavedDraft: (_userId: string | undefined) => draftState.saved,
+}));
+vi.mock('../../src/pwa/store/auth', () => ({
+  getUser: () => ({ id: 'test-user-1', name: 'Test Vol', phone: '4805550001', role: 'volunteer' }),
 }));
 const telemetryCalls = vi.hoisted(() => ({
   markBoundaryHandled: vi.fn(),

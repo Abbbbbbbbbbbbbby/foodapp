@@ -1,6 +1,7 @@
 import { Component, type ReactNode } from 'react';
 import { trackError, markBoundaryHandled, flushTelemetry } from '../lib/telemetry';
 import { hasSavedDraft } from '../lib/draft';
+import { getUser } from '../store/auth';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -32,7 +33,11 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   render(): ReactNode {
     if (!this.state.hasError) return this.props.children;
 
-    const draftSaved = hasSavedDraft();
+    // Scoped to the CURRENTLY signed-in user — logout is a client-side
+    // navigate() with no reload, so a bare flag would survive across users
+    // in the same tab and could falsely tell a fresh user their (nonexistent)
+    // entry was saved. See draft.ts's hasSavedDraft for the full story.
+    const draftSaved = hasSavedDraft(getUser()?.id);
     return (
       <div style={{ padding: 24, maxWidth: 480, margin: '40px auto' }}>
         <p className="error banner">

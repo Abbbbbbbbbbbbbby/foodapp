@@ -50,6 +50,12 @@ const FLUSH_INTERVAL_MS = 10_000;
 const MIN_ERROR_FLUSH_INTERVAL_MS = 5_000;
 const MAX_EVENTS_PER_CHUNK = 50;
 const MAX_CHUNK_BYTES = 200 * 1024;
+// navigator.sendBeacon's payload hard limit is 64 KiB (verified against
+// MDN, 2026-08-19). Margin below that for JSON/encoding overhead — a chunk
+// over the real limit makes sendBeacon() return false, which falls back to
+// an async IndexedDB persist that (per this same file's pagehide fix
+// earlier this PR) is not reliable during page teardown.
+const MAX_BEACON_CHUNK_BYTES = 56 * 1024;
 const STORE_CAP = 500;
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
 
@@ -169,13 +175,20 @@ export function trackError(err: unknown, kind: 'js_error' | 'unhandled_rejection
   }
 }
 
-function chunkEvents(events: StoredEvent[]): StoredEvent[][] {
+function byteLength(s: string): number {
+  // .length is UTF-16 code units, not bytes — undercounts for this app's
+  // own accented Spanish text, which matters right at a hard byte cap
+  // (the beacon path below has none to spare).
+  return new TextEncoder().encode(s).length;
+}
+
+function chunkEvents(events: StoredEvent[], maxBytes: number): StoredEvent[][] {
   const chunks: StoredEvent[][] = [];
   let current: StoredEvent[] = [];
   let currentSize = 2;
   for (const e of events) {
-    const size = JSON.stringify(e).length + 1;
-    if (current.length >= MAX_EVENTS_PER_CHUNK || (currentSize + size) > MAX_CHUNK_BYTES) {
+    const size = byteLength(JSON.stringify(e)) + 1;
+    if (current.length >= MAX_EVENTS_PER_CHUNK || (currentSize + size) > maxBytes) {
       if (current.length) chunks.push(current);
       current = [];
       currentSize = 2;
@@ -190,7 +203,11 @@ function chunkEvents(events: StoredEvent[]): StoredEvent[][] {
 async function safeReadStore(): Promise<StoredEvent[]> {
   try {
     return await readAllStore<StoredEvent>(TELEMETRY_STORE);
-  } catch {
+  } catch (err) {
+    // Best-effort — but a broken telemetry store degrades both this and
+    // draft.ts's safety net silently unless traced somewhere (matches the
+    // rememberInDirectory pattern already used elsewhere in this app).
+    console.warn('telemetry store read failed:', err);
     return [];
   }
 }
@@ -201,9 +218,10 @@ async function persistToStore(events: StoredEvent[]): Promise<void> {
       await putInStore(TELEMETRY_STORE, e);
     }
     await enforceCap();
-  } catch {
+  } catch (err) {
     // Best-effort — losing a persisted retry is degraded telemetry, not a
-    // broken app.
+    // broken app, but worth a trace.
+    console.warn('telemetry store persist failed:', err);
   }
 }
 
@@ -227,8 +245,9 @@ async function enforceCap(): Promise<void> {
     for (const e of excess) {
       await deleteFromStore(TELEMETRY_STORE, e.id);
     }
-  } catch {
+  } catch (err) {
     // Best-effort cap — an occasional overflow is acceptable, throwing isn't.
+    console.warn('telemetry store cap enforcement failed:', err);
   }
 }
 
@@ -260,7 +279,7 @@ async function flushViaFetch(): Promise<void> {
   const combined = [...stored, ...memoryBuffer];
   memoryBuffer.length = 0;
   if (combined.length === 0) return;
-  for (const chunk of chunkEvents(combined)) {
+  for (const chunk of chunkEvents(combined, MAX_CHUNK_BYTES)) {
     const outcome = await postChunk(chunk);
     if (outcome === 'retry') {
       await persistToStore(chunk);
@@ -288,7 +307,7 @@ async function flushViaBeacon(): Promise<void> {
     await persistToStore(combined);
     return;
   }
-  const chunks = chunkEvents(combined);
+  const chunks = chunkEvents(combined, MAX_BEACON_CHUNK_BYTES);
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     let ok = false;

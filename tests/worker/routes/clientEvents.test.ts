@@ -142,14 +142,13 @@ describe('POST /api/client-events', () => {
     const deviceId = `cap-device-${uuid()}`;
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    // skipGlobal is only set for ENVIRONMENT==='test' in the handler, and
-    // the per-device cap (800/hr) is enforced regardless — set env to a
-    // non-test value here so the per-device cap alone is exercised without
-    // needing 800 requests: we call checkClientEventLimit directly instead.
-    const { checkClientEventLimit } = await import('../../../src/worker/ratelimit');
-    for (let i = 0; i < 800; i++) {
-      await checkClientEventLimit(e.SESSIONS, deviceId, { skipGlobal: true });
-    }
+    // Seed the KV counter directly AT the 800/hr cap instead of driving it
+    // there with 800 sequential round-trips — same boundary condition
+    // (checkClientEventLimit blocks when count >= cap), deterministic, and
+    // doesn't risk CI's default 5s test timeout (800 real KV calls took
+    // >8s in CI, even though it was fast enough locally).
+    const hourSlot = Math.floor(Date.now() / 3_600_000);
+    await e.SESSIONS.put(`rl:cev:device:${deviceId}:h${hourSlot}`, '800', { expirationTtl: 3600 });
     const ev = makeEvent({ device_id: deviceId });
     const req = new Request('https://example.com/api/client-events', {
       method: 'POST',
@@ -186,6 +185,55 @@ describe('purgeOldClientEvents', () => {
     const fresh = await e.DB.prepare(`SELECT id FROM client_events WHERE id = ?`).bind(newId).first();
     expect(old).toBeNull();
     expect(fresh).not.toBeNull();
+  });
+});
+
+describe('rate limiting (review findings)', () => {
+  it('a device_id of "global" does not collapse into the shared global counter key', async () => {
+    const { checkClientEventLimit } = await import('../../../src/worker/ratelimit');
+    const e = env as unknown as Env;
+    const hourSlot = Math.floor(Date.now() / 3_600_000);
+    await e.SESSIONS.delete(`rl:cev:device:global:h${hourSlot}`);
+    await e.SESSIONS.delete(`rl:cev:global:h${hourSlot}`);
+
+    // A client sending device_id: "global" should only affect ITS OWN
+    // per-device counter, never the shared global one.
+    for (let i = 0; i < 5; i++) {
+      await checkClientEventLimit(e.SESSIONS, 'global', 1, { skipGlobal: true });
+    }
+    const deviceCount = await e.SESSIONS.get(`rl:cev:device:global:h${hourSlot}`);
+    const globalCount = await e.SESSIONS.get(`rl:cev:global:h${hourSlot}`);
+    expect(deviceCount).toBe('5');
+    // skipGlobal:true still increments the global counter (only the CHECK
+    // is skipped) — confirm it moved independently of the device counter,
+    // proving the two keys are distinct, not aliased.
+    expect(globalCount).toBe('5');
+    expect(`rl:cev:device:global:h${hourSlot}`).not.toBe(`rl:cev:global:h${hourSlot}`);
+  });
+
+  it('rate limiting counts events in the batch, not requests', async () => {
+    const { checkClientEventLimit } = await import('../../../src/worker/ratelimit');
+    const e = env as unknown as Env;
+    const deviceId = `batch-device-${uuid()}`;
+    const hourSlot = Math.floor(Date.now() / 3_600_000);
+
+    // One request with 50 events should count as 50 toward the cap, not 1.
+    const result = await checkClientEventLimit(e.SESSIONS, deviceId, 50, { skipGlobal: true });
+    expect(result.allowed).toBe(true);
+    const count = await e.SESSIONS.get(`rl:cev:device:${deviceId}:h${hourSlot}`);
+    expect(count).toBe('50');
+  });
+
+  it('rejects a batch that would push the device over its cap, even if under cap before this request', async () => {
+    const { checkClientEventLimit } = await import('../../../src/worker/ratelimit');
+    const e = env as unknown as Env;
+    const deviceId = `overshoot-device-${uuid()}`;
+    const hourSlot = Math.floor(Date.now() / 3_600_000);
+    await e.SESSIONS.put(`rl:cev:device:${deviceId}:h${hourSlot}`, '780', { expirationTtl: 3600 });
+
+    // 780 + 50 > 800 — must be rejected as a whole, not partially admitted.
+    const result = await checkClientEventLimit(e.SESSIONS, deviceId, 50, { skipGlobal: true });
+    expect(result.allowed).toBe(false);
   });
 });
 

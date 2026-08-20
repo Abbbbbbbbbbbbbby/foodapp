@@ -55,11 +55,25 @@ function truncate(v: unknown, max: number): string | null {
 }
 
 async function handleIngest(request: Request, env: Env): Promise<Response> {
-  // Read the raw body FIRST — every rejection below logs it, so a malformed
-  // or oversized batch is never silently dropped, only rejected loudly.
-  const raw = await request.text();
+  // Content-Length pre-check: reject before buffering the body when the
+  // client honestly reports its size. A client can lie about this header
+  // (or omit it), so the post-read byte check below is still the
+  // authoritative guard — this is a cheap first line of defense only.
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (declaredLength && declaredLength > MAX_BODY_BYTES) {
+    console.error('client-events rejected', 400, `declared content-length ${declaredLength} exceeds ${MAX_BODY_BYTES}`);
+    return Response.json({ error: 'Body too large' }, { status: 400 });
+  }
 
-  if (raw.length > MAX_BODY_BYTES) {
+  // Read the raw body — every rejection below logs it, so a malformed or
+  // oversized batch is never silently dropped, only rejected loudly.
+  const raw = await request.text();
+  // .length is UTF-16 code units, not bytes — this app's own bilingual
+  // (EN/ES) strings routinely contain accented characters, so measure the
+  // real wire size with TextEncoder rather than undercounting.
+  const rawBytes = new TextEncoder().encode(raw).length;
+
+  if (rawBytes > MAX_BODY_BYTES) {
     console.error('client-events rejected', 400, raw.slice(0, 64_000));
     return Response.json({ error: 'Body too large' }, { status: 400 });
   }
@@ -120,7 +134,7 @@ async function handleIngest(request: Request, env: Env): Promise<Response> {
   // checkClientEventLimit) is the real backstop. All events in a batch share
   // one device_id in practice (one client, one flush) — key on the first.
   const deviceId = typeof events[0].device_id === 'string' ? events[0].device_id : 'unknown';
-  const limit = await checkClientEventLimit(env.SESSIONS, deviceId, { skipGlobal: env.ENVIRONMENT === 'test' });
+  const limit = await checkClientEventLimit(env.SESSIONS, deviceId, events.length, { skipGlobal: env.ENVIRONMENT === 'test' });
   if (!limit.allowed) {
     console.error('client-events rejected', 429, raw.slice(0, 64_000));
     return Response.json({ error: 'Rate limited' }, { status: 429 });

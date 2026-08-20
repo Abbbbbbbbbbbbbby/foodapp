@@ -131,7 +131,11 @@ test('reload at wizard step 6 offers to resume, and Resume restores the entry wi
   // below): the pagehide beacon should have landed during the reload, but
   // give it a moment before deciding it's genuinely absent.
   let visibilityCount = 0;
-  for (let i = 0; i < 10 && visibilityCount === 0; i++) {
+  // Observed one flake at 10x500ms=5s under CI-adjacent load — this is
+  // testing an async unload-time delivery mechanism (pagehide → beacon →
+  // worker → D1) with inherent timing variance, so give it real margin
+  // rather than chase a tighter number.
+  for (let i = 0; i < 20 && visibilityCount === 0; i++) {
     visibilityCount = (await testEvents(page, deviceId, 'visibility')).length;
     if (visibilityCount === 0) await page.waitForTimeout(500);
   }

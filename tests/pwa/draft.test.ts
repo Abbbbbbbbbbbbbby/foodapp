@@ -5,6 +5,7 @@ import {
   saveDraftNow, saveDraftDebounced, loadDraft, deleteDraft, hasSavedDraft, _setDebounceDelay,
 } from '../../src/pwa/lib/draft';
 import type { EntryDraft } from '../../src/pwa/lib/draft';
+import { putInStore, getFromStore, DRAFT_STORE } from '../../src/pwa/lib/offline';
 
 function makeDraft(overrides: Partial<EntryDraft> = {}): EntryDraft {
   return {
@@ -12,6 +13,7 @@ function makeDraft(overrides: Partial<EntryDraft> = {}): EntryDraft {
     updatedAt: Date.now(),
     view: { type: 'lookup' },
     wizard: null,
+    pendingSubmission: null,
     pendingFamilies: [],
     pendingVisitIds: [],
     ...overrides,
@@ -30,24 +32,36 @@ describe('saveDraftNow / loadDraft', () => {
     expect(loaded?.wizard).toEqual({ step: 5, data: { name: 'Test' } });
   });
 
-  it('marks hasSavedDraft() true after a successful save', async () => {
+  it('marks hasSavedDraft(userId) true after a successful save, for that user only', async () => {
     const draft = makeDraft({ user_id: 'user-flag' });
     await saveDraftNow(draft);
-    expect(hasSavedDraft()).toBe(true);
+    expect(hasSavedDraft('user-flag')).toBe(true);
+    expect(hasSavedDraft('some-other-user')).toBe(false);
+    expect(hasSavedDraft(undefined)).toBe(false);
   });
 
-  it('marks hasSavedDraft() true when loadDraft finds a fresh draft (crash-after-load case)', async () => {
+  it('marks hasSavedDraft(userId) true when loadDraft finds a fresh draft (crash-after-load case)', async () => {
     const draft = makeDraft({ user_id: 'user-flag-2' });
     await saveDraftNow(draft);
     await deleteDraft(draft.user_id); // clears the flag
-    expect(hasSavedDraft()).toBe(false);
+    expect(hasSavedDraft(draft.user_id)).toBe(false);
     await saveDraftNow(draft); // re-save so loadDraft has something fresh
     await deleteDraft(draft.user_id);
-    expect(hasSavedDraft()).toBe(false);
+    expect(hasSavedDraft(draft.user_id)).toBe(false);
     await saveDraftNow(draft);
     const loaded = await loadDraft(draft.user_id);
     expect(loaded).not.toBeNull();
-    expect(hasSavedDraft()).toBe(true);
+    expect(hasSavedDraft(draft.user_id)).toBe(true);
+  });
+
+  it('does not leak a saved-draft claim across users sharing the same tab (cross-user finding, PR #14)', async () => {
+    // Volunteer A saves a draft, then abandons it (no delete — matches a
+    // real logout, which never calls deleteDraft).
+    await saveDraftNow(makeDraft({ user_id: 'volunteer-a' }));
+    expect(hasSavedDraft('volunteer-a')).toBe(true);
+    // Volunteer B signs in on the same tab/device — has no draft of their
+    // own. Must NOT see A's leftover flag.
+    expect(hasSavedDraft('volunteer-b')).toBe(false);
   });
 
   it('is a no-op for an undefined user_id (never throws)', async () => {
@@ -57,17 +71,29 @@ describe('saveDraftNow / loadDraft', () => {
 });
 
 describe('loadDraft — expiry', () => {
-  it('returns null and deletes a draft older than 4 hours', async () => {
-    const userId = 'user-expired';
-    const stale = makeDraft({ user_id: userId, updatedAt: Date.now() - (5 * 60 * 60 * 1000) });
-    await saveDraftNow(stale);
-    // saveDraftNow stamps updatedAt to now — write directly via a fresh
-    // save then force it stale by saving again with an old timestamp via
-    // the internal store path is not exposed, so exercise via two saves:
-    // the second save always re-stamps "now", so instead verify via the
-    // public contract: a draft saved "now" is NOT expired.
+  it('a freshly saved draft is not treated as expired', async () => {
+    const userId = 'user-fresh';
+    await saveDraftNow(makeDraft({ user_id: userId }));
     const fresh = await loadDraft(userId);
     expect(fresh).not.toBeNull();
+  });
+
+  it('returns null and deletes a draft older than 4 hours (review finding: the previous version of this test never actually exercised the deletion path — saveDraftNow always re-stamps updatedAt to "now", silently defeating an old-timestamp fixture)', async () => {
+    const userId = 'user-expired';
+    // Seed the store directly via offline.ts, bypassing saveDraftNow's
+    // "now" re-stamp, so the fixture's old timestamp actually survives.
+    const stale: EntryDraft = { ...makeDraft({ user_id: userId }), updatedAt: Date.now() - (5 * 60 * 60 * 1000) };
+    await putInStore(DRAFT_STORE, stale);
+    // Sanity check the fixture itself is really stale before trusting the
+    // result below — otherwise a broken seed would look identical to a
+    // passing expiry check.
+    const seeded = await getFromStore<EntryDraft>(DRAFT_STORE, userId);
+    expect(seeded?.updatedAt).toBe(stale.updatedAt);
+
+    const loaded = await loadDraft(userId);
+    expect(loaded).toBeNull();
+    const afterLoad = await getFromStore<EntryDraft>(DRAFT_STORE, userId);
+    expect(afterLoad).toBeUndefined(); // loadDraft deleted the expired row
   });
 });
 
@@ -110,12 +136,12 @@ describe('saveDraftDebounced', () => {
 });
 
 describe('deleteDraft', () => {
-  it('removes the draft and clears hasSavedDraft()', async () => {
+  it('removes the draft and clears hasSavedDraft(userId)', async () => {
     const userId = 'user-clear';
     await saveDraftNow(makeDraft({ user_id: userId }));
-    expect(hasSavedDraft()).toBe(true);
+    expect(hasSavedDraft(userId)).toBe(true);
     await deleteDraft(userId);
-    expect(hasSavedDraft()).toBe(false);
+    expect(hasSavedDraft(userId)).toBe(false);
     expect(await loadDraft(userId)).toBeNull();
   });
 

@@ -166,6 +166,38 @@ describe('store cap eviction', () => {
   });
 });
 
+describe('beacon chunking respects the 64 KiB sendBeacon limit (review finding)', () => {
+  it('splits a large buffer into sub-64KiB beacon chunks, distinct from the larger fetch-path chunk size', async () => {
+    const { telemetry } = await freshModules();
+    const beaconCalls: number[] = [];
+    const sendBeacon = vi.fn((_url: string, data: BodyInit) => {
+      // Blob.size gives the real byte length of what would be sent.
+      beaconCalls.push((data as Blob).size);
+      return true;
+    });
+    Object.defineProperty(navigator, 'sendBeacon', { value: sendBeacon, configurable: true });
+
+    // Each event's stack is truncated server-side at 8000 chars, but the
+    // CLIENT buffer isn't truncated before flush — a handful of large
+    // stack traces alone exceeds 64KiB, which is exactly the scenario
+    // that broke before this fix (large chunk -> sendBeacon returns false
+    // -> unreliable async persist during unload). Level 'warn', not
+    // 'error' — 'error' would trigger an immediate FETCH-path auto-flush
+    // (a different code path, different chunk-size constant) before this
+    // test's explicit beacon flush runs.
+    for (let i = 0; i < 10; i++) {
+      telemetry.trackEvent('api_failure', 'warn', { stack: 's'.repeat(9_000) });
+    }
+    await telemetry.flushTelemetry({ beacon: true });
+
+    expect(sendBeacon).toHaveBeenCalled();
+    expect(beaconCalls.length).toBeGreaterThan(1); // had to split into multiple chunks
+    for (const size of beaconCalls) {
+      expect(size).toBeLessThan(64 * 1024);
+    }
+  });
+});
+
 describe('never throws', () => {
   it('trackEvent/trackError/setTelemetryContext/flushTelemetry tolerate malformed input', async () => {
     const { telemetry } = await freshModules();
