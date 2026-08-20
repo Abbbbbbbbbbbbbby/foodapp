@@ -60,7 +60,11 @@ export function buildApp(clientFactory: (env: AdminEnv) => AuthClient = realClie
 
   app.get('/events', async (c) => {
     const filters = parseFilters(c);
-    const page = Math.max(1, Number(c.req.query('page')) || 1);
+    // Number('Infinity') / Number('1e309') are truthy but non-finite and reach
+    // D1 as a NaN/Infinity OFFSET → datatype-mismatch 500. Require a positive
+    // safe integer; anything else is page 1.
+    const pageRaw = Number(c.req.query('page'));
+    const page = Number.isSafeInteger(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
     const { rows, hasNext } = await listEvents(c.env.DB, filters, page);
     const query = new URL(c.req.url).searchParams.toString();
     return c.html(<EventsPage user={c.var.user} rows={rows} hasNext={hasNext} page={page} filters={filters} query={query} />);
@@ -70,9 +74,11 @@ export function buildApp(clientFactory: (env: AdminEnv) => AuthClient = realClie
   app.get('/events.csv', async (c) => {
     const filters = parseFilters(c);
     const { rows, truncated: truncatedByCap } = await exportEvents(c.env.DB, filters);
-    const { csv, rowsWritten, truncated } = toCsv(rows, truncatedByCap);
-    // A truncated export must be visible in logs AND in the artifact itself.
-    console.log('csv export', { rowCount: rowsWritten, truncated, filters });
+    const { csv, rowsWritten, reason } = toCsv(rows, truncatedByCap);
+    // A truncated export must be visible in logs AND in the artifact itself,
+    // and the REASON (row cap vs byte budget — a possible abuse signal) must
+    // be distinguishable in both.
+    console.log('csv export', { rowCount: rowsWritten, truncation: reason, filters });
     const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
     return c.body(csv, 200, {
       'Content-Type': 'text/csv; charset=utf-8',

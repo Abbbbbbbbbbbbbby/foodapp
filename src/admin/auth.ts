@@ -55,6 +55,15 @@ export async function startLogin(c: Ctx, client: AuthClient) {
 export async function handleCallback(c: Ctx, client: AuthClient) {
   const code = c.req.query('code');
   const state = c.req.query('state');
+
+  // Read + clear the one-time challenge cookie up front, before any early
+  // return, so it never survives a failed attempt.
+  const challengeCookie = getCookie(c, OAUTH_COOKIE);
+  const challenge = challengeCookie
+    ? await verifyCompact<OauthChallenge>(challengeCookie, c.env.FOODBOX_ADMIN_SESSION_SECRET)
+    : null;
+  deleteCookie(c, OAUTH_COOKIE, { path: '/auth' });
+
   if (!code) {
     console.warn('admin login denied', { reason: 'missing code' });
     return c.redirect('/denied', 302);
@@ -63,11 +72,6 @@ export async function handleCallback(c: Ctx, client: AuthClient) {
   // State binding: the challenge cookie must exist, verify, and match the
   // issuer-echoed state. Every denial logs — a locked-out staffer must be
   // diagnosable from Workers Logs (event-handler-observability).
-  const challengeCookie = getCookie(c, OAUTH_COOKIE);
-  const challenge = challengeCookie
-    ? await verifyCompact<OauthChallenge>(challengeCookie, c.env.FOODBOX_ADMIN_SESSION_SECRET)
-    : null;
-  deleteCookie(c, OAUTH_COOKIE, { path: '/auth' });
   if (!challenge || !state || challenge.s !== state) {
     console.warn('admin login denied', {
       reason: 'state mismatch or missing/expired challenge cookie',

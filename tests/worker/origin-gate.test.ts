@@ -94,3 +94,29 @@ describe('same-origin passthrough (preview deployments)', () => {
     warn.mockRestore();
   });
 });
+
+describe('auth body size cap (pre-auth DoS)', () => {
+  it('an oversized auth POST body is rejected 413 before the handler runs', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const huge = JSON.stringify({ phone: '4805550401', pad: 'x'.repeat(8000) });
+    const res = await workerExports.default.fetch('http://127.0.0.1/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: huge,
+    });
+    expect(res.status).toBe(413);
+    expect(warn).toHaveBeenCalledWith('auth body rejected', 'too large', expect.stringContaining('/api/auth/login'));
+    warn.mockRestore();
+  });
+
+  it('a normal-size auth body still parses', async () => {
+    const res = await workerExports.default.fetch('http://127.0.0.1/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: '4805550402' }),
+    });
+    // 404 (no account) or 200/400 — anything but 413/415 proves the body parsed.
+    expect(res.status).not.toBe(413);
+    expect(res.status).not.toBe(415);
+  });
+});

@@ -280,7 +280,7 @@ describe('response hardening + edge cases', () => {
 
   it('nonsense page params clamp to 1 instead of erroring', async () => {
     await seed([{ id: 'clamp-1' }]);
-    for (const p of ['-1', '0', 'abc']) {
+    for (const p of ['-1', '0', 'abc', 'Infinity', '1e309', '99999999999999999999']) {
       const res = await authedGet(`/events?page=${p}`);
       expect(res.status).toBe(200);
     }
@@ -336,6 +336,24 @@ describe('CSV export', () => {
     expect(empty.trim()).toBe('id,received_at,occurred_at,user_id,session_id,device_id,seq,level,kind,route,wizard_step,view_type,message,stack,user_agent,online,app_version,extra');
   });
 
+  it('a byte-budget truncation is distinguishable from a row-cap truncation', async () => {
+    // A handful of near-max-size hostile rows exhausts the 8M-char budget well
+    // before the 2000-row cap — the log and the artifact must say "byte budget".
+    const t = Date.now();
+    await seed(Array.from({ length: 30 }, (_, i) => ({
+      id: `fat-${String(i).padStart(3, '0')}`, level: 'info',
+      message: 'x'.repeat(900_000),
+      received_at: new Date(t - i * 10).toISOString(),
+    })));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const res = await authedGet('/events.csv?level=info');
+    const body = await res.text();
+    expect(body).toContain('(byte budget)');
+    expect(body).not.toContain('(row cap)');
+    expect(log).toHaveBeenCalledWith('csv export', expect.objectContaining({ truncation: 'byte-budget' }));
+    log.mockRestore();
+  });
+
   it('filters apply and the truncation marker appears at the cap', async () => {
     const t = Date.now();
     await seed(Array.from({ length: 2001 }, (_, i) => ({
@@ -345,8 +363,8 @@ describe('CSV export', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const res = await authedGet('/events.csv?level=info');
     const body = await res.text();
-    expect(body).toContain('# TRUNCATED at 2000 rows');
-    expect(log).toHaveBeenCalledWith('csv export', expect.objectContaining({ truncated: true, rowCount: 2000 }));
+    expect(body).toContain('# TRUNCATED at 2000 rows (row cap)');
+    expect(log).toHaveBeenCalledWith('csv export', expect.objectContaining({ truncation: 'row-cap', rowCount: 2000 }));
     log.mockRestore();
   });
 });

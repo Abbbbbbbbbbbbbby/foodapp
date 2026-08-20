@@ -20,9 +20,15 @@ function csvCell(v: unknown): string {
 // intermediate comfortably small.
 const MAX_CSV_CHARS = 8_000_000;
 
+// Row-cap and byte-budget truncation are DISTINCT facts: a byte-budget cut can
+// be an abuse signal (oversized hostile rows), a row-cap cut just means "too
+// many matches, narrow the filter." Never collapse them into one boolean —
+// the operator must be able to tell which from both the log and the artifact.
+export type TruncationReason = 'none' | 'row-cap' | 'byte-budget';
+
 export function toCsv(
   rows: ClientEventRow[], truncatedByCap: boolean
-): { csv: string; rowsWritten: number; truncated: boolean } {
+): { csv: string; rowsWritten: number; reason: TruncationReason } {
   const lines = [EVENT_COLUMNS.join(',')];
   let chars = lines[0].length;
   let rowsWritten = 0;
@@ -37,10 +43,13 @@ export function toCsv(
     chars += line.length + 2;
     rowsWritten++;
   }
-  const truncated = truncatedByCap || truncatedByBytes;
-  if (truncated) {
-    // The artifact itself must carry its incompleteness, not just the log.
-    lines.push(`# TRUNCATED at ${rowsWritten} rows — narrow the filters`);
+  // Byte-budget wins if both fired: it's the more urgent signal, and it means
+  // fewer rows came out than the row cap would have allowed.
+  const reason: TruncationReason = truncatedByBytes ? 'byte-budget' : truncatedByCap ? 'row-cap' : 'none';
+  if (reason !== 'none') {
+    // The artifact itself carries which kind of incompleteness, not just that.
+    const label = reason === 'byte-budget' ? 'byte budget' : 'row cap';
+    lines.push(`# TRUNCATED at ${rowsWritten} rows (${label}) — narrow the filters`);
   }
-  return { csv: lines.join('\r\n') + '\r\n', rowsWritten, truncated };
+  return { csv: lines.join('\r\n') + '\r\n', rowsWritten, reason };
 }

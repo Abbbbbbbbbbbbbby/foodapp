@@ -4,6 +4,7 @@ import { buildSession, createSession, destroySession } from '../auth';
 import { getAuthContext } from '../middleware';
 import { normalizePhone } from '../db';
 import { checkOtpSendLimit, checkVerifyLimit } from '../ratelimit';
+import { readBodyCapped } from '../body';
 
 // E2E-only: lets the Playwright harness read the OTP that would have gone
 // out by SMS. Gated on ENVIRONMENT === 'test' — in production the var is
@@ -67,14 +68,29 @@ function clientIp(request: Request, env: Env): string | undefined {
   return request.headers.get('CF-Connecting-IP') ?? 'unknown';
 }
 
-async function handleLogin(request: Request, env: Env): Promise<Response> {
-  let body: { phone?: string };
+
+// Auth request bodies are tiny (a phone, maybe a 6-digit code). Cap the read
+// hard so a pre-auth client can't buffer a huge body into the isolate before
+// the handler runs — the streamed cap aborts instead of buffering-then-checking.
+const MAX_AUTH_BODY_BYTES = 4096;
+async function readJsonCapped<T>(request: Request): Promise<T | null | 'too_large'> {
+  const raw = await readBodyCapped(request, MAX_AUTH_BODY_BYTES);
+  if (raw === null) return 'too_large';
   try {
-    body = await request.json();
+    return JSON.parse(raw) as T;
   } catch {
-    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+    return null;
   }
-  const phone = normalizePhone(body.phone ?? null);
+}
+
+async function handleLogin(request: Request, env: Env): Promise<Response> {
+  const parsed = await readJsonCapped<{ phone?: string }>(request);
+  if (parsed === 'too_large') {
+    console.warn('auth body rejected', 'too large', request.url);
+    return Response.json({ error: 'Body too large' }, { status: 413 });
+  }
+  if (parsed === null) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  const phone = normalizePhone(parsed.phone ?? null);
   if (!phone) {
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
@@ -96,14 +112,14 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleRegister(request: Request, env: Env): Promise<Response> {
-  let body: { name?: string; phone?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  const parsed = await readJsonCapped<{ name?: string; phone?: string }>(request);
+  if (parsed === 'too_large') {
+    console.warn('auth body rejected', 'too large', request.url);
+    return Response.json({ error: 'Body too large' }, { status: 413 });
   }
-  const name = body.name?.trim();
-  const phone = normalizePhone(body.phone ?? null);
+  if (parsed === null) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  const name = parsed.name?.trim();
+  const phone = normalizePhone(parsed.phone ?? null);
   if (!name) {
     return Response.json({ error: 'name is required' }, { status: 400 });
   }
@@ -139,14 +155,14 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleVerify(request: Request, env: Env): Promise<Response> {
-  let body: { phone?: string; code?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  const parsed = await readJsonCapped<{ phone?: string; code?: string }>(request);
+  if (parsed === 'too_large') {
+    console.warn('auth body rejected', 'too large', request.url);
+    return Response.json({ error: 'Body too large' }, { status: 413 });
   }
-  const phone = normalizePhone(body.phone ?? null);
-  const code = body.code?.trim();
+  if (parsed === null) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  const phone = normalizePhone(parsed.phone ?? null);
+  const code = parsed.code?.trim();
   if (!phone || !code) {
     return Response.json({ error: 'phone and code are required' }, { status: 400 });
   }
