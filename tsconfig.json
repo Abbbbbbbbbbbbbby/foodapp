@@ -12,5 +12,5 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "scripts", "tests", "src/pwa"]
+  "exclude": ["node_modules", "scripts", "tests", "src/pwa", "src/admin"]
 }
