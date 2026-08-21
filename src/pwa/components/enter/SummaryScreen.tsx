@@ -250,7 +250,7 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
       )}
 
       {bagError && (
-        <p style={{ marginTop: 8, fontSize: 13, color: 'var(--error, #c0392b)', padding: '8px 12px', background: 'var(--error-bg, #fdecea)', borderRadius: 6 }}>
+        <p style={{ marginTop: 8, fontSize: 13, color: 'var(--danger)', padding: '8px 12px', background: 'rgba(229, 82, 82, 0.15)', borderRadius: 'var(--radius)' }}>
           {bagError}
         </p>
       )}

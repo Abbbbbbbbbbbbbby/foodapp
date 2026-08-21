@@ -28,7 +28,7 @@ export default function LogVisitScreen({ family, total, current, onLogVisit }: L
       </div>
       <div className="log-actions">
         <button className="btn-primary btn-large" onClick={handleNoChange} disabled={loading}>
-          {loading ? 'Saving...' : 'No change / Sin cambios'}
+          {loading ? 'Saving... / Guardando...' : 'No change / Sin cambios'}
         </button>
       </div>
     </div>

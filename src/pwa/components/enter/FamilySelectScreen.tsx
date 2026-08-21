@@ -104,7 +104,7 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
   return (
     <div className="family-select">
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-        <button className="btn-ghost" style={{ marginRight: 12 }} onClick={onBack}>← Back</button>
+        <button className="btn-ghost" style={{ marginRight: 12 }} onClick={onBack}>Back / Atrás</button>
         <h2>Select families / Seleccionar familias</h2>
       </div>
       {notice && (

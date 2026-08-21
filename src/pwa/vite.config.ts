@@ -47,7 +47,10 @@ function forceEs5LegacyChunks(): Plugin {
   return {
     name: 'force-es5-legacy-chunks',
     renderChunk(code, chunk) {
-      if (!chunk.fileName.includes('-legacy-')) return null;
+      // Only transform app entry chunks — NOT the polyfills bundle.
+      // The polyfills bundle (SystemJS + core-js) is pre-compiled ES5;
+      // re-running Babel on minified code can corrupt it.
+      if (!chunk.fileName.includes('-legacy-') || chunk.fileName.includes('polyfills-legacy')) return null;
       const result = babel.transformSync(code, {
         configFile: false,
         babelrc: false,
@@ -68,6 +71,26 @@ function forceEs5LegacyChunks(): Plugin {
   };
 }
 
+// @vitejs/plugin-legacy emits an inline `System.import(...)` call with no
+// guard. If the polyfills bundle hasn't finished executing (SystemJS not set),
+// this throws "ReferenceError: Can't find variable: System" on iOS 9.
+// Wait for the polyfill script's load event before calling System.import.
+function guardLegacySystemImport(): Plugin {
+  return {
+    name: 'guard-legacy-system-import',
+    transformIndexHtml: {
+      order: 'post',
+      handler(html: string) {
+        return html.replace(
+          /(<script[^>]*id="vite-legacy-entry"[^>]*>)System\.import\(([\s\S]+)\)(<\/script>)/,
+          (_m, open, arg, close) =>
+            `${open}(function(){var r=function(){System.import(${arg})};typeof System!=='undefined'?r():document.getElementById('vite-legacy-polyfill').addEventListener('load',r)})()${close}`
+        );
+      },
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -79,6 +102,7 @@ export default defineConfig({
     }),
     forceEs5LegacyChunks(),
     stripSafari10Guard(),
+    guardLegacySystemImport(),
   ],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion()),

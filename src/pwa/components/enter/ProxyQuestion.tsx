@@ -40,7 +40,7 @@ export default function ProxyQuestion({ familyIndex, total, prefillName, prefill
     return (
       <div className="proxy-question">
         {progressHeader}
-        <button className="btn-ghost" onClick={() => setShowOther(false)}>← Back</button>
+        <button className="btn-ghost" onClick={() => setShowOther(false)}>Back / Atrás</button>
         <p className="question-en">Who is the designated pickup person?</p>
         <p className="question-es">¿Quién es la persona designada para recoger?</p>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -69,7 +69,7 @@ export default function ProxyQuestion({ familyIndex, total, prefillName, prefill
   return (
     <div className="proxy-question">
       {progressHeader}
-      <button className="btn-ghost" onClick={onBack}>← Back</button>
+      <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
       <p className="question-en">Who usually picks up food for {label.en}?</p>
       <p className="question-es">¿Quién usualmente recoge los alimentos para {label.es}?</p>
       <div className="option-list">

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { calcAmiBracket } from '../../../lib/ami';
+import { getIncomeRanges } from '../../../lib/ami';
 import type { PayPeriod } from '../../../lib/ami';
 import type { AmiBracket } from '../../../lib/types';
 
@@ -13,15 +13,14 @@ interface IncomeInputProps {
 }
 
 const PERIODS: { value: PayPeriod; labelEn: string }[] = [
-  { value: 'weekly', labelEn: 'Weekly / Semanal' },
+  { value: 'weekly',   labelEn: 'Weekly / Semanal' },
   { value: 'biweekly', labelEn: 'Every 2 weeks / Cada 2 semanas' },
-  { value: 'monthly', labelEn: 'Monthly / Mensual' },
-  { value: 'yearly', labelEn: 'Yearly / Anual' },
+  { value: 'monthly',  labelEn: 'Monthly / Mensual' },
+  { value: 'yearly',   labelEn: 'Yearly / Anual' },
 ];
 
 export default function IncomeInput({ questionEn, questionEs, familySize, onChange, onBack, onSkip }: IncomeInputProps) {
   const [period, setPeriod] = useState<PayPeriod | null>(null);
-  const [amount, setAmount] = useState('');
 
   if (!period) {
     return (
@@ -46,35 +45,26 @@ export default function IncomeInput({ questionEn, questionEs, familySize, onChan
     );
   }
 
-  const n = parseFloat(amount.replace(/[^0-9.]/g, ''));
+  const ranges = getIncomeRanges(period, familySize);
+  const periodLabel = PERIODS.find(p => p.value === period)?.labelEn ?? period;
+
   return (
     <div className="wizard-step">
       <p className="question-en">{questionEn}</p>
       <p className="question-es">{questionEs}</p>
-      <p className="sub-question">Total from all earners in your household: / Total de todos los que trabajan en el hogar:</p>
-      <div className="amount-input">
-        <span className="currency">$</span>
-        <input
-          type="number"
-          inputMode="decimal"
-          min="0"
-          value={amount}
-          onChange={e => setAmount(e.target.value)}
-          placeholder="0"
-          autoFocus
-        />
+      <p className="sub-question">{periodLabel} — select the closest range: / Seleccione el rango más cercano:</p>
+      <div className="option-list">
+        {ranges.map(r => (
+          <button key={r.bracket} className="btn-option" onClick={() => onChange(r.bracket)}>
+            <span>{r.labelEn}</span>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{r.labelEs}</span>
+          </button>
+        ))}
       </div>
       <div className="step-actions">
         <button className="btn-ghost" onClick={() => setPeriod(null)}>Back / Atrás</button>
         <button className="btn-ghost" onClick={onSkip}>
           Don't know / Prefer not to say / No sé / Prefiero no responder
-        </button>
-        <button
-          className="btn-primary"
-          onClick={() => { if (!isNaN(n) && n > 0) onChange(calcAmiBracket(n, period, familySize)); }}
-          disabled={isNaN(n) || n <= 0}
-        >
-          Next / Siguiente
         </button>
       </div>
     </div>
