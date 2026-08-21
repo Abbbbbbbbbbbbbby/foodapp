@@ -8,6 +8,7 @@ import ResultsList from '../components/enter/ResultsList';
 import FamilySelectScreen from '../components/enter/FamilySelectScreen';
 import LogVisitScreen from '../components/enter/LogVisitScreen';
 import HowManyFamilies from '../components/enter/HowManyFamilies';
+import ConsentScreen from '../components/enter/ConsentScreen';
 import ProxyQuestion from '../components/enter/ProxyQuestion';
 import Wizard from '../components/wizard/Wizard';
 import SummaryScreen, { type SummaryFamily } from '../components/enter/SummaryScreen';
@@ -18,6 +19,7 @@ type EnterView =
   | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[] }
   | { type: 'log-visit'; families: FamilySearchResult[]; current: number }
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
+  | { type: 'consent'; familyCount: number; searchName: string; searchPhone: string | null }
   | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
   | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
   | { type: 'done'; families: SummaryFamily[]; error?: string };
@@ -125,10 +127,15 @@ export default function EnterPage() {
 
   function handleHowMany(count: number) {
     if (view.type !== 'how-many') return;
+    setView({ type: 'consent', familyCount: count, searchName: view.searchName, searchPhone: view.searchPhone });
+  }
+
+  function handleConsentContinue() {
+    if (view.type !== 'consent') return;
     setView({
       type: 'proxy-question',
       familyIndex: 0,
-      total: count,
+      total: view.familyCount,
       prefillName: view.searchName,
       prefillPhone: view.searchPhone,
     });
@@ -285,6 +292,16 @@ export default function EnterPage() {
         <HowManyFamilies
           onSelect={handleHowMany}
           onBack={() => setView({ type: 'lookup' })}
+        />
+      )}
+      {view.type === 'consent' && (
+        <ConsentScreen
+          onContinue={handleConsentContinue}
+          onBack={() => {
+            if (view.type === 'consent') {
+              setView({ type: 'how-many', searchName: view.searchName, searchPhone: view.searchPhone });
+            }
+          }}
         />
       )}
       {view.type === 'proxy-question' && (
