@@ -4,6 +4,7 @@ import { realClient, startLogin, handleCallback, logout, requireAuth, type AuthC
 import { LoginPage, DeniedPage, HomePage, EventsPage, EventDetailPage } from './views/pages';
 import { countErrorsLast24h, listEvents, getEvent, getBreadcrumbs, exportEvents, type EventFilters } from './db';
 import { toCsv } from './csv';
+import { utcToAzLocalInputValue } from './tz';
 
 type App = { Bindings: AdminEnv; Variables: { user: string } };
 
@@ -45,7 +46,9 @@ export function buildApp(clientFactory: (env: AdminEnv) => AuthClient = realClie
 
   app.get('/', async (c) => {
     const errorCount = await countErrorsLast24h(c.env.DB);
-    const from = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    // The "from" value feeds a <input type="datetime-local"> on the events
+    // page, so it must be an AZ-local wall-time string, not raw UTC ISO.
+    const from = utcToAzLocalInputValue(new Date(Date.now() - 24 * 3600 * 1000).toISOString());
     return c.html(<HomePage user={c.var.user} errorCount={errorCount} from={from} />);
   });
 
@@ -56,6 +59,8 @@ export function buildApp(clientFactory: (env: AdminEnv) => AuthClient = realClie
     deviceId: c.req.query('device_id') || undefined,
     from: c.req.query('from') || undefined,
     to: c.req.query('to') || undefined,
+    sort: c.req.query('sort') || undefined,
+    dir: c.req.query('dir') || undefined,
   });
 
   app.get('/events', async (c) => {
@@ -65,9 +70,12 @@ export function buildApp(clientFactory: (env: AdminEnv) => AuthClient = realClie
     // safe integer; anything else (non-finite, NaN, float, negative) is page 1.
     const pageRaw = Number(c.req.query('page'));
     const page = Number.isSafeInteger(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
-    const { rows, hasNext } = await listEvents(c.env.DB, filters, page);
+    // Column-visibility is a display-only, server-round-tripped query flag —
+    // it never touches the DB query or the export shape (DESIGN.md).
+    const showAll = c.req.query('all') === '1';
+    const { rows, hasNext, droppedFrom, droppedTo } = await listEvents(c.env.DB, filters, page);
     const query = new URL(c.req.url).searchParams.toString();
-    return c.html(<EventsPage user={c.var.user} rows={rows} hasNext={hasNext} page={page} filters={filters} query={query} />);
+    return c.html(<EventsPage user={c.var.user} rows={rows} hasNext={hasNext} page={page} filters={filters} query={query} showAll={showAll} droppedFrom={droppedFrom} droppedTo={droppedTo} />);
   });
 
   // Registered before /events/:id so ".csv" never matches as an id.

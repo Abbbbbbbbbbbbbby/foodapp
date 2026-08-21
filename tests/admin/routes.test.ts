@@ -47,6 +47,16 @@ async function clearEvents() {
   await e().DB.prepare('DELETE FROM client_events').run();
 }
 
+async function clearUsers() {
+  await e().DB.prepare('DELETE FROM users').run();
+}
+
+async function seedUser(id: string, name: string, phone: string) {
+  await e().DB.prepare(
+    `INSERT INTO users (id, name, phone, role, active, self_registered) VALUES (?, ?, ?, 'volunteer', 1, 1)`
+  ).bind(id, name, phone).run();
+}
+
 interface SeedRow {
   id: string; session_id?: string; device_id?: string; seq?: number | null;
   level?: string; kind?: string; message?: string | null;
@@ -301,6 +311,184 @@ describe('response hardening + edge cases', () => {
   });
 });
 
+describe('volunteer identity (issue #17 — LEFT JOIN users)', () => {
+  beforeEach(async () => { await clearEvents(); await clearUsers(); });
+
+  it('shows the joined volunteer name/phone on the events table and detail page', async () => {
+    await seedUser('vol-1', 'Rachel', '4805551234');
+    await seed([{ id: 'evt-with-vol', user_id: 'vol-1' }]);
+    const list = await (await authedGet('/events')).text();
+    expect(list).toContain('Rachel');
+    expect(list).toContain('4805551234');
+    const detail = await (await authedGet('/events/evt-with-vol')).text();
+    expect(detail).toContain('Rachel');
+  });
+
+  it('renders "not signed in" (never a blank cell) when user_id is null', async () => {
+    await seed([{ id: 'evt-no-vol', user_id: null }]);
+    const list = await (await authedGet('/events')).text();
+    expect(list).toContain('not signed in');
+    const detail = await (await authedGet('/events/evt-no-vol')).text();
+    expect(detail).toContain('not signed in');
+  });
+
+  it('renders "unknown volunteer" (never "not signed in") when user_id points at a deleted/missing user row', async () => {
+    // A real user_id with no matching users row is a DIFFERENT state than a
+    // null user_id — the join missed, it didn't fail to attribute. Dual-review
+    // finding: conflating the two is a false statement about identity.
+    await seed([{ id: 'evt-orphan-vol', user_id: 'no-such-user' }]);
+    const list = await (await authedGet('/events')).text();
+    expect(list).toContain('unknown volunteer');
+    expect(list).toContain('no-such-user');
+    expect(list).not.toContain('not signed in');
+    const detail = await (await authedGet('/events/evt-orphan-vol')).text();
+    expect(detail).toContain('unknown volunteer');
+  });
+});
+
+describe('column-visibility toggle (issue #17 — display-only, never touches export)', () => {
+  beforeEach(clearEvents);
+
+  it('hides low-signal columns by default and reveals them with ?all=1, without ever touching the export', async () => {
+    await seed([{ id: 'evt-cols', session_id: 'session-marker-xyz' }]);
+    const collapsed = await (await authedGet('/events')).text();
+    expect(collapsed).not.toContain('session-marker-xyz');
+    expect(collapsed).toContain('Show all columns');
+
+    const expanded = await (await authedGet('/events?all=1')).text();
+    expect(expanded).toContain('session-marker-xyz');
+    expect(expanded).toContain('Show fewer columns');
+
+    // The export is unaffected by the toggle either way — always full.
+    const csv = await (await authedGet('/events.csv')).text();
+    expect(csv).toContain('session-marker-xyz');
+  });
+});
+
+describe('sortable columns (issue #17 — server round-trip, allowlisted)', () => {
+  beforeEach(clearEvents);
+
+  it('sorts by level ascending/descending via ?sort=level&dir=', async () => {
+    const t = Date.now();
+    await seed([
+      { id: 'sort-warn', level: 'warn', received_at: new Date(t).toISOString() },
+      { id: 'sort-error', level: 'error', received_at: new Date(t - 1000).toISOString() },
+      { id: 'sort-info', level: 'info', received_at: new Date(t - 2000).toISOString() },
+    ]);
+    const asc = await (await authedGet('/events?sort=level&dir=asc')).text();
+    expect(asc.indexOf('sort-error')).toBeLessThan(asc.indexOf('sort-info'));
+    expect(asc.indexOf('sort-info')).toBeLessThan(asc.indexOf('sort-warn'));
+
+    const desc = await (await authedGet('/events?sort=level&dir=desc')).text();
+    expect(desc.indexOf('sort-warn')).toBeLessThan(desc.indexOf('sort-info'));
+  });
+
+  it('an unrecognized sort key falls back to the default (received_at desc) rather than erroring', async () => {
+    const t = Date.now();
+    await seed([
+      { id: 'fallback-old', received_at: new Date(t - 5000).toISOString() },
+      { id: 'fallback-new', received_at: new Date(t).toISOString() },
+    ]);
+    const res = await authedGet('/events?sort=not_a_real_column; DROP TABLE users;--');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body.indexOf('fallback-new')).toBeLessThan(body.indexOf('fallback-old'));
+  });
+});
+
+describe('AZ date filter end-to-end (issue #17)', () => {
+  beforeEach(clearEvents);
+
+  it('a datetime-local from/to pair filters by Arizona wall time, not raw UTC', async () => {
+    // 2026-08-19 14:00 AZ = 21:00 UTC. Seed one row just inside, one just
+    // outside, an AZ-local [13:00, 15:00) window.
+    await seed([
+      { id: 'az-inside', received_at: '2026-08-19T21:00:00.000Z' },  // 14:00 AZ
+      { id: 'az-before', received_at: '2026-08-19T19:00:00.000Z' },  // 12:00 AZ
+      { id: 'az-after', received_at: '2026-08-19T23:00:00.000Z' },   // 16:00 AZ
+    ]);
+    const res = await authedGet('/events?from=2026-08-19T13:00&to=2026-08-19T15:00');
+    const body = await res.text();
+    expect(body).toContain('az-inside');
+    expect(body).not.toContain('az-before');
+    expect(body).not.toContain('az-after');
+  });
+});
+
+describe('crash-hardening fixes from dual-review (issue #18)', () => {
+  beforeEach(clearEvents);
+
+  it('a malformed occurred_at does not crash "show all columns" — renders the raw value', async () => {
+    await seed([{ id: 'evt-bad-ts', occurred_at: 'lol not a date' }]);
+    const res = await authedGet('/events?all=1');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('lol not a date');
+  });
+
+  it('a prototype-pollution sort key falls back to the default instead of producing a 500', async () => {
+    await seed([{ id: 'evt-proto' }]);
+    for (const key of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      const res = await authedGet(`/events?sort=${key}`);
+      expect(res.status, key).toBe(200);
+    }
+  });
+
+  it('sorting by volunteer is reachable from the table header, not just the query string', async () => {
+    await seedUser('vol-sort', 'Zed', '4805559999');
+    await seed([{ id: 'evt-sortable-vol', user_id: 'vol-sort' }]);
+    const html = await (await authedGet('/events')).text();
+    expect(html).toContain('href="/events?sort=volunteer');
+  });
+
+  it('the Volunteer column is split into two independently-scannable cells (name, phone)', async () => {
+    await seedUser('vol-split', 'Wilma', '4805557777');
+    await seed([{ id: 'evt-split', user_id: 'vol-split' }]);
+    const html = await (await authedGet('/events')).text();
+    // Two distinct <td> cells, not one cell joined with a separator.
+    expect(html).toMatch(/<td><a href="\/events\/evt-split">Wilma<\/a><\/td>\s*<td class="mono"><a href="\/events\/evt-split">4805557777<\/a><\/td>/);
+    expect(html).not.toContain('Wilma · 4805557777');
+  });
+
+  it('an unparseable from/to filter is logged and surfaced as a visible warning, not silently dropped', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await seed([{ id: 'evt-filter-dropped' }]);
+    const res = await authedGet('/events?from=garbage-not-a-date');
+    const body = await res.text();
+    expect(body).toContain('could not be read');
+    expect(warn).toHaveBeenCalledWith('admin filter dropped: unparseable date', expect.objectContaining({ droppedFrom: true }));
+    // The filter was ignored, not silently narrowing — the seeded row still shows.
+    expect(body).toContain('evt-filter-dropped');
+    warn.mockRestore();
+  });
+
+  it('a calendar-invalid date (Feb 30) is rejected rather than silently rolling to a different date', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await seed([{ id: 'evt-feb30', received_at: '2026-02-15T10:00:00.000Z' }]);
+    const res = await authedGet('/events?from=2026-02-30T10:00');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('could not be read');
+    warn.mockRestore();
+  });
+
+  it('the Export CSV link never carries a stale page number', async () => {
+    await seed(Array.from({ length: 51 }, (_, i) => ({ id: `evt-pg-${i}` })));
+    const html = await (await authedGet('/events?page=2')).text();
+    expect(html).not.toContain('/events.csv?page=2');
+  });
+
+  it('pager and sort-order copy reflect a non-time active sort instead of a stale "Newest first"', async () => {
+    await seed([
+      { id: 'evt-sort-copy-a', level: 'error' },
+      { id: 'evt-sort-copy-b', level: 'warn' },
+    ]);
+    const html = await (await authedGet('/events?sort=level&dir=asc')).text();
+    expect(html).not.toContain('Newest first');
+    expect(html).toContain('Sorted by level (ascending)');
+  });
+});
+
 describe('CSV export', () => {
   beforeEach(clearEvents);
 
@@ -333,7 +521,7 @@ describe('CSV export', () => {
 
     await clearEvents();
     const empty = await (await authedGet('/events.csv')).text();
-    expect(empty.trim()).toBe('id,received_at,occurred_at,user_id,session_id,device_id,seq,level,kind,route,wizard_step,view_type,message,stack,user_agent,online,app_version,extra');
+    expect(empty.trim()).toBe('id,received_at,occurred_at,user_id,session_id,device_id,seq,level,kind,route,wizard_step,view_type,message,stack,user_agent,online,app_version,extra,volunteer_name,volunteer_phone');
   });
 
   it('a byte-budget truncation is distinguishable from a row-cap truncation', async () => {

@@ -26,6 +26,17 @@ const STYLE = `
   pre { background: #f4f4f4; padding: 10px; overflow-x: auto; border: 1px solid #ddd; }
   .truncate { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .denied { color: #a33; }
+  .warning { color: #a33; background: #fdf0f0; border: 1px solid #e5b8b8; border-radius: 4px; padding: 8px 12px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .empty { text-align: center; color: #777; padding: 40px 0; }
+  input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible {
+    outline: 2px solid #1d3557; outline-offset: 1px;
+  }
+  /* The default navy outline above is invisible against the header's own
+     navy background — override to a light color for anything focusable in it. */
+  header a:focus-visible, header button:focus-visible {
+    outline: 2px solid #fff; outline-offset: 1px;
+  }
 `;
 
 export function Layout(props: { title: string; user?: string; children: Child }) {

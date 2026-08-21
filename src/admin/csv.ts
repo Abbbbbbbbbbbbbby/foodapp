@@ -1,4 +1,4 @@
-import { EVENT_COLUMNS, type ClientEventRow } from './db';
+import { EXPORT_COLUMNS, type ClientEventRow } from './db';
 
 // RFC 4180 quoting plus an Excel formula-injection guard. Every field here is
 // attacker-controlled (ingest is unauthenticated), so the guard follows the
@@ -29,12 +29,12 @@ export type TruncationReason = 'none' | 'row-cap' | 'byte-budget';
 export function toCsv(
   rows: ClientEventRow[], truncatedByCap: boolean
 ): { csv: string; rowsWritten: number; reason: TruncationReason } {
-  const lines = [EVENT_COLUMNS.join(',')];
+  const lines = [EXPORT_COLUMNS.join(',')];
   let chars = lines[0].length;
   let rowsWritten = 0;
   let truncatedByBytes = false;
   for (const row of rows) {
-    const line = EVENT_COLUMNS.map(col => csvCell(row[col])).join(',');
+    const line = EXPORT_COLUMNS.map(col => csvCell(row[col])).join(',');
     if (chars + line.length > MAX_CSV_CHARS) {
       truncatedByBytes = true;
       break;
