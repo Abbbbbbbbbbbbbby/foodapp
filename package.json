@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --local-upstream 127.0.0.1",
     "build": "npm run pwa:build",
     "deploy": "npm run pwa:build && wrangler deploy",
     "test": "vitest run",
@@ -18,14 +18,20 @@
     "pwa:build": "vite build --config src/pwa/vite.config.ts && node scripts/inject-precache.mjs",
     "generate-types": "wrangler types",
     "test:ui": "vitest run --config vitest.ui.config.ts",
-    "e2e:server": "npm run build && wrangler d1 migrations apply foodapp --local && wrangler dev --port 8787 --var ENVIRONMENT:test --var JWT_SECRET:e2e-local-secret --var TWILIO_ACCOUNT_SID:x --var TWILIO_AUTH_TOKEN:x --var TWILIO_PHONE_NUMBER:0000000000",
+    "e2e:server": "npm run build && wrangler d1 migrations apply foodapp --local && wrangler dev --local-upstream 127.0.0.1 --port 8787 --var ENVIRONMENT:test --var JWT_SECRET:e2e-local-secret --var TWILIO_ACCOUNT_SID:x --var TWILIO_AUTH_TOKEN:x --var TWILIO_PHONE_NUMBER:0000000000",
     "test:e2e": "playwright test",
-    "test:pwa:coverage": "vitest run --config vitest.pwa.config.ts --coverage"
+    "test:pwa:coverage": "vitest run --config vitest.pwa.config.ts --coverage",
+    "admin:dev": "wrangler dev --local-upstream 127.0.0.1 -c wrangler.admin.jsonc --port 8788 --var FOODBOX_ADMIN_SESSION_SECRET:dev-secret",
+    "test:admin": "vitest run --config vitest.admin.config.ts"
   },
   "dependencies": {
+    "@openauthjs/openauth": "^0.4.3",
+    "hono": "^4.6.14",
+    "jose": "^6.2.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.2",
+    "valibot": "^1.4.2",
     "whatwg-fetch": "^3.6.20"
   },
   "devDependencies": {
@@ -47,5 +53,8 @@
     "vite": "^8.2.1",
     "vitest": "^4.1.10",
     "wrangler": "^4.121.0"
+  },
+  "overrides": {
+    "jose": "$jose"
   }
 }

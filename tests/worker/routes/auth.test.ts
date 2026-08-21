@@ -1,5 +1,5 @@
 import { env, exports as workerExports } from 'cloudflare:workers';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createOtp } from '../../../src/worker/otp';
 import { buildSession, createSession } from '../../../src/worker/auth';
 import type { Env } from '../../../src/worker/schema';
@@ -243,7 +243,10 @@ describe('GET /api/test/latest-otp — production gate', () => {
     await seedUser('4805559999');
     await createOtp(e.DB, '4805559999');
 
-    const req = new Request('https://example.com/api/test/latest-otp/4805559999');
+    // Positive control uses a LOCAL hostname: the route is host-gated in
+    // addition to ENVIRONMENT-gated (a dashboard var flip must not expose
+    // live OTPs on a public hostname).
+    const req = new Request('http://127.0.0.1/api/test/latest-otp/4805559999');
     // null = fell through to the router's 404 — the OTP never leaves the DB.
     // A regression here exposes every live login code by phone number.
     for (const environment of ['production', 'staging', '', undefined] as const) {
@@ -255,5 +258,18 @@ describe('GET /api/test/latest-otp — production gate', () => {
     // gated assertions above exercised a real, working endpoint.
     const open = await handleAuthRoutes(req, { ...e, ENVIRONMENT: 'test' }, '/api/test/latest-otp/4805559999');
     expect(open?.status).toBe(200);
+  });
+
+  it('is unreachable on a non-local hostname even when ENVIRONMENT is "test"', async () => {
+    const { handleAuthRoutes } = await import('../../../src/worker/routes/auth');
+    const e = env as unknown as Env;
+    await seedUser('4805559999');
+    await createOtp(e.DB, '4805559999');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const req = new Request('https://example.com/api/test/latest-otp/4805559999');
+    const denied = await handleAuthRoutes(req, { ...e, ENVIRONMENT: 'test' }, '/api/test/latest-otp/4805559999');
+    expect(denied).toBeNull(); // falls through to the router's 404
+    expect(warn).toHaveBeenCalledWith('test route denied on host', 'example.com');
+    warn.mockRestore();
   });
 });

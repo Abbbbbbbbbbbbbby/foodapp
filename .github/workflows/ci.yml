@@ -29,8 +29,14 @@ jobs:
       - name: PWA typecheck
         run: npx tsc --noEmit -p src/pwa/tsconfig.json
 
+      - name: Admin typecheck
+        run: npx tsc --noEmit -p src/admin/tsconfig.json
+
       - name: Worker tests
         run: npx vitest run
+
+      - name: Admin worker tests
+        run: npm run test:admin
 
       - name: PWA unit tests (with enforced coverage floor)
         run: npm run test:pwa:coverage

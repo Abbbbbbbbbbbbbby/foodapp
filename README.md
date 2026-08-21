@@ -2,7 +2,7 @@
 
 Check-in app for the Creighton Community Foundation hunger-relief food box line. Volunteers sign in with their phone number, look up or register families as cars come through, and record each visit and bag count. Built to keep working when the WiFi doesn't.
 
-**Live (production):** https://foodbox-data-app.jeff-be7.workers.dev
+**Live (production):** https://foodboxdata.creightoncommunityfoundation.org (the old workers.dev alias stays active until a follow-up PR disables it)
 
 ## What the program does
 
@@ -43,7 +43,7 @@ When any write fails for network reasons it is queued in IndexedDB with an idemp
 
 ## Architecture
 
-One Cloudflare Worker serves both the API and the built PWA:
+Two Cloudflare Workers share one D1 database. The main worker (`foodbox-data-app`, this table) serves the volunteer API and the built PWA; a second, separate worker (`foodbox-admin`, `src/admin/`, `wrangler.admin.jsonc`) serves the desktop admin console — see the Admin console section below. The main worker:
 
 | Layer | Where | What it does |
 |---|---|---|
@@ -88,11 +88,11 @@ Cloudflare Workers Builds (git integration)
    npx wrangler deploy
    |
    v
-production at foodbox-data-app.jeff-be7.workers.dev
+production at foodboxdata.creightoncommunityfoundation.org
 ```
 
 - Every push to `main` deploys to production. Branch pushes get preview builds.
-- GitHub Actions run in parallel as gates: `ci.yml` (typechecks + the four unit suites, with an enforced coverage floor on `src/pwa/lib`) and `e2e.yml` (the three Playwright journeys) on every PR and main push.
+- GitHub Actions run in parallel as gates: `ci.yml` (typechecks + the five unit suites, with an enforced coverage floor on `src/pwa/lib`) and `e2e.yml` (the Playwright journeys + the admin console smoke) on every PR and main push.
 - If a Workers Build fails with a transient Cloudflare error (for example D1 binding error 10021, "try again later"), retry it from the dashboard build page, or via the Builds API: create a manual build on the trigger with `branch: "main"` (a short commit hash fails at clone; use the full hash or the branch).
 - Manual deploy, rarely needed: `npm run deploy`.
 
@@ -106,7 +106,8 @@ Run the suite that matches what you touched:
 | `npm run test:pwa` | Offline queue, directory cache, flush engine (fake-indexeddb) | tests/pwa/ |
 | `npm run test:ui` | React components (Testing Library + jsdom) | tests/pwa-ui/ |
 | `npm run test:scripts` | Build tooling (precache injector, backfill parity) | tests/scripts/ |
-| `npm run test:e2e` | Three full journeys in Chromium against the real stack: online check-in, offline queue-and-sync, offline returning household | tests/e2e/ |
+| `npm run test:admin` | foodbox-admin worker: auth assertions, sessions, routes, CSV | tests/admin/ |
+| `npm run test:e2e` | Full journeys against the real stack (Chromium + WebKit), plus the admin console smoke (`admin-chromium` project, second wrangler dev on :8788) | tests/e2e/ |
 
 The e2e harness builds the app, applies migrations to local D1, and boots `wrangler dev` with `ENVIRONMENT=test`, which enables a test-only OTP-reading endpoint and relaxes the global (not per-phone) SMS rate caps. Neither exists in production, and there are tests proving it.
 
@@ -131,7 +132,7 @@ If `/api/*` returns empty 404s under wrangler dev, delete `.wrangler/deploy/` (a
 
 ## Database migrations
 
-Numbered files in `migrations/`, currently 0001 through 0009. Never edit an applied migration; add a new numbered file. Local/test environments apply them automatically where needed. Production applies are manual and deliberate:
+Numbered files in `migrations/`, currently 0001 through 0010. Never edit an applied migration; add a new numbered file. Local/test environments apply them automatically where needed. Production applies are manual and deliberate:
 
 ```sh
 npx wrangler d1 migrations apply foodapp --remote
@@ -155,6 +156,19 @@ Caveats for a future consumer: events delivered via `navigator.sendBeacon` (page
 - **The offline directory caches the family roster on shared devices.** Same not-PII decision; SMS-gated auth is still required to fetch it.
 - **Adopting another user's held queue entries is allowed** behind a deliberate two-click flow, because a deactivated owner must not strand data forever. Attribution accuracy is traded for the data, explicitly.
 - **Merges never lose replay-ability.** Both idempotency keys and old family ids get aliases to the surviving record.
+- **Public-hostname abuse controls (issue #13), layered:** KV rate caps per phone, per IP (`CF-Connecting-IP`; send 15/hr, verify 60/hr, client-events 4000/hr), and global; cross-origin pre-auth POSTs with an unlisted `Origin` header are rejected 403 before any handler runs, and auth POSTs must be `application/json`; client-event identifier fields are bounded at ingest; the test-only routes are host-gated to localhost on top of the `ENVIRONMENT` gate; a zone-level WAF rate-limiting rule fronts `/api/auth/*`. Accepted, deliberately: login's 404 response is a phone-enumeration oracle (the PWA's UX routes on it; the data posture tolerates it). Every rejection path logs before rejecting.
+
+## Admin console (foodbox-admin)
+
+A separate desktop-only Worker at **https://admin.foodboxdata.creightoncommunityfoundation.org** (source `src/admin/`, config `wrangler.admin.jsonc`). Server-rendered Hono pages: a home page with the errors-in-the-last-24h count, and a Client Events viewer over the `client_events` data contract above — filters (level, kind, user, device, time window), 50-row pages, per-event detail with the preceding 20 same-session breadcrumbs, and a CSV export (capped at 2000 rows; a truncated export says so in its own last line).
+
+**Who can log in:** any CCF Google Workspace account, via the CCF OpenAuth issuer in domain mode (`auth.creightoncommunityfoundation.org`). Non-CCF Google accounts are rejected by the **issuer itself** (its unauthorized page — they never reach this worker). To grant an external collaborator access, add them to the issuer's allowlist (OpenAuthJS repo, `allowedEmails`); the console accepts `allowlist`-basis subjects from any provider and rejects `group_membership` subjects outright.
+
+**Posture:** the console only ever SELECTs from the shared `foodapp` D1 database — writes stay in the PWA worker (enforced by convention and review; never run `d1 migrations`/`d1 execute` with `-c wrangler.admin.jsonc`). It has no access to the PWA's session KV or JWT secret. Sessions are locally-signed 8h cookies minted from `FOODBOX_ADMIN_SESSION_SECRET` (a per-worker wrangler secret); without the secret the worker serves 503 everywhere except `/healthz`.
+
+**Deploys:** a second Workers Builds configuration on this repo — production deploy `npx wrangler deploy -c wrangler.admin.jsonc`, non-production branch command `npx wrangler versions upload -c wrangler.admin.jsonc`. Local dev: `npm run admin:dev` (port 8788, a throwaway dev secret).
+
+Deviations from issue #13 as filed, all deliberate: CSV instead of XLSX (frozen header/autofilter are XLSX-only; the console has live filters), a wrangler secret instead of Secrets Store (per-worker secrets are the standing convention), no live issuer stub in Playwright (the callback is tested with an injected fake client; the real OAuth round-trip is a manual first-deploy check), and the non-CCF denial happens at the issuer rather than on our denied page.
 
 ## Where to go next
 

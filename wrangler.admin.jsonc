@@ -1,0 +1,41 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // foodbox-admin: desktop admin console (issue #13). Server-rendered Hono
+  // worker, OpenAuth domain-mode gated, READ-ONLY over the shared foodapp DB.
+  "name": "foodbox-admin",
+  "main": "src/admin/index.tsx",
+  // jose on the unenv runtime needs compatibility_date >= 2025-11-01.
+  "compatibility_date": "2026-07-22",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Workers Custom Domain — wrangler creates DNS + the exact-host Advanced
+  // Certificate at deploy.
+  "routes": [{ "pattern": "admin.foodboxdata.creightoncommunityfoundation.org", "custom_domain": true }],
+
+  // The console lives on its custom domain only — no second guessable
+  // workers.dev hostname (the OAuth callback derives from the request host,
+  // so an extra hostname would also mint cookies for it).
+  "workers_dev": false,
+
+  "observability": { "enabled": true },
+
+  // Same production foodapp DB as the PWA worker. The console issues SELECTs
+  // only; that read-only posture is convention + review, NOT config — and
+  // wrangler defaults migrations_dir to ./migrations, so NEVER run
+  // `d1 migrations`/`d1 execute` with `-c wrangler.admin.jsonc`. Migrations
+  // always go through the root wrangler.jsonc.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "foodapp",
+      "database_id": "c99e6b1a-5a9f-416d-835a-fc947c3a472e" }
+  ],
+
+  // Deliberately NOT bound: SESSIONS KV and JWT_SECRET — this worker must be
+  // unable to mint or read PWA sessions. Its own session secret is the
+  // FOODBOX_ADMIN_SESSION_SECRET wrangler secret (worker 503s without it).
+  "vars": {
+    "ENVIRONMENT": "production",
+    "AUTH_DOMAIN": "creightoncommunityfoundation.org",
+    "OPENAUTH_ISSUER": "https://auth.creightoncommunityfoundation.org",
+    "OPENAUTH_CLIENT_ID": "foodbox-admin"
+  }
+}

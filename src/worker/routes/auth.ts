@@ -4,6 +4,7 @@ import { buildSession, createSession, destroySession } from '../auth';
 import { getAuthContext } from '../middleware';
 import { normalizePhone } from '../db';
 import { checkOtpSendLimit, checkVerifyLimit } from '../ratelimit';
+import { readBodyCapped } from '../body';
 
 // E2E-only: lets the Playwright harness read the OTP that would have gone
 // out by SMS. Gated on ENVIRONMENT === 'test' — in production the var is
@@ -38,23 +39,66 @@ export async function handleAuthRoutes(
   }
   const testOtpMatch = pathname.match(/^\/api\/test\/latest-otp\/([0-9]+)$/);
   if (testOtpMatch && request.method === 'GET' && env.ENVIRONMENT === 'test') {
+    // Belt-and-suspenders host gate: even with ENVIRONMENT=test (one env-var
+    // flip away in the dashboard), this OTP-reading route must never answer
+    // on a public hostname. Log before falling through — rejected input must
+    // be visible (never silently dropped).
+    if (!isLocalHostname(request)) {
+      console.warn('test route denied on host', new URL(request.url).hostname);
+      return null;
+    }
     return handleTestLatestOtp(env, testOtpMatch[1]);
   }
   return null;
 }
 
-async function handleLogin(request: Request, env: Env): Promise<Response> {
-  let body: { phone?: string };
+
+// Test-only routes answer exclusively on local hostnames, regardless of
+// ENVIRONMENT. Exported for the client-events test route to share.
+export function isLocalHostname(request: Request): boolean {
+  const hostname = new URL(request.url).hostname;
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+}
+
+// Per-IP rate-limit dimension. Omitted (undefined) in the test environment:
+// local .wrangler/state KV persists across e2e runs, and every local request
+// shares one bucket, so repeated runs would eventually 429.
+function clientIp(request: Request, env: Env): string | undefined {
+  if (env.ENVIRONMENT === 'test') return undefined;
+  return request.headers.get('CF-Connecting-IP') ?? 'unknown';
+}
+
+
+// Auth request bodies are tiny (a phone, maybe a 6-digit code). Cap the read
+// hard so a pre-auth client can't buffer a huge body into the isolate before
+// the handler runs — the streamed cap aborts instead of buffering-then-checking.
+const MAX_AUTH_BODY_BYTES = 4096;
+async function readJsonCapped<T extends object>(request: Request): Promise<T | null | 'too_large'> {
+  const raw = await readBodyCapped(request, MAX_AUTH_BODY_BYTES);
+  if (raw === null) return 'too_large';
   try {
-    body = await request.json();
+    return JSON.parse(raw) as T;
   } catch {
+    return null;
+  }
+}
+
+async function handleLogin(request: Request, env: Env): Promise<Response> {
+  const parsed = await readJsonCapped<{ phone?: string }>(request);
+  if (parsed === 'too_large') {
+    console.warn('auth body rejected', 'too large', request.url);
+    return Response.json({ error: 'Body too large' }, { status: 413 });
+  }
+  if (parsed === null) {
+    console.warn('auth body rejected', 'invalid json', request.url);
     return Response.json({ error: 'Invalid JSON' }, { status: 400 });
   }
-  const phone = normalizePhone(body.phone ?? null);
+  const phone = normalizePhone(parsed.phone ?? null);
   if (!phone) {
+    console.warn('auth body rejected', 'phone required', request.url);
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
-  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test' });
+  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test', ip: clientIp(request, env) });
   if (!limit.allowed) {
     return Response.json({ error: 'Too many code requests. Try again later.' }, { status: 429 });
   }
@@ -72,21 +116,26 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleRegister(request: Request, env: Env): Promise<Response> {
-  let body: { name?: string; phone?: string };
-  try {
-    body = await request.json();
-  } catch {
+  const parsed = await readJsonCapped<{ name?: string; phone?: string }>(request);
+  if (parsed === 'too_large') {
+    console.warn('auth body rejected', 'too large', request.url);
+    return Response.json({ error: 'Body too large' }, { status: 413 });
+  }
+  if (parsed === null) {
+    console.warn('auth body rejected', 'invalid json', request.url);
     return Response.json({ error: 'Invalid JSON' }, { status: 400 });
   }
-  const name = body.name?.trim();
-  const phone = normalizePhone(body.phone ?? null);
+  const name = parsed.name?.trim();
+  const phone = normalizePhone(parsed.phone ?? null);
   if (!name) {
+    console.warn('auth body rejected', 'name required', request.url);
     return Response.json({ error: 'name is required' }, { status: 400 });
   }
   if (!phone) {
+    console.warn('auth body rejected', 'phone required', request.url);
     return Response.json({ error: 'phone is required' }, { status: 400 });
   }
-  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test' });
+  const limit = await checkOtpSendLimit(env.SESSIONS, phone, { skipGlobal: env.ENVIRONMENT === 'test', ip: clientIp(request, env) });
   if (!limit.allowed) {
     return Response.json({ error: 'Too many code requests. Try again later.' }, { status: 429 });
   }
@@ -115,18 +164,22 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleVerify(request: Request, env: Env): Promise<Response> {
-  let body: { phone?: string; code?: string };
-  try {
-    body = await request.json();
-  } catch {
+  const parsed = await readJsonCapped<{ phone?: string; code?: string }>(request);
+  if (parsed === 'too_large') {
+    console.warn('auth body rejected', 'too large', request.url);
+    return Response.json({ error: 'Body too large' }, { status: 413 });
+  }
+  if (parsed === null) {
+    console.warn('auth body rejected', 'invalid json', request.url);
     return Response.json({ error: 'Invalid JSON' }, { status: 400 });
   }
-  const phone = normalizePhone(body.phone ?? null);
-  const code = body.code?.trim();
+  const phone = normalizePhone(parsed.phone ?? null);
+  const code = parsed.code?.trim();
   if (!phone || !code) {
+    console.warn('auth body rejected', 'phone and code required', request.url);
     return Response.json({ error: 'phone and code are required' }, { status: 400 });
   }
-  const limit = await checkVerifyLimit(env.SESSIONS, phone);
+  const limit = await checkVerifyLimit(env.SESSIONS, phone, { ip: clientIp(request, env) });
   if (!limit.allowed) {
     return Response.json({ error: 'Too many verification attempts. Try again later.' }, { status: 429 });
   }

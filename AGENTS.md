@@ -1,6 +1,6 @@
 # foodbox-data-app
 
-React PWA + Cloudflare Worker for food box line check-in. See README.md for architecture.
+React PWA + Cloudflare Worker for food box line check-in, plus a separate desktop admin console Worker (`foodbox-admin`, `src/admin/`, `wrangler.admin.jsonc`). See README.md for architecture.
 
 ## Development
 
@@ -8,6 +8,7 @@ React PWA + Cloudflare Worker for food box line check-in. See README.md for arch
 npm run dev          # wrangler dev on :8787 (serves dist/pwa, so build first)
 npm run build        # Vite build + service-worker precache injection
 npm run pwa:dev      # Vite dev server, frontend-only hot reload
+npm run admin:dev    # admin console worker on :8788 (throwaway dev session secret)
 ```
 
 Apply local migrations before testing API routes: `wrangler d1 migrations apply foodapp --local`
@@ -17,6 +18,7 @@ Apply local migrations before testing API routes: `wrangler d1 migrations apply 
 - `npm test`: worker/API (`tests/worker/`)
 - `npm run test:pwa`: offline queue and client libs (`tests/pwa/`)
 - `npm run test:ui`: React components (`tests/pwa-ui/`)
+- `npm run test:admin`: admin console worker (`tests/admin/`)
 - `npm run test:scripts`: build tooling (`tests/scripts/`)
 - `npm run test:e2e`: Playwright full-stack smoke (`tests/e2e/`)
 

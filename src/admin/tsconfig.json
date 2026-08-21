@@ -1,0 +1,13 @@
+{
+  // Admin worker (foodbox-admin) — hono/jsx needs its own jsx settings, and
+  // include/exclude MUST be overridden here: inherited ones resolve relative
+  // to the ROOT config's directory, so without these overrides this config
+  // would check zero files and `tsc -p src/admin` could never fail.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx"
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": []
+}

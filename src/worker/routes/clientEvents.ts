@@ -1,5 +1,7 @@
 import type { Env, ClientEventKind, ClientEventLevel } from '../schema';
 import { getAuthContext } from '../middleware';
+import { isLocalHostname } from './auth';
+import { readBodyCapped } from '../body';
 import { checkClientEventLimit } from '../ratelimit';
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -44,6 +46,12 @@ export async function handleClientEventRoutes(
   }
   if (pathname === '/api/test/client-events' && request.method === 'GET') {
     if (env.ENVIRONMENT !== 'test') return Response.json({ error: 'Not found' }, { status: 404 });
+    // Same belt-and-suspenders host gate as /api/test/latest-otp: a mistaken
+    // ENVIRONMENT flip must not expose this on a public hostname.
+    if (!isLocalHostname(request)) {
+      console.warn('test route denied on host', new URL(request.url).hostname);
+      return Response.json({ error: 'Not found' }, { status: 404 });
+    }
     return handleTestList(request, env);
   }
   return null;
@@ -65,16 +73,13 @@ async function handleIngest(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'Body too large' }, { status: 400 });
   }
 
-  // Read the raw body — every rejection below logs it, so a malformed or
-  // oversized batch is never silently dropped, only rejected loudly.
-  const raw = await request.text();
-  // .length is UTF-16 code units, not bytes — this app's own bilingual
-  // (EN/ES) strings routinely contain accented characters, so measure the
-  // real wire size with TextEncoder rather than undercounting.
-  const rawBytes = new TextEncoder().encode(raw).length;
-
-  if (rawBytes > MAX_BODY_BYTES) {
-    console.error('client-events rejected', 400, raw.slice(0, 64_000));
+  // Read the raw body with a HARD byte cap enforced DURING the read — a
+  // request without Content-Length would otherwise buffer unbounded into the
+  // isolate's 128 MB before the post-read check ever ran. Every rejection
+  // below logs, so a malformed or oversized batch is never silently dropped.
+  const raw = await readBodyCapped(request, MAX_BODY_BYTES);
+  if (raw === null) {
+    console.error('client-events rejected', 400, `body exceeded ${MAX_BODY_BYTES} bytes mid-read`);
     return Response.json({ error: 'Body too large' }, { status: 400 });
   }
 
@@ -133,8 +138,12 @@ async function handleIngest(request: Request, env: Env): Promise<Response> {
   // dampens an honest client's bug; the global cap (inside
   // checkClientEventLimit) is the real backstop. All events in a batch share
   // one device_id in practice (one client, one flush) — key on the first.
-  const deviceId = typeof events[0].device_id === 'string' ? events[0].device_id : 'unknown';
-  const limit = await checkClientEventLimit(env.SESSIONS, deviceId, events.length, { skipGlobal: env.ENVIRONMENT === 'test' });
+  // Bounded to match the stored column AND to keep the KV rate-limit key
+  // under KV's 512-byte key cap — an oversized device_id would otherwise
+  // make the kv.put throw and 500 the whole batch.
+  const deviceId = (typeof events[0].device_id === 'string' ? events[0].device_id : 'unknown').slice(0, 128);
+  const ip = env.ENVIRONMENT === 'test' ? undefined : request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  const limit = await checkClientEventLimit(env.SESSIONS, deviceId, events.length, { skipGlobal: env.ENVIRONMENT === 'test', ip });
   if (!limit.allowed) {
     console.error('client-events rejected', 429, raw.slice(0, 64_000));
     return Response.json({ error: 'Rate limited' }, { status: 429 });
@@ -147,12 +156,15 @@ async function handleIngest(request: Request, env: Env): Promise<Response> {
        route, wizard_step, view_type, message, stack, user_agent, online, app_version, extra)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    e.id,
+    // Identifier fields are bounded too — honest ids are 36-char UUIDs, but
+    // these are client-supplied and otherwise let one event approach the
+    // 256 KiB body cap, which would blow up any later buffered export.
+    truncate(e.id, 128),
     now,
-    typeof e.occurred_at === 'string' ? e.occurred_at : null,
+    truncate(e.occurred_at, 64),
     userId,
-    e.session_id,
-    e.device_id,
+    truncate(e.session_id, 128),
+    truncate(e.device_id, 128),
     typeof e.seq === 'number' ? e.seq : null,
     e.level,
     e.kind,

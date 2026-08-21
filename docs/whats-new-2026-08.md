@@ -36,8 +36,8 @@ There are now 289 automated tests plus three full "robot volunteer" browser jour
 
 ## Where things stand
 
-- **Production**: https://foodbox-data-app.jeff-be7.workers.dev — live, real SMS, real data.
-- **Database**: migrations 0001 through 0009 are applied in production.
+- **Production**: https://foodboxdata.creightoncommunityfoundation.org — live, real SMS, real data.
+- **Database**: migrations 0001 through 0010 are applied in production.
 - **Docs**: the README was rewritten and is now the real guide to the app. Start there.
 - **Issues**: #4, #6, #7, and #10 are closed. **Issue #3 (CSV export) is open and assigned to you** — it is the natural first thing to pick back up, and there is a fresh comment on it with context.
 
