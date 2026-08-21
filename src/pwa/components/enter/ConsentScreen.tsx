@@ -12,12 +12,10 @@ export default function ConsentScreen({ onContinue, onBack }: ConsentScreenProps
       </div>
 
       <p style={{ fontSize: 16, lineHeight: 1.6 }}>
-        Any information collected today will be kept private and used only to
-        coordinate food distribution.
+        Any information collected today will be kept private.
       </p>
       <p style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-        Toda la información recopilada hoy se mantendrá privada y se usará únicamente
-        para coordinar la distribución de alimentos.
+        Toda la información recopilada hoy se mantendrá privada.
       </p>
 
       <p style={{ fontSize: 16, lineHeight: 1.6 }}>
