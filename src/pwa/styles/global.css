@@ -1,14 +1,16 @@
 :root {
-  --bg: #121212;
-  --surface: #1e1e1e;
-  --surface-2: #2a2a2a;
-  --border: #3a3a3a;
-  --text: #f4f4f4;
-  --text-muted: #999;
-  --accent: #f5a623;
-  --accent-dark: #c47a00;
-  --danger: #e55252;
-  --success: #4caf50;
+  /* CCF Daylight theme — brand colors: PMS 130C gold (#F7A800), PMS 661C navy (#003594) */
+  --bg:          #F4F1E8;   /* warm cream ground */
+  --surface:     #FFFFFF;   /* white card surface */
+  --surface-2:   #E8E4D8;   /* off-white — inputs, secondary fills */
+  --border:      #CECABC;   /* warm neutral border */
+  --text:        #1E3266;   /* navy — readable, on-brand */
+  --text-muted:  #44588A;   /* lighter navy-blue for secondary labels */
+  --accent:      #F7A800;   /* PMS 130C — fills, underlines, button backgrounds */
+  --accent-dark: #C48500;   /* darker gold for hover / focus states */
+  --accent-text: #003594;   /* PMS 661C — accent used as text on light surfaces */
+  --danger:      #850019;   /* dark crimson — sufficient contrast on light bg */
+  --success:     #073A0B;   /* dark green — sufficient contrast on light bg */
   --radius: 10px;
   --touch: 48px;
 }
@@ -170,7 +172,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 }
 
 .app-nav-active {
-  color: var(--accent);
+  color: var(--accent-text);
   border-bottom-color: var(--accent);
   font-weight: 700;
 }
@@ -331,7 +333,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   justify-content: center;
   font-size: 18px;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-text);
   flex-shrink: 0;
   margin-right: 12px;
 }
@@ -503,7 +505,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 }
 
 .records-tab-active {
-  color: var(--accent);
+  color: var(--accent-text);
   border-bottom-color: var(--accent);
 }
 
@@ -948,7 +950,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   margin-bottom: 4px;
 }
 
-.import-stat-warn .import-stat-n { color: var(--accent); }
+.import-stat-warn .import-stat-n { color: var(--accent-text); }
 .import-stat-success .import-stat-n { color: var(--success); }
 .import-stat-label { font-size: 12px; color: var(--text-muted); }
 
@@ -967,7 +969,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   font-size: 13px;
 }
 
-.import-warnings summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.import-warnings summary { cursor: pointer; color: var(--accent-text); font-weight: 600; }
 
 .import-warning-list {
   margin-top: 10px;
