@@ -12,6 +12,22 @@ const ORDINALS_EN = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'se
 const ORDINALS_ES = ['primera', 'segunda', 'tercera', 'cuarta', 'quinta', 'sexta', 'séptima', 'octava', 'novena', 'décima'];
 function ordinalEn(i: number) { return ORDINALS_EN[i] ?? `${i + 1}th`; }
 function ordinalEs(i: number) { return ORDINALS_ES[i] ?? `${i + 1}ª`; }
+function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+function makeLabel(familyIndex: number, total: number) {
+  if (total === 1) return {
+    familyEn: 'this family',
+    familyEs: 'esta familia',
+    householdEn: 'this household',
+    householdEs: 'este hogar',
+  };
+  return {
+    familyEn: `the ${ordinalEn(familyIndex)} family`,
+    familyEs: `la ${ordinalEs(familyIndex)} familia`,
+    householdEn: `the ${ordinalEn(familyIndex)} household`,
+    householdEs: `el hogar de la ${ordinalEs(familyIndex)} familia`,
+  };
+}
 
 const YES_NO_DECLINED = [
   { value: 'yes', labelEn: 'Yes', labelEs: 'Sí' },
@@ -94,6 +110,7 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
   const [step, setStep] = useState(0);
   const [data, setData] = useState<Partial<WizardFormData>>({ ...initialData });
   const [submitting, setSubmitting] = useState(false);
+  const label = makeLabel(familyIndex, total);
 
   function set<K extends keyof WizardFormData>(key: K, value: WizardFormData[K]) {
     setData(prev => ({ ...prev, [key]: value }));
@@ -142,8 +159,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 1 && (
         <PhoneInput
-          questionEn="What is your phone number?"
-          questionEs="¿Cuál es su número de teléfono?"
+          questionEn={`What is the phone number for ${label.familyEn}?`}
+          questionEs={`¿Cuál es el número de teléfono de ${label.familyEs}?`}
           value={data.phone ?? ''}
           onChange={v => set('phone', v)}
           onNext={next}
@@ -153,8 +170,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 2 && (
         <TextInput
-          questionEn="What is your zip code?"
-          questionEs="¿Cuál es su código postal?"
+          questionEn={`What is the zip code for ${label.familyEn}?`}
+          questionEs={`¿Cuál es el código postal de ${label.familyEs}?`}
           value={data.zip_code ?? ''}
           onChange={v => set('zip_code', v)}
           onNext={next}
@@ -165,8 +182,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 3 && (
         <SelectInput
-          questionEn="What language do you prefer?"
-          questionEs="¿Qué idioma prefiere?"
+          questionEn={`What language does ${label.familyEn} prefer?`}
+          questionEs={`¿Qué idioma prefiere ${label.familyEs}?`}
           onChange={v => { set('language', v); next(); }}
           onBack={goBack}
           options={[
@@ -179,8 +196,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 4 && (
         <NumberInput
-          questionEn="How many people live in your household?"
-          questionEs="¿Cuántas personas viven en su hogar?"
+          questionEn={`How many people live in ${label.householdEn}?`}
+          questionEs={`¿Cuántas personas viven en ${label.householdEs}?`}
           onChange={v => { set('num_people', v); next(); }}
           onBack={goBack}
           options={[1, 2, 3, 4, 5, 6]}
@@ -194,8 +211,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
         const hasOverflow18 = max18 > 6;
         return (
           <NumberInput
-            questionEn="How many children under 18 live in your household?"
-            questionEs="¿Cuántos niños menores de 18 años viven en su hogar?"
+            questionEn={`How many children under 18 live in ${label.householdEn}?`}
+            questionEs={`¿Cuántos niños menores de 18 años viven en ${label.householdEs}?`}
             onChange={v => { set('num_children_under_18', v); next(); }}
             onBack={goBack}
             options={opts18}
@@ -210,8 +227,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
         const hasOverflow5 = max5 > 5;
         return (
           <NumberInput
-            questionEn="How many children under 5 live in your household?"
-            questionEs="¿Cuántos niños menores de 5 años viven en su hogar?"
+            questionEn={`How many children under 5 live in ${label.householdEn}?`}
+            questionEs={`¿Cuántos niños menores de 5 años viven en ${label.householdEs}?`}
             onChange={v => { set('num_children_under_5', v); next(); }}
             onBack={goBack}
             options={opts5}
@@ -222,8 +239,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       })()}
       {step === 7 && (
         <IncomeInput
-          questionEn="How much money does your entire household earn in a week, two weeks, a month, or a year?"
-          questionEs="¿Cuánto dinero gana en total su hogar por semana, cada dos semanas, al mes o al año?"
+          questionEn={`How much money does ${label.householdEn} earn in a week, two weeks, a month, or a year?`}
+          questionEs={`¿Cuánto dinero gana en total ${label.householdEs} por semana, cada dos semanas, al mes o al año?`}
           familySize={data.num_people ?? 1}
           onChange={v => { set('ami_bracket', v); next(); }}
           onBack={goBack}
@@ -232,8 +249,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 8 && (
         <SelectInput
-          questionEn="Does your family currently receive SNAP benefits?"
-          questionEs="¿Su familia recibe beneficios de SNAP actualmente?"
+          questionEn={`Does ${label.familyEn} currently receive SNAP benefits?`}
+          questionEs={`¿${cap(label.familyEs)} recibe beneficios de SNAP actualmente?`}
           onChange={v => { set('snap_benefits', v as YesNoDeclined); next(); }}
           onBack={goBack}
           options={YES_NO_DECLINED}
@@ -242,8 +259,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 9 && (
         <SelectInput
-          questionEn="Does anyone in your family have health insurance?"
-          questionEs="¿Alguien en su familia tiene seguro de salud?"
+          questionEn={`Does anyone in ${label.familyEn} have health insurance?`}
+          questionEs={`¿Alguien en ${label.familyEs} tiene seguro de salud?`}
           onChange={v => { set('health_insurance', v as YesNoDeclined); next(); }}
           onBack={goBack}
           options={YES_NO_DECLINED}
