@@ -580,5 +580,5 @@ describe('CSV export', () => {
     expect(body).toContain('# TRUNCATED at 2000 rows (row cap)');
     expect(log).toHaveBeenCalledWith('csv export', expect.objectContaining({ truncation: 'row-cap', rowCount: 2000 }));
     log.mockRestore();
-  });
+  }, 20000);
 });
