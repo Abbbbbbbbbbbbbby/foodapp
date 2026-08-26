@@ -6,6 +6,8 @@ interface ConsentScreenProps {
 export default function ConsentScreen({ onContinue, onBack }: ConsentScreenProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <button className="btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={onBack}>Back / Atrás</button>
+
       <div>
         <h2 style={{ fontSize: 20, marginBottom: 4 }}>Privacy Notice</h2>
         <p style={{ fontSize: 14, color: 'var(--text-muted)' }}>Aviso de privacidad</p>
@@ -25,12 +27,9 @@ export default function ConsentScreen({ onContinue, onBack }: ConsentScreenProps
         Puede negarse a responder cualquier pregunta.
       </p>
 
-      <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-        <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
-        <button className="btn-primary btn-large" style={{ flex: 1 }} onClick={onContinue}>
-          Continue / Continuar
-        </button>
-      </div>
+      <button className="btn-primary btn-large" onClick={onContinue}>
+        Continue / Continuar
+      </button>
     </div>
   );
 }

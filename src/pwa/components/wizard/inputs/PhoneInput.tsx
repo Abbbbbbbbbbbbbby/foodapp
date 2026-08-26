@@ -11,6 +11,7 @@ interface PhoneInputProps {
 export default function PhoneInput({ questionEn, questionEs, value, onChange, onNext, onBack, onSkip }: PhoneInputProps) {
   return (
     <div className="wizard-step">
+      <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
       <p className="question-en">{questionEn}</p>
       <p className="question-es">{questionEs}</p>
       <input
@@ -20,11 +21,11 @@ export default function PhoneInput({ questionEn, questionEs, value, onChange, on
         autoFocus
         placeholder="(555) 555-5555"
       />
+      <button className="btn-option" onClick={onSkip}>
+        <span>I don't have one / Prefer not to say</span>
+        <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>No tengo / Prefiero no responder</span>
+      </button>
       <div className="step-actions">
-        <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
-        <button className="btn-ghost" onClick={onSkip}>
-          I don't have one / No tengo
-        </button>
         <button className="btn-primary" onClick={onNext}>
           Next / Siguiente
         </button>

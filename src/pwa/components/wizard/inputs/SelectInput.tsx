@@ -17,6 +17,7 @@ export default function SelectInput({ questionEn, questionEs, onChange, onBack, 
   const isSpanish = language?.toLowerCase().startsWith('es');
   return (
     <div className="wizard-step">
+      <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
       <p className="question-en">{questionEn}</p>
       <p className="question-es">{questionEs}</p>
       <div className="option-list">
@@ -33,9 +34,6 @@ export default function SelectInput({ questionEn, questionEs, onChange, onBack, 
             </button>
           );
         })}
-      </div>
-      <div className="step-actions" style={{ marginTop: 8 }}>
-        <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
       </div>
     </div>
   );

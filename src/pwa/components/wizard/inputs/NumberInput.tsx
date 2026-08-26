@@ -5,13 +5,14 @@ interface NumberInputProps {
   questionEs: string;
   onChange: (v: number) => void;
   onBack: () => void;
+  onSkip?: () => void;
   options: number[];
   overflowLabel?: string;
   overflowMin?: number;
 }
 
 export default function NumberInput({
-  questionEn, questionEs, onChange, onBack, options, overflowLabel, overflowMin,
+  questionEn, questionEs, onChange, onBack, onSkip, options, overflowLabel, overflowMin,
 }: NumberInputProps) {
   const [showCustom, setShowCustom] = useState(false);
   const [custom, setCustom] = useState('');
@@ -20,6 +21,7 @@ export default function NumberInput({
     const n = parseInt(custom);
     return (
       <div className="wizard-step">
+        <button className="btn-ghost" onClick={() => setShowCustom(false)}>Back / Atrás</button>
         <p className="question-en">{questionEn}</p>
         <p className="question-es">{questionEs}</p>
         <input
@@ -31,7 +33,6 @@ export default function NumberInput({
           autoFocus
         />
         <div className="step-actions">
-          <button className="btn-ghost" onClick={() => setShowCustom(false)}>Back / Atrás</button>
           <button
             className="btn-primary"
             onClick={() => { if (!isNaN(n) && n >= overflowMin) onChange(n); }}
@@ -46,6 +47,7 @@ export default function NumberInput({
 
   return (
     <div className="wizard-step">
+      <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
       <p className="question-en">{questionEn}</p>
       <p className="question-es">{questionEs}</p>
       <div className="tap-grid">
@@ -56,9 +58,12 @@ export default function NumberInput({
           <button className="btn-tap" onClick={() => setShowCustom(true)}>{overflowLabel}</button>
         )}
       </div>
-      <div className="step-actions">
-        <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
-      </div>
+      {onSkip && (
+        <button className="btn-option" onClick={onSkip}>
+          <span>Don't know / Prefer not to say</span>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>No sé / Prefiero no responder</span>
+        </button>
+      )}
     </div>
   );
 }

@@ -16,6 +16,7 @@ export default function TextInput({
 }: TextInputProps) {
   return (
     <div className="wizard-step">
+      <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
       <p className="question-en">{questionEn}</p>
       <p className="question-es">{questionEs}</p>
       <input
@@ -25,11 +26,13 @@ export default function TextInput({
         onChange={e => onChange(e.target.value)}
         autoFocus
       />
+      {onSkip && (
+        <button className="btn-option" onClick={onSkip}>
+          <span>Don't know / Prefer not to say</span>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>No sé / Prefiero no responder</span>
+        </button>
+      )}
       <div className="step-actions">
-        <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
-        {onSkip && (
-          <button className="btn-ghost" onClick={onSkip}>Skip / Omitir</button>
-        )}
         <button
           className="btn-primary"
           onClick={onNext}

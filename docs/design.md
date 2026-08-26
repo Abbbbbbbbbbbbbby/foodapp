@@ -58,11 +58,11 @@ No custom typefaces — the app targets Safari 9 on iPad 2 (no WOFF2 guaranteed)
 
 ### Buttons
 
-`.btn-primary` — gold background (`--accent`), black text, `font-weight: 700`. Use for primary forward action.
+`.btn-primary` — gold background (`--accent`), navy text (`--text`), `font-weight: 700`. Use for primary forward action.
 
-`.btn-ghost` — transparent background, muted navy text. Use for Back / skip links. Left-aligned text.
+`.btn-ghost` — `--surface-2` background, no border, muted navy text. Use for Back navigation only. Left-aligned text.
 
-`.btn-option` — white card with border. Use for wizard answer choices. Supports two lines: English on top, Spanish muted below.
+`.btn-option` — white card with border. Use for wizard answer choices, including skip/decline options ("Don't know / Prefer not to say"). Supports two lines: English on top, Spanish muted below.
 
 `.btn-tap` — compact square tap target for numeric grids. Active state: gold background, black text.
 

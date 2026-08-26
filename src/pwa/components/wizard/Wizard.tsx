@@ -19,14 +19,10 @@ function makeLabel(familyIndex: number, total: number) {
   if (total === 1) return {
     familyEn: 'this family',
     familyEs: 'esta familia',
-    householdEn: 'this household',
-    householdEs: 'este hogar',
   };
   return {
     familyEn: `the ${ordinalEn(familyIndex)} family`,
     familyEs: `la ${ordinalEs(familyIndex)} familia`,
-    householdEn: `the ${ordinalEn(familyIndex)} household`,
-    householdEs: `el hogar de la ${ordinalEs(familyIndex)} familia`,
   };
 }
 
@@ -219,8 +215,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       )}
       {step === 4 && (
         <NumberInput
-          questionEn={`How many people live in ${label.householdEn}?`}
-          questionEs={`¿Cuántas personas viven en ${label.householdEs}?`}
+          questionEn={`How many people live in ${label.familyEn}?`}
+          questionEs={`¿Cuántas personas viven en ${label.familyEs}?`}
           onChange={v => { set('num_people', v); next(); }}
           onBack={goBack}
           options={[1, 2, 3, 4, 5, 6]}
@@ -234,10 +230,14 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
         const hasOverflow18 = max18 > 6;
         return (
           <NumberInput
-            questionEn={`How many children under 18 live in ${label.householdEn}?`}
-            questionEs={`¿Cuántos niños menores de 18 años viven en ${label.householdEs}?`}
-            onChange={v => { set('num_children_under_18', v); next(); }}
+            questionEn={`How many children under 18 live in ${label.familyEn}?`}
+            questionEs={`¿Cuántos niños menores de 18 años viven en ${label.familyEs}?`}
+            onChange={v => {
+              set('num_children_under_18', v);
+              if (v === 0) { set('num_children_under_5', 0); setStep(s => s + 2); } else { next(); }
+            }}
             onBack={goBack}
+            onSkip={() => { set('num_children_under_18', null); next(); }}
             options={opts18}
             overflowLabel={hasOverflow18 ? '7+' : undefined}
             overflowMin={hasOverflow18 ? 7 : undefined}
@@ -250,10 +250,11 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
         const hasOverflow5 = max5 > 5;
         return (
           <NumberInput
-            questionEn={`How many children under 5 live in ${label.householdEn}?`}
-            questionEs={`¿Cuántos niños menores de 5 años viven en ${label.householdEs}?`}
+            questionEn={`How many children under 5 live in ${label.familyEn}?`}
+            questionEs={`¿Cuántos niños menores de 5 años viven en ${label.familyEs}?`}
             onChange={v => { set('num_children_under_5', v); next(); }}
             onBack={goBack}
+            onSkip={() => { set('num_children_under_5', null); next(); }}
             options={opts5}
             overflowLabel={hasOverflow5 ? '6+' : undefined}
             overflowMin={hasOverflow5 ? 6 : undefined}
@@ -262,8 +263,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
       })()}
       {step === 7 && (
         <IncomeInput
-          questionEn={`How much money does ${label.householdEn} earn in a week, two weeks, a month, or a year?`}
-          questionEs={`¿Cuánto dinero gana en total ${label.householdEs} por semana, cada dos semanas, al mes o al año?`}
+          questionEn={`How much money does ${label.familyEn} earn in a week, two weeks, a month, or a year?`}
+          questionEs={`¿Cuánto dinero gana en total ${label.familyEs} por semana, cada dos semanas, al mes o al año?`}
           familySize={data.num_people ?? 1}
           onChange={v => { set('ami_bracket', v); next(); }}
           onBack={goBack}

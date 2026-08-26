@@ -37,12 +37,13 @@ button {
   touch-action: manipulation;
 }
 
-.btn-primary { background: var(--accent); color: #000; font-weight: 700; }
+.btn-primary { background: var(--accent); color: var(--text); font-weight: 700; }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
-.btn-ghost { background: transparent; color: var(--text-muted); min-height: var(--touch); padding: 8px 12px; text-align: left; }
+.btn-ghost { background: var(--surface-2); color: var(--text-muted); border: none; border-radius: var(--radius); min-height: var(--touch); padding: 8px 12px; text-align: left; }
 .proxy-question > .btn-ghost,
-.how-many > .btn-ghost { -webkit-align-self: flex-start; align-self: flex-start; }
+.how-many > .btn-ghost,
+.wizard-step > .btn-ghost { -webkit-align-self: flex-start; align-self: flex-start; }
 .btn-large { font-size: 20px; padding: 16px 28px; width: 100%; }
 
 .btn-tap {
@@ -54,7 +55,7 @@ button {
   min-width: var(--touch);
   min-height: var(--touch);
 }
-.btn-tap:active { background: var(--accent); color: #000; border-color: var(--accent); }
+.btn-tap:active { background: var(--accent); color: var(--text); border-color: var(--accent); }
 
 .btn-option {
   background: var(--surface);
@@ -128,6 +129,10 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 
 .layout { display: flex; flex-direction: column; min-height: 100vh; }
 .header {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -136,10 +141,14 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   border-bottom: 1px solid var(--border);
 }
 .header-name { font-weight: 600; }
-.main { flex: 1; padding: 24px 16px; max-width: 600px; margin: 0 auto; width: 100%; }
+.main { flex: 1; padding: 24px 16px 64px; max-width: 600px; margin: 0 auto; width: 100%; }
 
 /* ── App nav ──────────────────────────────────────────────────────────────── */
 .app-nav {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 49px;
+  z-index: 10;
   display: -webkit-box;
   display: -ms-flexbox;
   display: flex;

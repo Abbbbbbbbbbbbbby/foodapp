@@ -77,14 +77,19 @@ export default function ProxyQuestion({ familyIndex, total, prefillName, prefill
           className="btn-option"
           onClick={() => onAnswer({ proxy_name: prefillName, proxy_phone: prefillPhone })}
         >
-          <span>The person here today / La persona aquí hoy</span>
-          <span className="opt-detail">{prefillName}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span>The person here today</span>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)', marginLeft: 8 }}>{prefillName}</span>
+          </div>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>La persona aquí hoy</span>
         </button>
         <button className="btn-option" onClick={() => setShowOther(true)}>
-          Someone else / Alguien diferente
+          <span>Someone else</span>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Alguien diferente</span>
         </button>
         <button className="btn-option" onClick={() => onAnswer(null)}>
-          No designated person / Sin persona designada
+          <span>No designated person</span>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Sin persona designada</span>
         </button>
       </div>
     </div>
