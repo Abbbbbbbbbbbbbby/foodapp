@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { searchDirectory, type DirectoryFamily } from '../../lib/offline';
+import { formatPhoneAsTyped } from '../../lib/phone';
 
 interface LookupFormProps {
   onSearch: (name: string, phone: string | null) => Promise<void>;
@@ -116,8 +117,9 @@ export default function LookupForm({ onSearch }: LookupFormProps) {
         Phone / Teléfono
         <input
           type="tel"
+          inputMode="numeric"
           value={phone}
-          onChange={e => setPhone(e.target.value)}
+          onChange={e => setPhone(formatPhoneAsTyped(e.target.value))}
           autoComplete="off"
         />
       </label>

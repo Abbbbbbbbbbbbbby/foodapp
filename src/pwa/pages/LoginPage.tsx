@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { formatPhoneAsTyped } from '../lib/phone';
 
 export default function LoginPage() {
   const [phone, setPhone] = useState('');
@@ -40,8 +41,9 @@ export default function LoginPage() {
           Phone / Número de teléfono
           <input
             type="tel"
+            inputMode="numeric"
             value={phone}
-            onChange={e => setPhone(e.target.value)}
+            onChange={e => setPhone(formatPhoneAsTyped(e.target.value))}
             required
             autoComplete="tel"
             autoFocus

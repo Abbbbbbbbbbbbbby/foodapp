@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { formatPhoneAsTyped } from '../lib/phone';
 
 export default function RegisterPage() {
   const [name, setName] = useState('');
@@ -38,7 +39,14 @@ export default function RegisterPage() {
         </label>
         <label>
           Phone / Número de teléfono
-          <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} required autoComplete="tel" />
+          <input
+            type="tel"
+            inputMode="numeric"
+            value={phone}
+            onChange={e => setPhone(formatPhoneAsTyped(e.target.value))}
+            required
+            autoComplete="tel"
+          />
         </label>
         {error && <p className="error">{error}</p>}
         <button type="submit" className="btn-primary btn-large" disabled={loading || !name || !phone}>

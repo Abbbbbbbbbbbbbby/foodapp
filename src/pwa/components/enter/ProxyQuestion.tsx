@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ProxyData } from '../../lib/types';
+import { formatPhoneAsTyped } from '../../lib/phone';
 
 interface ProxyQuestionProps {
   familyIndex: number;
@@ -50,7 +51,12 @@ export default function ProxyQuestion({ familyIndex, total, prefillName, prefill
           </label>
           <label style={{ marginTop: 12 }}>
             Phone (optional) / Teléfono (opcional)
-            <input type="tel" value={otherPhone} onChange={e => setOtherPhone(e.target.value)} />
+            <input
+              type="tel"
+              inputMode="numeric"
+              value={otherPhone}
+              onChange={e => setOtherPhone(formatPhoneAsTyped(e.target.value))}
+            />
           </label>
         </div>
         <div className="step-actions">

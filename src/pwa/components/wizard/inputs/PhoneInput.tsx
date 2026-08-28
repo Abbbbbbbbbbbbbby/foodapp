@@ -1,3 +1,5 @@
+import { formatPhoneAsTyped } from '../../../lib/phone';
+
 interface PhoneInputProps {
   questionEn: string;
   questionEs: string;
@@ -16,8 +18,9 @@ export default function PhoneInput({ questionEn, questionEs, value, onChange, on
       <p className="question-es">{questionEs}</p>
       <input
         type="tel"
+        inputMode="numeric"
         value={value}
-        onChange={e => onChange(e.target.value)}
+        onChange={e => onChange(formatPhoneAsTyped(e.target.value))}
         autoFocus
         placeholder="(555) 555-5555"
       />

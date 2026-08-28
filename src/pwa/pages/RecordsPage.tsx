@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { getUser } from '../store/auth';
 import { localDateString, localMonthStart } from '../lib/date';
+import { formatPhoneAsTyped } from '../lib/phone';
 
 type Role = 'admin' | 'staff' | 'volunteer';
 
@@ -507,7 +508,12 @@ function FamilyCard({ family, role, onUpdated, onDeleted }: FamilyCardProps) {
               </label>
               <label className="records-field-label">
                 Phone
-                <input type="tel" value={String(draft.phone ?? '')} onChange={e => setField('phone', e.target.value)} />
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  value={formatPhoneAsTyped(String(draft.phone ?? ''))}
+                  onChange={e => setField('phone', formatPhoneAsTyped(e.target.value))}
+                />
               </label>
               <label className="records-field-label">
                 Address

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { WizardFormData, ProxyData, YesNoDeclined } from '../../lib/types';
 import { setTelemetryContext } from '../../lib/telemetry';
+import { formatPhoneAsTyped } from '../../lib/phone';
 import TextInput from './inputs/TextInput';
 import PhoneInput from './inputs/PhoneInput';
 import NumberInput from './inputs/NumberInput';
@@ -180,7 +181,7 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
         <PhoneInput
           questionEn={`What is the phone number for ${label.familyEn}?`}
           questionEs={`¿Cuál es el número de teléfono de ${label.familyEs}?`}
-          value={data.phone ?? ''}
+          value={formatPhoneAsTyped(data.phone ?? '')}
           onChange={v => set('phone', v)}
           onNext={next}
           onBack={goBack}
