@@ -4,7 +4,7 @@ import { getUser, getAuth, clearAuth, getToken, AUTH_STORAGE_KEY } from '../stor
 import { getPendingCount, flushQueue, getDeadLetters, deleteDeadLetters, adoptForeignItems, cacheDirectory, nextDirectoryEpoch } from '../lib/offline';
 import type { DirectoryFamily } from '../lib/offline';
 import type { DeadLetterEntry } from '../lib/offline';
-import { apiWithToken } from '../lib/api';
+import { apiWithToken, apiWithTokenSilent, setUnauthorizedHandler, SESSION_EXPIRED_MESSAGE } from '../lib/api';
 
 interface NavItem {
   label: string;
@@ -45,6 +45,17 @@ export default function Layout() {
   const [accountChanged, setAccountChanged] = useState<{ name: string } | 'signed-out' | null>(null);
 
   useEffect(() => {
+    // Any direct/foreground request 401ing (session expired, revoked, etc.)
+    // bounces to /login with an explanation. `replace` so a burst of
+    // concurrent 401s doesn't stack duplicate history entries.
+    setUnauthorizedHandler(() => {
+      clearAuth();
+      navigate('/login', { replace: true, state: { message: SESSION_EXPIRED_MESSAGE } });
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [navigate]);
+
+  useEffect(() => {
     function refresh() {
       getPendingCount().then(setPendingCount).catch((err) => console.error('pending-count read failed:', err));
     }
@@ -72,7 +83,7 @@ export default function Layout() {
     // refresh) lands while this response is in flight, this clear-and-
     // replace is dropped instead of erasing it.
     const epoch = nextDirectoryEpoch();
-    apiWithToken(auth.token).get<{ families: DirectoryFamily[] }>('/api/families/directory')
+    apiWithTokenSilent(auth.token).get<{ families: DirectoryFamily[] }>('/api/families/directory')
       .then(r => cacheDirectory(r.families, epoch))
       .catch(err => console.warn('family directory refresh failed (offline lookup will use the last cached copy):', err));
   };
@@ -159,7 +170,7 @@ export default function Layout() {
         // identity. Snapshot both together; a mid-flush switch then 401s
         // (items stay queued) instead of misattributing.
         const auth = getAuth();
-        const pinned = apiWithToken(auth?.token ?? null);
+        const pinned = apiWithTokenSilent(auth?.token ?? null);
         const apiFn = (url: string, body: unknown, method?: 'POST' | 'PATCH') =>
           method === 'PATCH'
             ? pinned.patch<unknown>(url, body as Record<string, unknown>)

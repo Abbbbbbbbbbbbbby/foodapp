@@ -26,12 +26,15 @@ vi.mock('../../src/pwa/store/auth', () => ({
 vi.mock('../../src/pwa/lib/api', () => ({
   api: { post: vi.fn(), patch: vi.fn(), get: vi.fn() },
   apiWithToken: vi.fn(() => ({ post: vi.fn(), patch: vi.fn(), get: vi.fn(async () => ({ families: [] })) })),
+  apiWithTokenSilent: vi.fn(() => ({ post: vi.fn(), patch: vi.fn(), get: vi.fn(async () => ({ families: [] })) })),
+  setUnauthorizedHandler: vi.fn(),
+  SESSION_EXPIRED_MESSAGE: 'Session expired',
   ApiError: class ApiError extends Error { constructor(public status: number, message: string) { super(message); } },
 }));
 
 import Layout from '../../src/pwa/components/Layout';
 import { getDeadLetters, deleteDeadLetters, flushQueue, adoptForeignItems, cacheDirectory } from '../../src/pwa/lib/offline';
-import { api, apiWithToken } from '../../src/pwa/lib/api';
+import { api, apiWithTokenSilent } from '../../src/pwa/lib/api';
 import type { DeadLetterEntry } from '../../src/pwa/lib/offline';
 
 const dl = (id: string, label: string): DeadLetterEntry => ({
@@ -137,7 +140,9 @@ describe('Layout session and sync banners (issue #6)', () => {
     renderLayout();
 
     await waitFor(() => expect(flushQueue).toHaveBeenCalled());
-    expect(apiWithToken).toHaveBeenCalledWith('tok');
+    // Flush and directory-refresh use the SILENT pinned client — their 401s
+    // must not trigger the global auto-redirect (see issue #6 comment).
+    expect(apiWithTokenSilent).toHaveBeenCalledWith('tok');
     // Token and user id must come from ONE auth snapshot.
     expect(vi.mocked(flushQueue).mock.calls[0][1]).toBe('u1');
 
@@ -148,9 +153,9 @@ describe('Layout session and sync banners (issue #6)', () => {
       (url: string, body: unknown, method?: 'POST' | 'PATCH') => Promise<unknown>;
     await apiFn('/api/families', { name: 'X' });
     await apiFn('/api/visits/v1/bag', { bag_received: true }, 'PATCH');
-    // apiWithToken is also used by the directory refresh — find the pinned
-    // instance the flush actually drove rather than assuming call order.
-    const pinnedClient = vi.mocked(apiWithToken).mock.results
+    // apiWithTokenSilent is also used by the directory refresh — find the
+    // pinned instance the flush actually drove rather than assuming call order.
+    const pinnedClient = vi.mocked(apiWithTokenSilent).mock.results
       .map(r => r.value).find(c => c.post.mock.calls.length > 0);
     expect(pinnedClient).toBeTruthy();
     expect(pinnedClient.post).toHaveBeenCalledWith('/api/families', { name: 'X' });
@@ -312,13 +317,13 @@ describe('Layout directory staleness listener', () => {
     vi.mocked(getDeadLetters).mockResolvedValue([]);
     renderLayout();
     await screen.findByText('HOME CONTENT');
-    const callsAfterMount = vi.mocked(apiWithToken).mock.calls.length;
+    const callsAfterMount = vi.mocked(apiWithTokenSilent).mock.calls.length;
 
     await act(async () => {
       window.dispatchEvent(new Event('directorystale'));
     });
     // A fresh pinned client (and directory GET) was created for the re-pull.
-    expect(vi.mocked(apiWithToken).mock.calls.length).toBeGreaterThan(callsAfterMount);
+    expect(vi.mocked(apiWithTokenSilent).mock.calls.length).toBeGreaterThan(callsAfterMount);
   });
 
   it('every refresh commits WITH its claimed epoch — the race protection cannot be silently dropped', async () => {

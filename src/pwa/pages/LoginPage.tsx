@@ -1,11 +1,15 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 
 export default function LoginPage() {
   const [phone, setPhone] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  // Set by Layout when a 401 bounced the user here (e.g. an expired
+  // session) — one-time, not re-shown on a later manual visit to /login.
+  const [notice] = useState<string | null>(() => (location.state as { message?: string } | null)?.message ?? null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -30,6 +34,7 @@ export default function LoginPage() {
   return (
     <div className="auth-page">
       <h1>Sign In / Iniciar sesión</h1>
+      {notice && <p className="error banner">{notice}</p>}
       <form className="auth-form" onSubmit={handleSubmit}>
         <label>
           Phone / Número de teléfono
