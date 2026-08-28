@@ -456,6 +456,51 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   cursor: pointer;
 }
 
+.admin-confirm-datawipe {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--danger);
+}
+.admin-confirm-datawipe > * + * { margin-top: 8px; }
+.admin-confirm-checkbox-label { display: flex; align-items: center; font-size: 13px; color: var(--danger); }
+.admin-confirm-checkbox-label input { margin-right: 8px; }
+.admin-confirm-summary { font-size: 13px; font-weight: 700; color: var(--danger); }
+.admin-confirm-name-input {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 14px;
+  min-height: 38px;
+  width: 100%;
+  max-width: 260px;
+}
+
+.admin-edit-row { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.admin-edit-row > * + * { margin-top: 6px; }
+.admin-edit-input {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 14px;
+  min-height: 36px;
+}
+.admin-edit-actions { display: flex; }
+.admin-edit-actions > * + * { margin-left: 8px; }
+.admin-edit-error { font-size: 12px; color: var(--danger); margin: 0; }
+.admin-edit-btn {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  padding: 6px 12px;
+  min-height: 34px;
+  cursor: pointer;
+}
+
 /* ── Records Page ──────────────────────────────────────────────────────────── */
 
 .records-page {

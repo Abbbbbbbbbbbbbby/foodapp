@@ -6,6 +6,7 @@ import type { Env } from '../../../src/worker/schema';
 beforeEach(async () => {
   const db = (env as unknown as Env).DB;
   // FK-safe order: children before parents (the runtime enforces FKs now)
+  await db.prepare('DELETE FROM record_changes').run();
   await db.prepare('DELETE FROM duplicate_flags').run();
   await db.prepare('DELETE FROM visits').run();
   await db.prepare('DELETE FROM proxies').run();
@@ -121,6 +122,74 @@ describe('PATCH /api/admin/users/:id', () => {
     });
     expect(res.status).toBe(403);
   });
+
+  it('updates name and phone, normalizing the phone', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bob', '4805550002', 'volunteer');
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
+      method: 'PATCH',
+      headers: authHeader(token),
+      body: JSON.stringify({ name: '  Bobby  ', phone: '(480) 555-0099' }),
+    });
+    expect(res.status).toBe(200);
+    const db = (env as unknown as Env).DB;
+    const user = await db.prepare('SELECT name, phone FROM users WHERE id = ?').bind('u1').first<{ name: string; phone: string }>();
+    expect(user?.name).toBe('Bobby');
+    expect(user?.phone).toBe('4805550099');
+  });
+
+  it('rejects an empty name', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bob', '4805550002', 'volunteer');
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
+      method: 'PATCH',
+      headers: authHeader(token),
+      body: JSON.stringify({ name: '   ' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a phone that does not normalize to 10 digits', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bob', '4805550002', 'volunteer');
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
+      method: 'PATCH',
+      headers: authHeader(token),
+      body: JSON.stringify({ phone: '12345' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a phone already used by another account', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bob', '4805550002', 'volunteer');
+    await seedUser('u2', 'Carol', '4805550003', 'volunteer');
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
+      method: 'PATCH',
+      headers: authHeader(token),
+      body: JSON.stringify({ phone: '4805550003' }),
+    });
+    expect(res.status).toBe(400);
+    const db = (env as unknown as Env).DB;
+    const user = await db.prepare('SELECT phone FROM users WHERE id = ?').bind('u1').first<{ phone: string }>();
+    expect(user?.phone).toBe('4805550002'); // unchanged
+  });
+
+  it('allows re-saving a user\'s own unchanged phone', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bob', '4805550002', 'volunteer');
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
+      method: 'PATCH',
+      headers: authHeader(token),
+      body: JSON.stringify({ name: 'Bob', phone: '480-555-0002' }),
+    });
+    expect(res.status).toBe(200);
+  });
 });
 
 describe('DELETE /api/admin/users/:id', () => {
@@ -234,6 +303,162 @@ describe('DELETE /api/admin/users/:id — FK-referenced users (review round)', (
     expect(results[1].meta.rows_written).toBe(0); // delete blocked
     const fam = await db.prepare(`SELECT created_by FROM families WHERE id = 'famG'`).first<{ created_by: string | null }>();
     expect(fam!.created_by).toBe('a1'); // reference untouched — batch no-oped together
+  });
+});
+
+describe('GET /api/admin/users/:id/data-summary', () => {
+  it('counts families the user registered and their visits', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bob', '4805550002', 'volunteer');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('sf1', 'Fam One', 'u1')`).run();
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('sf2', 'Fam Two', 'u1')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('sv1', 'sf1', '2026-08-01')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('sv2', 'sf1', '2026-08-08')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('sv3', 'sf2', '2026-08-01')`).run();
+    // A family registered by someone else, visited by u1: must NOT count.
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('sf3', 'Other Fam', 'a1')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, volunteer_id) VALUES ('sv4', 'sf3', '2026-08-01', 'u1')`).run();
+
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1/data-summary', {
+      headers: authHeader(token),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { families: number; visits: number };
+    expect(body.families).toBe(2);
+    expect(body.visits).toBe(3);
+  });
+
+  it('returns zero counts for a user with no registrations', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bob', '4805550002', 'volunteer');
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1/data-summary', {
+      headers: authHeader(token),
+    });
+    const body = await res.json() as { families: number; visits: number };
+    expect(body).toEqual({ families: 0, visits: 0 });
+  });
+
+  it('returns 403 for non-admin', async () => {
+    await seedUser('u1', 'Alice', '4805550001', 'volunteer');
+    await seedUser('u2', 'Bob', '4805550002', 'volunteer');
+    const token = await makeToken('u1', '4805550001', 'volunteer');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u2/data-summary', {
+      headers: authHeader(token),
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('DELETE /api/admin/users/:id?deleteData=1', () => {
+  it('cascades: deletes registered families, their visits/proxies, and duplicate_flags referencing them', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bad Actor', '4805550002', 'volunteer');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('df1', 'Bad Fam One', 'u1')`).run();
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('df2', 'Bad Fam Two', 'u1')`).run();
+    await db.prepare(`INSERT INTO families (id, name) VALUES ('dfOther', 'Unrelated Fam')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('dv1', 'df1', '2026-08-01')`).run();
+    await db.prepare(`INSERT INTO proxies (id, family_id, proxy_name, proxy_phone) VALUES ('dp1', 'df1', 'Helper', '4805559999')`).run();
+    await db.prepare(`INSERT INTO duplicate_flags (id, family_a_id, family_b_id, reason) VALUES ('ddf1', 'df1', 'dfOther', 'name_fuzzy')`).run();
+
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1?deleteData=1', {
+      method: 'DELETE',
+      headers: authHeader(token),
+    });
+    expect(res.status).toBe(200);
+
+    expect(await db.prepare(`SELECT id FROM users WHERE id = 'u1'`).first()).toBeNull();
+    expect(await db.prepare(`SELECT id FROM families WHERE id IN ('df1','df2')`).all()).toMatchObject({ results: [] });
+    expect(await db.prepare(`SELECT id FROM visits WHERE id = 'dv1'`).first()).toBeNull();
+    expect(await db.prepare(`SELECT id FROM proxies WHERE id = 'dp1'`).first()).toBeNull();
+    expect(await db.prepare(`SELECT id FROM duplicate_flags WHERE id = 'ddf1'`).first()).toBeNull();
+    // Unrelated family (not created by u1) must survive untouched.
+    expect(await db.prepare(`SELECT id FROM families WHERE id = 'dfOther'`).first()).not.toBeNull();
+  });
+
+  it('leaves families the user did not create in place, only detaching them, and still deletes registered ones', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Mixed Actor', '4805550002', 'volunteer');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('mf1', 'Own Fam', 'u1')`).run();
+    await db.prepare(`INSERT INTO families (id, name, created_by, updated_by) VALUES ('mf2', 'Someone Elses Fam', 'a1', 'u1')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date, volunteer_id) VALUES ('mv1', 'mf2', '2026-08-01', 'u1')`).run();
+
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1?deleteData=1', {
+      method: 'DELETE',
+      headers: authHeader(token),
+    });
+    expect(res.status).toBe(200);
+
+    expect(await db.prepare(`SELECT id FROM families WHERE id = 'mf1'`).first()).toBeNull();
+    const other = await db.prepare(`SELECT created_by, updated_by FROM families WHERE id = 'mf2'`)
+      .first<{ created_by: string; updated_by: string | null }>();
+    expect(other!.created_by).toBe('a1'); // untouched
+    expect(other!.updated_by).toBeNull(); // detached, not deleted
+    const visit = await db.prepare(`SELECT volunteer_id FROM visits WHERE id = 'mv1'`).first<{ volunteer_id: string | null }>();
+    expect(visit!.volunteer_id).toBeNull(); // this user's visit-logging elsewhere is detached, not destroyed
+  });
+
+  it('writes an audit record to record_changes describing what was deleted', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Audited Actor', '4805550002', 'volunteer');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('af1', 'Audited Fam', 'u1')`).run();
+    await db.prepare(`INSERT INTO visits (id, family_id, visit_date) VALUES ('av1', 'af1', '2026-08-01')`).run();
+
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1?deleteData=1', {
+      method: 'DELETE',
+      headers: authHeader(token),
+    });
+    expect(res.status).toBe(200);
+
+    const audit = await db.prepare(
+      `SELECT changed_by, changes FROM record_changes WHERE table_name = 'users' AND record_id = 'u1'`
+    ).first<{ changed_by: string; changes: string }>();
+    expect(audit).not.toBeNull();
+    expect(audit!.changed_by).toBe('a1');
+    const changes = JSON.parse(audit!.changes);
+    expect(changes.deleted_user.phone).toBe('4805550002');
+    expect(changes.families_deleted).toBe(1);
+    expect(changes.visits_deleted).toBe(1);
+  });
+
+  it('the last-admin guard blocks deleteData too — nothing is destroyed', async () => {
+    const { LAST_ADMIN_GUARD } = await import('../../../src/worker/routes/admin');
+    await seedUser('a1', 'Last Admin', '4805550000', 'admin');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('gf1', 'Guard Fam', 'a1')`).run();
+
+    // Same SQL-level guard probe as the existing last-admin test, extended to
+    // confirm a guarded cascade delete also no-ops.
+    const results = await db.batch([
+      db.prepare(`DELETE FROM families WHERE created_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind('a1'),
+      db.prepare(`DELETE FROM users WHERE id = ?1 AND ${LAST_ADMIN_GUARD}`).bind('a1'),
+    ]);
+    expect(results[1].meta.rows_written).toBe(0);
+    expect(await db.prepare(`SELECT id FROM families WHERE id = 'gf1'`).first()).not.toBeNull();
+  });
+
+  it('without the query flag, behaves exactly as before (data detached, not deleted)', async () => {
+    await seedUser('a1', 'Admin', '4805550000', 'admin');
+    await seedUser('u1', 'Bob', '4805550002', 'volunteer');
+    const db = (env as unknown as Env).DB;
+    await db.prepare(`INSERT INTO families (id, name, created_by) VALUES ('pf1', 'Plain Fam', 'u1')`).run();
+
+    const token = await makeToken('a1', '4805550000', 'admin');
+    const res = await workerExports.default.fetch('https://example.com/api/admin/users/u1', {
+      method: 'DELETE',
+      headers: authHeader(token),
+    });
+    expect(res.status).toBe(200);
+    const fam = await db.prepare(`SELECT created_by FROM families WHERE id = 'pf1'`).first<{ created_by: string | null }>();
+    expect(fam!.created_by).toBeNull(); // still exists, just detached
   });
 });
 

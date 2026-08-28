@@ -35,10 +35,15 @@ export async function handleAdminRoutes(
     return handleImport(request, env, ctx);
   }
 
+  const summaryMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/data-summary$/);
+  if (summaryMatch && request.method === 'GET') {
+    return handleUserDataSummary(env, summaryMatch[1]);
+  }
+
   const idMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
   if (idMatch) {
     if (request.method === 'PATCH') return handleUpdateUser(request, env, idMatch[1], ctx);
-    if (request.method === 'DELETE') return handleDeleteUser(env, idMatch[1], ctx);
+    if (request.method === 'DELETE') return handleDeleteUser(request, env, idMatch[1], ctx);
   }
 
   return null;
@@ -70,7 +75,7 @@ async function handleUpdateUser(
   id: string,
   ctx: AuthContext
 ): Promise<Response> {
-  let body: { role?: string; active?: boolean };
+  let body: { role?: string; active?: boolean; name?: string; phone?: string };
   try {
     body = await request.json();
   } catch {
@@ -82,10 +87,32 @@ async function handleUpdateUser(
     return Response.json({ error: `invalid role: ${body.role}` }, { status: 400 });
   }
 
+  let trimmedName: string | undefined;
+  if (body.name !== undefined) {
+    trimmedName = body.name.trim();
+    if (!trimmedName) return Response.json({ error: 'name is required' }, { status: 400 });
+  }
+
+  let normalizedPhone: string | undefined;
+  if (body.phone !== undefined) {
+    const p = normalizePhone(body.phone);
+    if (p === null) return Response.json({ error: 'phone must be a 10-digit phone number' }, { status: 400 });
+    normalizedPhone = p;
+  }
+
   const user = await env.DB.prepare(
     `SELECT id, role, active, phone FROM users WHERE id = ?`
   ).bind(id).first<{ id: string; role: string; active: number; phone: string }>();
   if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  if (normalizedPhone !== undefined && normalizedPhone !== user.phone) {
+    const collision = await env.DB.prepare(
+      `SELECT 1 FROM users WHERE phone = ? AND id != ?`
+    ).bind(normalizedPhone, id).first();
+    if (collision) {
+      return Response.json({ error: 'Phone number is already in use by another account' }, { status: 400 });
+    }
+  }
 
   // Block self-demotion and self-deactivation
   const wouldDemote = body.role !== undefined && body.role !== 'admin';
@@ -109,6 +136,8 @@ async function handleUpdateUser(
   const values: unknown[] = [];
   if (body.role !== undefined) { updates.push('role = ?'); values.push(body.role); }
   if (body.active !== undefined) { updates.push('active = ?'); values.push(body.active ? 1 : 0); }
+  if (trimmedName !== undefined) { updates.push('name = ?'); values.push(trimmedName); }
+  if (normalizedPhone !== undefined) { updates.push('phone = ?'); values.push(normalizedPhone); }
 
   if (updates.length === 0) return Response.json({ ok: true });
 
@@ -135,7 +164,27 @@ async function handleUpdateUser(
 // could silently drift from the deployed SQL.
 export const LAST_ADMIN_GUARD = `(SELECT role != 'admin' OR active = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?1) > 0 FROM users WHERE id = ?1)`;
 
+// "Data entered by this account" = families they registered (created_by),
+// plus that family's own visits/proxies. Visits they merely LOGGED on
+// someone else's registration are normal check-in work, not "their" data —
+// those stay, just detached (see handleDeleteUser).
+async function getUserDataSummary(env: Env, id: string): Promise<{ families: number; visits: number }> {
+  const row = await env.DB.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM families WHERE created_by = ?1) AS families,
+      (SELECT COUNT(*) FROM visits WHERE family_id IN (SELECT id FROM families WHERE created_by = ?1)) AS visits
+  `).bind(id).first<{ families: number; visits: number }>();
+  return row ?? { families: 0, visits: 0 };
+}
+
+async function handleUserDataSummary(env: Env, id: string): Promise<Response> {
+  const user = await env.DB.prepare(`SELECT 1 FROM users WHERE id = ?`).bind(id).first();
+  if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
+  return Response.json(await getUserDataSummary(env, id));
+}
+
 async function handleDeleteUser(
+  request: Request,
   env: Env,
   id: string,
   ctx: AuthContext
@@ -144,9 +193,11 @@ async function handleDeleteUser(
     return Response.json({ error: 'Cannot delete your own account' }, { status: 400 });
   }
 
+  const deleteData = new URL(request.url).searchParams.get('deleteData') === '1';
+
   const user = await env.DB.prepare(
-    `SELECT id, role, active, phone FROM users WHERE id = ?`
-  ).bind(id).first<{ id: string; role: string; active: number; phone: string }>();
+    `SELECT id, name, role, active, phone FROM users WHERE id = ?`
+  ).bind(id).first<{ id: string; name: string; role: string; active: number; phone: string }>();
   if (!user) return Response.json({ error: 'Not found' }, { status: 404 });
 
   if (user.role === 'admin' && user.active === 1) {
@@ -158,21 +209,53 @@ async function handleDeleteUser(
     }
   }
 
+  // Captured BEFORE the batch runs — once it commits, the data (if deleted)
+  // is gone, so the audit entry needs these counts in hand already.
+  const summary = deleteData ? await getUserDataSummary(env, id) : null;
+
   // One atomic batch. Every statement carries the SAME last-admin guard
   // predicate as the DELETE, so on a guard rejection the whole batch no-ops
-  // (no orphaned reference-clears), while on success the clears run BEFORE
-  // the DELETE so D1's foreign-key enforcement accepts it. The guard reads
-  // only from users, which nothing here mutates before the DELETE, so the
-  // predicate is stable across the batch.
-  const results = await env.DB.batch([
-    env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+  // (no orphaned reference-clears, no partial data destruction), while on
+  // success the clears/deletes run BEFORE the user DELETE so D1's
+  // foreign-key enforcement accepts it. The guard reads only from users,
+  // which nothing here mutates before the DELETE, so the predicate is
+  // stable across the batch.
+  const registeredFamilies = `(SELECT id FROM families WHERE created_by = ?1)`;
+  const stmts = [
+    // created_by is handled below — either detached (default) or the
+    // family is deleted outright (deleteData).
     env.DB.prepare(`UPDATE families SET updated_by = NULL WHERE updated_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
     env.DB.prepare(`UPDATE visits SET volunteer_id = NULL WHERE volunteer_id = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
     env.DB.prepare(`UPDATE visits SET updated_by = NULL WHERE updated_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
     env.DB.prepare(`UPDATE duplicate_flags SET reviewed_by = NULL WHERE reviewed_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+    ...(deleteData ? [
+      env.DB.prepare(`
+        DELETE FROM duplicate_flags
+        WHERE (family_a_id IN ${registeredFamilies} OR family_b_id IN ${registeredFamilies})
+        AND ${LAST_ADMIN_GUARD}
+      `).bind(id),
+      env.DB.prepare(`DELETE FROM visits WHERE family_id IN ${registeredFamilies} AND ${LAST_ADMIN_GUARD}`).bind(id),
+      env.DB.prepare(`DELETE FROM proxies WHERE family_id IN ${registeredFamilies} AND ${LAST_ADMIN_GUARD}`).bind(id),
+      env.DB.prepare(`DELETE FROM families WHERE created_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+      env.DB.prepare(`
+        INSERT INTO record_changes (id, table_name, record_id, changed_by, changes)
+        VALUES (?, 'users', ?, ?, ?)
+      `).bind(
+        crypto.randomUUID().replace(/-/g, ''), id, ctx.userId,
+        JSON.stringify({
+          _action: 'deleted account and its entered data',
+          deleted_user: { id, name: user.name, phone: user.phone },
+          families_deleted: summary!.families,
+          visits_deleted: summary!.visits,
+        })
+      ),
+    ] : [
+      env.DB.prepare(`UPDATE families SET created_by = NULL WHERE created_by = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
+    ]),
     env.DB.prepare(`DELETE FROM otp_codes WHERE phone = ?2 AND ${LAST_ADMIN_GUARD}`).bind(id, user.phone),
     env.DB.prepare(`DELETE FROM users WHERE id = ?1 AND ${LAST_ADMIN_GUARD}`).bind(id),
-  ]);
+  ];
+  const results = await env.DB.batch(stmts);
 
   const deleteResult = results[results.length - 1];
   if (deleteResult.meta.rows_written === 0) {

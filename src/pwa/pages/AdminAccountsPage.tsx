@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { getUser } from '../store/auth';
+import { formatPhoneAsTyped } from '../lib/phone';
 
 type Role = 'admin' | 'staff' | 'volunteer';
 
@@ -63,12 +64,26 @@ export default function AdminAccountsPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [deleteData, setDeleteData] = useState(false);
+  const [dataSummary, setDataSummary] = useState<{ families: number; visits: number } | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [confirmNameText, setConfirmNameText] = useState('');
+
+  function loadUsers() {
+    setLoading(true);
     api.get<{ users: AdminUser[] }>('/api/admin/users')
       .then(data => setUsers(data.users))
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { loadUsers(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const filterLower = filter.toLowerCase();
   const visible = users.filter(u =>
@@ -101,10 +116,60 @@ export default function AdminAccountsPage() {
     }
   }
 
+  function startEdit(u: AdminUser) {
+    setEditingId(u.id);
+    setEditName(u.name);
+    setEditPhone(formatPhoneAsTyped(u.phone));
+    setEditError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditError(null);
+  }
+
+  async function saveEdit(userId: string) {
+    setBusy(b => ({ ...b, [userId]: true }));
+    setEditError(null);
+    try {
+      await api.patch('/api/admin/users/' + userId, { name: editName, phone: editPhone });
+      setEditingId(null);
+      loadUsers(); // re-fetch: the server normalizes the phone we typed
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Failed to update');
+    } finally {
+      setBusy(b => ({ ...b, [userId]: false }));
+    }
+  }
+
+  function openDeleteConfirm(userId: string) {
+    setConfirmDelete(userId);
+    setDeleteData(false);
+    setDataSummary(null);
+    setSummaryError(null);
+    setConfirmNameText('');
+  }
+
+  async function toggleDeleteData(userId: string, checked: boolean) {
+    setDeleteData(checked);
+    setConfirmNameText('');
+    if (!checked || dataSummary !== null) return;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    try {
+      const summary = await api.get<{ families: number; visits: number }>('/api/admin/users/' + userId + '/data-summary');
+      setDataSummary(summary);
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : 'Failed to load data summary');
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
+
   async function deleteUser(userId: string) {
     setBusy(b => ({ ...b, [userId]: true }));
     try {
-      await api.delete('/api/admin/users/' + userId);
+      await api.delete('/api/admin/users/' + userId + (deleteData ? '?deleteData=1' : ''));
       setUsers(us => us.filter(u => u.id !== userId));
       setConfirmDelete(null);
     } catch (err) {
@@ -151,19 +216,53 @@ export default function AdminAccountsPage() {
               <div className="admin-user-avatar">
                 {u.name.charAt(0).toUpperCase()}
               </div>
-              <div className="admin-user-info">
-                <div className="admin-user-name-row">
-                  <span className="admin-user-name">{u.name}</span>
-                  <span style={rolePillStyle(u.role)}>{u.role}</span>
-                  {!u.active && <span className="admin-user-inactive-badge">inactive</span>}
+              {editingId === u.id ? (
+                <div className="admin-edit-row">
+                  <input
+                    type="text"
+                    className="admin-edit-input"
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
+                    placeholder="Name"
+                    autoFocus
+                  />
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    className="admin-edit-input"
+                    value={editPhone}
+                    onChange={e => setEditPhone(formatPhoneAsTyped(e.target.value))}
+                    placeholder="Phone"
+                  />
+                  {editError && <p className="admin-edit-error">{editError}</p>}
+                  <div className="admin-edit-actions">
+                    <button
+                      className="admin-confirm-yes"
+                      disabled={busy[u.id] || !editName.trim() || !editPhone.trim()}
+                      onClick={() => saveEdit(u.id)}
+                    >
+                      {busy[u.id] ? 'Saving…' : 'Save'}
+                    </button>
+                    <button className="admin-edit-btn" onClick={cancelEdit} disabled={busy[u.id]}>
+                      Cancel
+                    </button>
+                  </div>
                 </div>
-                <div className="admin-user-phone">{u.phone}</div>
-                <div className="admin-user-activity">{lastActivity(u)}</div>
-                <div className="admin-user-meta">
-                  {u.self_registered ? 'Self-registered' : 'Admin-created'} ·{' '}
-                  {formatDate(u.created_at)}
+              ) : (
+                <div className="admin-user-info">
+                  <div className="admin-user-name-row">
+                    <span className="admin-user-name">{u.name}</span>
+                    <span style={rolePillStyle(u.role)}>{u.role}</span>
+                    {!u.active && <span className="admin-user-inactive-badge">inactive</span>}
+                  </div>
+                  <div className="admin-user-phone">{u.phone}</div>
+                  <div className="admin-user-activity">{lastActivity(u)}</div>
+                  <div className="admin-user-meta">
+                    {u.self_registered ? 'Self-registered' : 'Admin-created'} ·{' '}
+                    {formatDate(u.created_at)}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             <div className="admin-user-actions">
@@ -182,6 +281,16 @@ export default function AdminAccountsPage() {
               </div>
 
               <div className="admin-action-row">
+                {editingId !== u.id && confirmDelete !== u.id && (
+                  <button
+                    className="admin-edit-btn"
+                    disabled={busy[u.id]}
+                    onClick={() => startEdit(u)}
+                  >
+                    Edit
+                  </button>
+                )}
+
                 {u.id !== me.id && (
                   <button
                     className={'admin-deactivate-btn' + (u.active ? '' : ' admin-reactivate-btn')}
@@ -196,7 +305,7 @@ export default function AdminAccountsPage() {
                   <button
                     className="admin-delete-btn"
                     disabled={busy[u.id]}
-                    onClick={() => setConfirmDelete(u.id)}
+                    onClick={() => openDeleteConfirm(u.id)}
                   >
                     Delete
                   </button>
@@ -205,19 +314,66 @@ export default function AdminAccountsPage() {
                 {confirmDelete === u.id && (
                   <div className="admin-confirm-row">
                     <span className="admin-confirm-text">Delete {u.name}?</span>
-                    <button
-                      className="admin-confirm-yes"
-                      disabled={busy[u.id]}
-                      onClick={() => deleteUser(u.id)}
-                    >
-                      {busy[u.id] ? 'Deleting…' : 'Yes, delete'}
-                    </button>
+                    {!deleteData && (
+                      <button
+                        className="admin-confirm-yes"
+                        disabled={busy[u.id]}
+                        onClick={() => deleteUser(u.id)}
+                      >
+                        {busy[u.id] ? 'Deleting…' : 'Yes, delete'}
+                      </button>
+                    )}
                     <button
                       className="admin-confirm-cancel"
                       onClick={() => setConfirmDelete(null)}
+                      disabled={busy[u.id]}
                     >
                       Cancel
                     </button>
+
+                    <div className="admin-confirm-datawipe">
+                      <label className="admin-confirm-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={deleteData}
+                          disabled={busy[u.id]}
+                          onChange={e => toggleDeleteData(u.id, e.target.checked)}
+                        />
+                        Also permanently delete data entered by this account
+                      </label>
+
+                      {deleteData && summaryLoading && (
+                        <span className="admin-confirm-summary">Checking how much data this affects…</span>
+                      )}
+                      {deleteData && summaryError && (
+                        <span className="admin-confirm-summary">{summaryError}</span>
+                      )}
+                      {deleteData && dataSummary && (
+                        <span className="admin-confirm-summary">
+                          This will also permanently delete {dataSummary.families} famil{dataSummary.families === 1 ? 'y' : 'ies'} and {dataSummary.visits} visit{dataSummary.visits === 1 ? '' : 's'}.
+                        </span>
+                      )}
+
+                      {deleteData && (
+                        <>
+                          <input
+                            type="text"
+                            className="admin-confirm-name-input"
+                            placeholder={`Type "${u.name}" to confirm`}
+                            value={confirmNameText}
+                            onChange={e => setConfirmNameText(e.target.value)}
+                            disabled={busy[u.id]}
+                          />
+                          <button
+                            className="admin-confirm-yes"
+                            disabled={busy[u.id] || confirmNameText.trim().toLowerCase() !== u.name.trim().toLowerCase()}
+                            onClick={() => deleteUser(u.id)}
+                          >
+                            {busy[u.id] ? 'Deleting…' : 'Yes, delete account and all its data'}
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
