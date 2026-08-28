@@ -72,6 +72,8 @@ export async function mergeFamilies(
   const vals: unknown[] = NULLABLE_FIELDS.map(f => discard[f] ?? null);
   vals.push(keepId);
 
+  const keepPhone = (keep.phone as string | null) ?? null;
+
   // Enumerate every flag row the batch will delete (their NOT NULL FK forces
   // it) so the audit record preserves what was collaterally removed.
   const collateral = await db.prepare(
@@ -202,14 +204,18 @@ export async function mergeFamilies(
     ...visitRetargets.map(r => db.prepare(
       `UPDATE merged_keys SET target_id = ? WHERE kind = 'visit' AND target_id = ?`
     ).bind(r.newTargetId, r.deletedId)),
-    // Move proxies whose phone isn't already on keep; leftovers are dupes
+    // Move proxies whose phone isn't already on keep; leftovers are dupes.
+    // A discard-side proxy phone equal to KEEP's own phone is left behind
+    // (and deleted below) rather than moved — merging two registrations of
+    // the same household must not turn keep into its own proxy.
     db.prepare(`
       UPDATE proxies SET family_id = ?
       WHERE family_id = ?
       AND (proxy_phone IS NULL OR proxy_phone NOT IN (
         SELECT proxy_phone FROM proxies WHERE family_id = ? AND proxy_phone IS NOT NULL
       ))
-    `).bind(keepId, discardId, keepId),
+      ${keepPhone !== null ? 'AND proxy_phone IS NOT ?' : ''}
+    `).bind(...(keepPhone !== null ? [keepId, discardId, keepId, keepPhone] : [keepId, discardId, keepId])),
     db.prepare(`DELETE FROM proxies WHERE family_id = ?`).bind(discardId),
     // Flags referencing discard must go before the family row can (NOT NULL FK);
     // the merge itself is preserved in record_changes below.

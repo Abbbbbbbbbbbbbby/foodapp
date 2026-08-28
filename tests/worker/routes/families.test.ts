@@ -166,6 +166,30 @@ describe('POST /api/families', () => {
     expect(typeof data.id).toBe('string');
     expect(data.id.length).toBeGreaterThan(0);
   });
+
+  it('does not persist a self-referencing proxy when registering with a proxy phone equal to the family\'s own phone', async () => {
+    // Same "person here today" scenario as the /proxies route, but on the
+    // registration path: a brand-new family's own phone prefills BOTH the
+    // family's phone field and the proxy answer.
+    const res = await workerExports.default.fetch('http://example.com/api/families', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({
+        name: 'Torres Family', phone: '4805553333', num_people: 2,
+        proxy: { proxy_name: 'Torres Family', proxy_phone: '4805553333' },
+      }),
+    });
+    expect(res.status).toBe(201);
+    const { id } = await res.json<{ id: string }>();
+    const rows = await env.DB.prepare(`SELECT 1 FROM proxies WHERE family_id = ?`).bind(id).all();
+    expect(rows.results!.length).toBe(0);
+    const pickup = await workerExports.default.fetch('https://x/api/families/pickup?phone=4805553333', {
+      headers: { Authorization: authHeader },
+    });
+    const body = await pickup.json() as { own: { id: string } | null; proxy: Array<{ id: string }> };
+    expect(body.own?.id).toBe(id);
+    expect(body.proxy.some(f => f.id === id)).toBe(false);
+  });
 });
 
 describe('PATCH /api/families/:id', () => {
@@ -255,6 +279,28 @@ describe('POST /api/families/:id/proxies', () => {
     });
     expect(missing.status).toBe(404);
   });
+
+  it('does not create a self-referencing proxy when proxy_phone matches the family\'s own phone', async () => {
+    // "The person here today" prefills proxy_phone with the searched phone,
+    // which for a family registering under their own number IS their own
+    // phone — persisting it would make the family appear twice at pickup.
+    const famId = await insertFamily('Self Pickup Family', '4805552222');
+    const res = await workerExports.default.fetch(`https://x/api/families/${famId}/proxies`, {
+      method: 'POST',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy_name: 'Self Pickup Family', proxy_phone: '(480) 555-2222' }),
+    });
+    expect(res.status).toBe(200);
+    const rows = await env.DB.prepare(
+      `SELECT 1 FROM proxies WHERE family_id = ?`
+    ).bind(famId).all();
+    expect(rows.results!.length).toBe(0);
+    const pickup = await workerExports.default.fetch('https://x/api/families/pickup?phone=4805552222', {
+      headers: { Authorization: authHeader },
+    });
+    const body = await pickup.json() as { proxy: Array<{ id: string }> };
+    expect(body.proxy.some(f => f.id === famId)).toBe(false);
+  });
 });
 
 describe('POST /api/families — merged-key alias replay (probe round 4)', () => {
@@ -311,5 +357,19 @@ describe('GET /api/families/directory (offline roster cache)', () => {
     expect(fam!.proxy_phones).toEqual(['4805557777']);  // designated pickup reachable offline
     expect(fam!.num_people).toBe(5);
     expect(fam!.last_visit_date).toBe('2026-08-11');
+  });
+
+  it('excludes a self-referencing proxy phone (equal to the family\'s own phone) from proxy_phones', async () => {
+    const db = env.DB;
+    await db.prepare(`INSERT INTO families (id, name, name_normalized, phone, num_people) VALUES ('dirSelf', 'Self Ref Fam', 'self ref fam', '4805556666', 3)`).run();
+    await db.prepare(`INSERT INTO proxies (family_id, proxy_name, proxy_phone) VALUES ('dirSelf', 'Self Ref Fam', '4805556666')`).run();
+    await db.prepare(`INSERT INTO proxies (family_id, proxy_name, proxy_phone) VALUES ('dirSelf', 'Real Proxy', '4805558888')`).run();
+
+    const res = await workerExports.default.fetch('https://x/api/families/directory', {
+      headers: { Authorization: authHeader },
+    });
+    const body = await res.json() as { families: { id: string; proxy_phones: string[] }[] };
+    const fam = body.families.find(f => f.id === 'dirSelf');
+    expect(fam!.proxy_phones).toEqual(['4805558888']);
   });
 });

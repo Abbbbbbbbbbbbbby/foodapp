@@ -390,11 +390,17 @@ async function handleImport(
 
       for (const proxy of (row.proxies ?? [])) {
         if (!proxy.name && !proxy.phone) continue;
+        const proxyPhone = normalizePhone(proxy.phone);
+        // A proxy phone equal to the family's own phone is self-referencing
+        // (source data can carry the same "pickup person = the family
+        // itself" conflation the app's own wizard used to produce) — it
+        // would show the family twice at pickup.
+        if (proxyPhone !== null && proxyPhone === phone) continue;
         const pid = crypto.randomUUID().replace(/-/g, '');
         stmts.push(
           env.DB.prepare(
             `INSERT INTO proxies (id, family_id, proxy_name, proxy_phone, created_at) VALUES (?, ?, ?, ?, ?)`
-          ).bind(pid, id, proxy.name || null, normalizePhone(proxy.phone), now)
+          ).bind(pid, id, proxy.name || null, proxyPhone, now)
         );
       }
 

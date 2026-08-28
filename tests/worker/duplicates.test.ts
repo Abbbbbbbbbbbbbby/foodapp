@@ -142,12 +142,48 @@ describe('mergeFamilies', () => {
     expect(keep!.num_people).toBe(4);
     expect(keep!.phone).toBe('4805551111'); // not overwritten
   });
+
+  it('does not move a discard-side proxy whose phone equals keep\'s own phone', async () => {
+    // Merging two registrations of the same real household: the discard
+    // side has a "person here today" proxy pointing at what is, for the
+    // survivor, its OWN phone — moving it would make keep its own proxy.
+    await insertFamily('fam-keep', 'A', '4805551111');
+    await insertFamily('fam-drop', 'A Duplicate', '4805552222');
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+    await env.DB.prepare(
+      `INSERT INTO proxies (family_id, proxy_name, proxy_phone) VALUES (?, ?, ?)`
+    ).bind('fam-drop', 'A', '4805551111').run();
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const proxies = await env.DB.prepare(
+      `SELECT family_id, proxy_phone FROM proxies WHERE proxy_phone = '4805551111'`
+    ).all<{ family_id: string; proxy_phone: string }>();
+    expect(proxies.results!.some(p => p.family_id === 'fam-keep')).toBe(false);
+  });
+
+  it('still moves a legitimate discard-side proxy that does not collide with keep\'s own phone', async () => {
+    await insertFamily('fam-keep', 'A', '4805551111');
+    await insertFamily('fam-drop', 'A Duplicate', '4805552222');
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+    await env.DB.prepare(
+      `INSERT INTO proxies (family_id, proxy_name, proxy_phone) VALUES (?, ?, ?)`
+    ).bind('fam-drop', 'Neighbor', '4805559999').run();
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const moved = await env.DB.prepare(
+      `SELECT family_id FROM proxies WHERE proxy_phone = '4805559999'`
+    ).first<{ family_id: string }>();
+    expect(moved!.family_id).toBe('fam-keep');
+  });
 });
 
 describe('checkForDuplicates', () => {
   beforeEach(async () => {
     await env.DB.batch([
       env.DB.prepare(`DELETE FROM duplicate_flags`),
+      env.DB.prepare(`DELETE FROM proxies`),
       env.DB.prepare(`DELETE FROM families`),
     ]);
   });

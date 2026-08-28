@@ -127,6 +127,33 @@ describe('getFamiliesForPickup', () => {
     expect(proxy).toHaveLength(1);
     expect(proxy[0].id).toBe(proxyFamilyId);
   });
+
+  it('does not return the own family a second time via a self-referencing proxy row', async () => {
+    // "Who usually picks up for this family?" -> "The person here today" persists
+    // a proxy whose phone is the SAME phone the family registered with — a
+    // self-referencing proxy row, not a distinct pickup person. Without this
+    // guard, the family shows up twice (own + proxy) for its own phone number.
+    const db = (env as unknown as Env).DB;
+
+    const { id: ownId } = await insertFamily(db, {
+      name: 'Ramirez Family', phone: '4805551111',
+      address: null, zip_code: null, date_of_birth: null, language: null,
+      ethnicity: null, hispanic: null, ami_bracket: null, num_people: 4,
+      num_children_under_18: null, num_children_under_5: null, num_with_diabetes: null,
+      health_insurance: null, snap_benefits: null, receives_texts: null,
+      want_text_updates: null, id_confirmed: null, bag_received: null,
+      first_visit_date: null, created_by: null,
+    });
+
+    await db.prepare(
+      `INSERT INTO proxies (family_id, proxy_name, proxy_phone) VALUES (?, ?, ?)`
+    ).bind(ownId, 'Ramirez Family', '4805551111').run();
+
+    const { own, proxy } = await getFamiliesForPickup(db, '4805551111');
+    expect(own).not.toBeNull();
+    expect(own!.id).toBe(ownId);
+    expect(proxy).toHaveLength(0);
+  });
 });
 
 describe('insertFamily idempotency', () => {

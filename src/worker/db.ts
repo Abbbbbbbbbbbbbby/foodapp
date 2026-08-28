@@ -257,7 +257,14 @@ export async function getFamiliesForPickup(
     GROUP BY f.id
   `).bind(normPhone).all<Record<string, unknown>>();
 
-  const proxy = (proxyResult.results ?? []).map(r => mapRow(r) as FamilySearchResult);
+  // Excludes a self-referencing proxy row (proxy_phone == the family's own
+  // phone) — "Who usually picks up?" -> "The person here today" persists one
+  // for any family registering under their own number. Filtered here too
+  // (not just at write time) so already-existing bad rows don't resurface
+  // the family a second time.
+  const proxy = (proxyResult.results ?? [])
+    .map(r => mapRow(r) as FamilySearchResult)
+    .filter(f => f.id !== own?.id);
   return { own, proxy };
 }
 

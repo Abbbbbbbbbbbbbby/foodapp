@@ -71,13 +71,20 @@ async function handleAddProxy(request: Request, env: Env, familyId: string): Pro
   // next time (issue #7 requirement).
   const proxyName = body.proxy_name?.trim() || null;
 
-  const family = await env.DB.prepare(`SELECT 1 FROM families WHERE id = ?`).bind(familyId).first();
+  const family = await env.DB.prepare(`SELECT phone FROM families WHERE id = ?`).bind(familyId).first<{ phone: string | null }>();
   if (!family) return Response.json({ error: 'Family not found' }, { status: 404 });
 
   const rawPhone = body.proxy_phone ?? null;
   const proxyPhone = normalizePhone(rawPhone);
   if (rawPhone !== null && String(rawPhone).trim() !== '' && proxyPhone === null) {
     return Response.json({ error: 'proxy_phone must be a 10-digit phone number' }, { status: 400 });
+  }
+  // "The person here today" prefills proxy_phone with the searched phone —
+  // for a family registering under their own number that IS their own
+  // phone. Persisting it would make the family show up twice at pickup
+  // (own + proxy), so a self-referencing authorization is a no-op.
+  if (proxyPhone !== null && proxyPhone === family.phone) {
+    return Response.json({ ok: true });
   }
   const existing = await env.DB.prepare(
     `SELECT 1 FROM proxies WHERE family_id = ? AND proxy_phone IS ? LIMIT 1`
@@ -122,7 +129,8 @@ async function handleDirectory(request: Request, env: Env): Promise<Response> {
     SELECT f.id, f.name, COALESCE(f.name_normalized, LOWER(f.name)) AS name_normalized,
            f.phone, f.num_people, MAX(v.visit_date) AS last_visit_date,
            (SELECT GROUP_CONCAT(p.proxy_phone) FROM proxies p
-             WHERE p.family_id = f.id AND p.proxy_phone IS NOT NULL) AS proxy_phones
+             WHERE p.family_id = f.id AND p.proxy_phone IS NOT NULL
+             AND (f.phone IS NULL OR p.proxy_phone != f.phone)) AS proxy_phones
     FROM families f
     LEFT JOIN visits v ON v.family_id = f.id
     GROUP BY f.id
@@ -219,7 +227,10 @@ async function handleCreate(request: Request, env: Env, execCtx: ExecutionContex
     );
   }
 
-  if (body.proxy && !wasReplay) {
+  // Same "person here today" self-referencing case as handleAddProxy: a new
+  // family's own phone (data.phone, just normalized into the insert above)
+  // can equal the proxy answer's phone.
+  if (body.proxy && !wasReplay && normalizePhone(body.proxy.proxy_phone) !== normalizePhone(data.phone)) {
     const proxyPhone = normalizePhone(body.proxy.proxy_phone);
     // Explicit conflict check: the unique index on (family_id, proxy_phone) prevents
     // duplicate rows but only surfaces it as a thrown error, so we skip gracefully.

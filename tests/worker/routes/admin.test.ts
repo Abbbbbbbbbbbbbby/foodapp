@@ -351,4 +351,24 @@ describe('POST /api/admin/import — bubble_id idempotency (issue #6)', () => {
     visits = await db.prepare(`SELECT COUNT(*) AS n FROM visits WHERE family_id = ?`).bind(famId).first<{ n: number }>();
     expect(visits!.n).toBe(2); // one per distinct date, not three
   });
+
+  it('does not import a proxy row whose phone matches the family\'s own phone', async () => {
+    await seedUser('imp-admin5', 'Importer Five', '4805550092', 'admin');
+    const token = await makeToken('imp-admin5', '4805550092', 'admin');
+    const db = (env as unknown as Env).DB;
+
+    const res = await workerExports.default.fetch('https://example.com/api/admin/import', {
+      method: 'POST', headers: authHeader(token),
+      body: JSON.stringify({
+        families: [{
+          bubble_id: 'bub-selfproxy', name: 'Self Proxy Source Fam', phone: '480-555-4444', visits: [],
+          proxies: [{ name: 'Self Proxy Source Fam', phone: '480-555-4444' }],
+        }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const famId = (await db.prepare(`SELECT id FROM families WHERE bubble_id = 'bub-selfproxy'`).first<{ id: string }>())!.id;
+    const proxies = await db.prepare(`SELECT COUNT(*) AS n FROM proxies WHERE family_id = ?`).bind(famId).first<{ n: number }>();
+    expect(proxies!.n).toBe(0);
+  });
 });
