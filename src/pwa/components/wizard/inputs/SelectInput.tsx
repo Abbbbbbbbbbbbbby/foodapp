@@ -11,15 +11,22 @@ interface SelectInputProps {
   onBack: () => void;
   options: Option[];
   language?: string | null;
+  noteEn?: string;
+  noteEs?: string;
 }
 
-export default function SelectInput({ questionEn, questionEs, onChange, onBack, options, language }: SelectInputProps) {
+export default function SelectInput({ questionEn, questionEs, onChange, onBack, options, language, noteEn, noteEs }: SelectInputProps) {
   const isSpanish = language?.toLowerCase().startsWith('es');
   return (
     <div className="wizard-step">
       <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
       <p className="question-en">{questionEn}</p>
       <p className="question-es">{questionEs}</p>
+      {(noteEn || noteEs) && (
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: -4 }}>
+          {isSpanish ? (noteEs ?? noteEn) : (noteEn ?? noteEs)}
+        </p>
+      )}
       <div className="option-list">
         {options.map(opt => {
           const primary = isSpanish ? opt.labelEs : opt.labelEn;

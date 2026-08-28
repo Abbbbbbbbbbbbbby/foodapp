@@ -90,8 +90,13 @@ export function rankName(storedNorm: string, normToken: string, normFull: string
   const fullThreshold = TOKEN_THRESHOLD(normFull);
   let tokenDist = Infinity;
   for (const t of storedNorm.split(/\s+/)) {
-    const d = levenshtein(t, normToken, tokenThreshold);
-    if (d < tokenDist) tokenDist = d;
+    // Cap edits at (stored token length - 1): a 1-char token like "A." can
+    // only match exactly, a 2-char token like "de"/"la" allows 1 edit.
+    // Without this, middle initials and Spanish prepositions fuzzy-match
+    // unrelated query tokens that happen to be 2-3 edits away.
+    const tThreshold = Math.min(tokenThreshold, Math.max(0, t.length - 1));
+    const d = levenshtein(t, normToken, tThreshold);
+    if (d <= tThreshold && d < tokenDist) tokenDist = d;
     if (tokenDist === 0) break;
   }
   const fullDist = levenshtein(storedNorm, normFull, fullThreshold);

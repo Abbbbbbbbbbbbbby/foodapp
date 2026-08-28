@@ -153,18 +153,9 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
             </button>
           </div>
           {addResults !== null && addResults.length === 0 && (
-            <div style={{ marginTop: 8 }}>
-              <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                No match found. / No encontrada.
-              </p>
-              <button
-                className="btn-secondary"
-                style={{ marginTop: 6 }}
-                onClick={() => onRegisterNew(addQuery.trim(), { extra, selectedIds: [...selected] })}
-              >
-                Register them now / Registrarla ahora
-              </button>
-            </div>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 8 }}>
+              No match found. / No encontrada.
+            </p>
           )}
           {addResults !== null && addResults.map(r => (
             <button key={r.id} className="family-card" style={{ marginTop: 8 }} onClick={() => handleAddFamily(r)}>
@@ -176,6 +167,15 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
               <span className="checkbox">＋</span>
             </button>
           ))}
+          {addResults !== null && (
+            <button
+              className="btn-secondary"
+              style={{ marginTop: 8 }}
+              onClick={() => onRegisterNew(addQuery.trim(), { extra, selectedIds: [...selected] })}
+            >
+              Register a new family / Registrar nueva familia
+            </button>
+          )}
           {addError && <p style={{ fontSize: 13, color: 'var(--error, #c0392b)', marginTop: 8 }}>{addError}</p>}
           <button className="btn-ghost" style={{ marginTop: 8 }} onClick={() => { setAdding(false); setAddQuery(''); setAddResults(null); setAddError(null); }}>
             Cancel / Cancelar

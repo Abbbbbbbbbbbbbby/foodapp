@@ -201,23 +201,24 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
 
       {remainingIdx.length > 0 && (
         <div style={{ marginTop: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '16px' }}>
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, cursor: 'pointer' }}>
+            <span>
+              <span style={{ display: 'block', fontSize: 14, color: 'var(--text)', fontWeight: 500 }}>Will they receive a reusable Creighton bag today?</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)' }}>¿Recibirán una bolsa reutilizable de Creighton hoy?</span>
+            </span>
             <input
               type="checkbox"
               checked={bagsGiven}
               onChange={e => setBagsGiven(e.target.checked)}
-              style={{ width: 22, height: 22, marginTop: 2 }}
+              style={{ width: 22, height: 22, flexShrink: 0 }}
             />
-            <span>
-              <span style={{ display: 'block', fontSize: 16 }}>Did they receive a reusable Creighton food bag?</span>
-              <span style={{ display: 'block', fontSize: 16, color: 'var(--text-muted)' }}>¿Recibieron una bolsa reutilizable de Creighton?</span>
-            </span>
           </label>
 
           {bagsGiven && (
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: 0 }}>
+              <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '12px 0' }} />
               <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>
-                Which families received a bag? / ¿Qué familias recibieron una bolsa?
+                Which families will receive a bag? / ¿Qué familias recibirán una bolsa?
               </p>
               {remainingIdx.map(i => { const f = needBag[i]; return (
                 <label key={`${f.id || f.queueId || i}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', cursor: 'pointer' }}>

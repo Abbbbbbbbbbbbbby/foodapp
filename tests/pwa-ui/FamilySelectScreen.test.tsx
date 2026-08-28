@@ -128,7 +128,7 @@ describe('inline registration launch (probe round 6)', () => {
     await user.type(screen.getByPlaceholderText(/Family name/), 'Brand New');
     await user.click(screen.getByRole('button', { name: /Search \/ Buscar/ }));
 
-    await user.click(await screen.findByRole('button', { name: /Register them now/ }));
+    await user.click(await screen.findByRole('button', { name: /Register a new family/ }));
     expect(onRegisterNew).toHaveBeenCalledWith('Brand New', {
       extra: [],
       selectedIds: ['own1'],

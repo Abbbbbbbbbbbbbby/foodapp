@@ -50,11 +50,11 @@ describe('SummaryScreen bag picklist', () => {
     const user = userEvent.setup();
     render(<SummaryScreen families={[fam({ id: 'a', name: 'Garcia' }), fam({ id: 'b', name: 'Lopez', visitId: 'v2' })]} onNext={() => {}} />);
 
-    expect(screen.getByText(/Did they receive a reusable Creighton food bag\?/)).toBeInTheDocument();
-    expect(screen.queryByText(/Which families received a bag\?/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Will they receive a reusable Creighton bag today\?/)).toBeInTheDocument();
+    expect(screen.queryByText(/Which families will receive a bag\?/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('checkbox'));
-    expect(screen.getByText(/Which families received a bag\?/)).toBeInTheDocument();
+    expect(screen.getByText(/Which families will receive a bag\?/)).toBeInTheDocument();
     expect(screen.getByText('Garcia')).toBeInTheDocument();
     expect(screen.getByText('Lopez')).toBeInTheDocument();
   });

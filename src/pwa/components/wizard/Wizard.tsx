@@ -285,6 +285,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
         <SelectInput
           questionEn={`Does anyone in ${label.familyEn} have health insurance?`}
           questionEs={`¿Alguien en ${label.familyEs} tiene seguro de salud?`}
+          noteEn="Includes all types — Medicaid, Medicare, Access, employer, or private."
+          noteEs="Incluye todos los tipos — Medicaid, Medicare, Access, del empleador o privado."
           onChange={v => { set('health_insurance', v as YesNoDeclined); next(); }}
           onBack={goBack}
           options={YES_NO_DECLINED}
