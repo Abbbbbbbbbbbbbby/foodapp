@@ -7,6 +7,7 @@ import { handleAdminRoutes } from './routes/admin';
 import { handleRecordRoutes } from './routes/records';
 import { handleDuplicateRoutes } from './routes/duplicates';
 import { handleClientEventRoutes, purgeOldClientEvents } from './routes/clientEvents';
+import { rescanAllDuplicates } from './duplicates';
 
 // Browser origins allowed to call this API. Auth is a Bearer header (no cookies),
 // so this is abuse damping, not CSRF defense: a hostile page can fire no-cors POSTs
@@ -107,8 +108,12 @@ export default {
     }
   },
 
-  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-    await purgeOldClientEvents(env.DB);
+  async scheduled(controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    if (controller.cron === '0 6 * * 0') {
+      await rescanAllDuplicates(env.DB);
+    } else {
+      await purgeOldClientEvents(env.DB);
+    }
   },
 };
 

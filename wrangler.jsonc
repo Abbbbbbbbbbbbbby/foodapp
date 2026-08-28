@@ -49,7 +49,8 @@
   },
 
   // Daily purge of client_events rows older than 30 days (see purgeOldClientEvents).
+  // Weekly Sunday rescan for duplicate families that pre-date duplicate detection.
   "triggers": {
-    "crons": ["0 9 * * *"]
+    "crons": ["0 9 * * *", "0 6 * * 0"]
   }
 }

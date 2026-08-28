@@ -4,6 +4,47 @@ import { levenshtein, normalizeName } from './db';
 // any that share a phone number, exact name, or sufficiently similar name.
 // Pair ordering is normalized (smaller ID first) so (A,B) and (B,A) never
 // both appear — the UNIQUE constraint on the table enforces this at DB level too.
+// Scans every family pair in the database and writes missing duplicate_flags
+// rows using the same criteria as checkForDuplicates. Safe to re-run: uses
+// INSERT OR IGNORE so already-flagged pairs are skipped. Intended to surface
+// families that pre-dated the creation-time check (imports, early records).
+export async function rescanAllDuplicates(db: D1Database): Promise<void> {
+  const { results: families } = await db.prepare(
+    `SELECT id, name, phone FROM families`
+  ).all<{ id: string; name: string; phone: string | null }>();
+  if (!families || families.length < 2) return;
+
+  const { results: existing } = await db.prepare(
+    `SELECT family_a_id, family_b_id FROM duplicate_flags`
+  ).all<{ family_a_id: string; family_b_id: string }>();
+  const flagged = new Set((existing ?? []).map(f => `${f.family_a_id}:${f.family_b_id}`));
+
+  const normed = families.map(f => ({ ...f, norm: normalizeName(f.name) }));
+  const toInsert: { a: string; b: string; reason: string }[] = [];
+
+  for (let i = 0; i < normed.length; i++) {
+    for (let j = i + 1; j < normed.length; j++) {
+      const f1 = normed[i], f2 = normed[j];
+      const [a, b] = f1.id < f2.id ? [f1.id, f2.id] : [f2.id, f1.id];
+      if (flagged.has(`${a}:${b}`)) continue;
+
+      let reason: string | null = null;
+      if (f1.phone && f1.phone === f2.phone)       reason = 'phone';
+      else if (f1.norm === f2.norm)                reason = 'name_exact';
+      else if (levenshtein(f1.norm, f2.norm) <= 3) reason = 'name_fuzzy';
+      if (reason) toInsert.push({ a, b, reason });
+    }
+  }
+
+  for (let i = 0; i < toInsert.length; i += 100) {
+    const chunk = toInsert.slice(i, i + 100);
+    await db.batch(chunk.map(({ a, b, reason }) =>
+      db.prepare(`INSERT OR IGNORE INTO duplicate_flags (id, family_a_id, family_b_id, reason) VALUES (?, ?, ?, ?)`)
+        .bind(crypto.randomUUID().replace(/-/g, ''), a, b, reason)
+    ));
+  }
+}
+
 export async function checkForDuplicates(
   db: D1Database,
   newFamilyId: string,

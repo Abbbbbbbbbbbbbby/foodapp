@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mergeFamilies, checkForDuplicates } from '../../src/worker/duplicates';
+import { mergeFamilies, checkForDuplicates, rescanAllDuplicates } from '../../src/worker/duplicates';
 
 async function insertFamily(id: string, name: string, phone: string | null, extra: Record<string, unknown> = {}) {
   const cols = ['id', 'name', 'phone', ...Object.keys(extra)];
@@ -176,6 +176,59 @@ describe('mergeFamilies', () => {
       `SELECT family_id FROM proxies WHERE proxy_phone = '4805559999'`
     ).first<{ family_id: string }>();
     expect(moved!.family_id).toBe('fam-keep');
+  });
+});
+
+describe('rescanAllDuplicates', () => {
+  beforeEach(async () => {
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM duplicate_flags`),
+      env.DB.prepare(`DELETE FROM proxies`),
+      env.DB.prepare(`DELETE FROM families`),
+    ]);
+  });
+
+  it('flags an exact-name pair that pre-existed duplicate detection', async () => {
+    await insertFamily('rs-a', 'Goma Ali', '4805550001');
+    await insertFamily('rs-b', 'Goma Ali', '4805550002');
+
+    await rescanAllDuplicates(env.DB);
+
+    const flags = await env.DB.prepare(`SELECT family_a_id, family_b_id, reason FROM duplicate_flags`).all<{ family_a_id: string; family_b_id: string; reason: string }>();
+    expect(flags.results!.length).toBe(1);
+    expect(flags.results![0]).toMatchObject({ reason: 'name_exact' });
+  });
+
+  it('flags a fuzzy-name pair', async () => {
+    await insertFamily('rs-c', 'Emma Gutierez', '4805550003');
+    await insertFamily('rs-d', 'Emma Gutierrez', '4805550004');
+
+    await rescanAllDuplicates(env.DB);
+
+    const flags = await env.DB.prepare(`SELECT reason FROM duplicate_flags`).all<{ reason: string }>();
+    expect(flags.results!.length).toBe(1);
+    expect(flags.results![0].reason).toBe('name_fuzzy');
+  });
+
+  it('skips pairs that are already flagged', async () => {
+    await insertFamily('rs-e', 'Lopez', '4805550005');
+    await insertFamily('rs-f', 'Lopez', '4805550006');
+    await insertFlag('existing-flag', 'rs-e', 'rs-f');
+
+    await rescanAllDuplicates(env.DB);
+
+    const flags = await env.DB.prepare(`SELECT COUNT(*) AS n FROM duplicate_flags`).first<{ n: number }>();
+    expect(flags!.n).toBe(1); // no duplicate row added
+  });
+
+  it('produces no flags for unrelated families', async () => {
+    await insertFamily('rs-g', 'Smith', '4805550007');
+    await insertFamily('rs-h', 'Johnson', '4805550008');
+
+    await rescanAllDuplicates(env.DB);
+
+    const flags = await env.DB.prepare(`SELECT COUNT(*) AS n FROM duplicate_flags`).first<{ n: number }>();
+    expect(flags!.n).toBe(0);
   });
 });
 
