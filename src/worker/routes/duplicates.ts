@@ -1,7 +1,7 @@
 import type { Env } from '../schema';
 import { requireRole } from '../middleware';
 import type { AuthContext } from '../middleware';
-import { mergeFamilies } from '../duplicates';
+import { mergeFamilies, rescanAllDuplicates } from '../duplicates';
 
 interface FlagRow {
   id: string;
@@ -65,6 +65,11 @@ export async function handleDuplicateRoutes(
   if (pathname === '/api/admin/duplicates' && request.method === 'GET') {
     const { results } = await env.DB.prepare(LIST_SQL).all<FlagRow>();
     return Response.json({ flags: (results ?? []).map(shapeFlag) });
+  }
+
+  if (pathname === '/api/admin/duplicates/rescan' && request.method === 'POST') {
+    const added = await rescanAllDuplicates(env.DB);
+    return Response.json({ ok: true, added });
   }
 
   const mergeMatch = pathname.match(/^\/api\/admin\/duplicates\/([^/]+)\/merge$/);

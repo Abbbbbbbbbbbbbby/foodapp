@@ -239,13 +239,32 @@ export default function DuplicatesPage() {
   const [flags, setFlags] = useState<DuplicateFlag[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rescanning, setRescanning] = useState(false);
+  const [rescanNotice, setRescanNotice] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.get<{ flags: DuplicateFlag[] }>('/api/admin/duplicates')
+  function loadFlags() {
+    return api.get<{ flags: DuplicateFlag[] }>('/api/admin/duplicates')
       .then(data => setFlags(data.flags))
       .catch(e => setError(e instanceof Error ? e.message : 'Failed to load'))
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { loadFlags(); }, []);
+
+  async function rescan() {
+    setRescanning(true);
+    setRescanNotice(null);
+    try {
+      const { added } = await api.post<{ ok: boolean; added: number }>('/api/admin/duplicates/rescan', {});
+      setLoading(true);
+      await loadFlags();
+      setRescanNotice(added > 0 ? `Found ${added} new potential duplicate${added === 1 ? '' : 's'}.` : 'No new duplicates found.');
+    } catch (e) {
+      setRescanNotice(e instanceof Error ? e.message : 'Rescan failed');
+    } finally {
+      setRescanning(false);
+    }
+  }
 
   function onMerged(id: string) {
     setFlags(fs => fs.filter(f => f.id !== id));
@@ -259,11 +278,19 @@ export default function DuplicatesPage() {
     <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 16px 40px' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, padding: '20px 0 16px' }}>
         <button className="btn-ghost" onClick={() => navigate('/')}>← Back</button>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Duplicate Families</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Duplicate Families</h1>
+          <button className="btn-secondary" disabled={rescanning} onClick={rescan} style={{ fontSize: 13 }}>
+            {rescanning ? 'Scanning…' : 'Rescan now'}
+          </button>
+        </div>
         {!loading && (
           <span style={{ fontSize: 14, color: 'var(--text-muted)', marginLeft: 4 }}>
             {flags.length} pending
           </span>
+        )}
+        {rescanNotice && (
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{rescanNotice}</span>
         )}
       </div>
 

@@ -8,11 +8,11 @@ import { levenshtein, normalizeName } from './db';
 // rows using the same criteria as checkForDuplicates. Safe to re-run: uses
 // INSERT OR IGNORE so already-flagged pairs are skipped. Intended to surface
 // families that pre-dated the creation-time check (imports, early records).
-export async function rescanAllDuplicates(db: D1Database): Promise<void> {
+export async function rescanAllDuplicates(db: D1Database): Promise<number> {
   const { results: families } = await db.prepare(
     `SELECT id, name, phone FROM families`
   ).all<{ id: string; name: string; phone: string | null }>();
-  if (!families || families.length < 2) return;
+  if (!families || families.length < 2) return 0;
 
   const { results: existing } = await db.prepare(
     `SELECT family_a_id, family_b_id FROM duplicate_flags`
@@ -43,6 +43,7 @@ export async function rescanAllDuplicates(db: D1Database): Promise<void> {
         .bind(crypto.randomUUID().replace(/-/g, ''), a, b, reason)
     ));
   }
+  return toInsert.length;
 }
 
 export async function checkForDuplicates(
