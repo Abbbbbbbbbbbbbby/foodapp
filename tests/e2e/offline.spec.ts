@@ -60,6 +60,7 @@ test('offline check-in queues family, visit, and bag; reconnect syncs them to th
   if (await cachedRegisterNew.isVisible()) await cachedRegisterNew.click();
   else await offlineContinue.click();
   await page.getByRole('button', { name: /^1$/ }).click();
+  await page.getByRole('button', { name: /Continue \/ Continuar/ }).click(); // consent screen
   await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
 
   // ── Wizard (all steps, same journey as the online smoke) ──
@@ -140,6 +141,7 @@ test('a RETURNING household checked in offline resolves to its existing record �
   await registerNew.or(howMany1).first().waitFor();
   if (await registerNew.isVisible()) await registerNew.click();
   await howMany1.click();
+  await page.getByRole('button', { name: /Continue \/ Continuar/ }).click(); // consent screen
   await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
   await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
   await page.getByRole('button', { name: /Next \/ Siguiente|don't have|No tengo/i }).first().click();

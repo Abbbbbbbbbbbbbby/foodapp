@@ -69,6 +69,7 @@ test('a crash inside a wizard step shows the recovery banner (not a blank page) 
   await registerNew.or(howMany1).first().waitFor();
   if (await registerNew.isVisible()) await registerNew.click();
   await howMany1.click();
+  await page.getByRole('button', { name: /Continue \/ Continuar/ }).click(); // consent screen
   await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
 
   await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();          // 1 name (prefilled)

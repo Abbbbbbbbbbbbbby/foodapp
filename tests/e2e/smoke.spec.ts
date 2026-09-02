@@ -51,6 +51,7 @@ test('register, check in a new family, and record a bag', async ({ page }) => {
 
   // How many families → 1
   await howMany1.click();
+  await page.getByRole('button', { name: /Continue \/ Continuar/ }).click(); // consent screen
   // Proxy question → no designated person
   await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
 
