@@ -20,8 +20,20 @@
         if (document.getElementById('early-error-banner')) return;
         var b = document.createElement('div');
         b.id = 'early-error-banner';
-        b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2000;background:#3a1414;color:#f4f4f4;padding:8px 12px;font:13px -apple-system,sans-serif;text-align:center';
-        b.textContent = 'Something went wrong — reload if the app is stuck. / Algo salió mal — recargue si la aplicación no responde.';
+        b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2000;max-height:60%;overflow:auto;background:#3a1414;color:#f4f4f4;padding:8px 12px;font:13px -apple-system,sans-serif;text-align:left';
+        var headline = document.createElement('div');
+        headline.style.cssText = 'text-align:center;margin-bottom:6px';
+        headline.textContent = 'Something went wrong — reload if the app is stuck. / Algo salió mal — recargue si la aplicación no responde.';
+        b.appendChild(headline);
+        // Diagnostic detail for a crash this early: telemetry.ts hasn't loaded
+        // yet (or never will, if THIS is what's failing to load), so nothing
+        // reaches the server — this is the only place the real error is ever
+        // visible. Shown on-device rather than only logged, since a device
+        // old enough to hit this may not support remote debugging at all.
+        var detail = document.createElement('pre');
+        detail.style.cssText = 'white-space:pre-wrap;word-break:break-all;font:11px monospace;margin:0;opacity:0.85';
+        detail.textContent = String(msg) + ' (' + (src || '?') + ':' + line + ':' + col + ')' + (err && err.stack ? '\n' + err.stack : '');
+        b.appendChild(detail);
         document.body.appendChild(b);
       };
     </script>
