@@ -109,7 +109,7 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-    if (controller.cron === '0 6 * * 0') {
+    if (controller.cron === '0 6 * * SUN') {
       await rescanAllDuplicates(env.DB);
     } else {
       await purgeOldClientEvents(env.DB);

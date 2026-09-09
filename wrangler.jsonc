@@ -50,7 +50,9 @@
 
   // Daily purge of client_events rows older than 30 days (see purgeOldClientEvents).
   // Weekly Sunday rescan for duplicate families that pre-date duplicate detection.
+  // Cloudflare's cron parser rejects day-of-week 0 for Sunday (unlike POSIX
+  // cron) — only 1-7 or day names are accepted, so this uses SUN.
   "triggers": {
-    "crons": ["0 9 * * *", "0 6 * * 0"]
+    "crons": ["0 9 * * *", "0 6 * * SUN"]
   }
 }
