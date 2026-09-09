@@ -171,6 +171,10 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
             <button
               className="btn-secondary"
               style={{ marginTop: 8 }}
+              // Guards against the box having been cleared/edited after the
+              // search that produced these results — this button must never
+              // launch registration with a blank prefilled name.
+              disabled={addQuery.trim().length < 2}
               onClick={() => onRegisterNew(addQuery.trim(), { extra, selectedIds: [...selected] })}
             >
               Register a new family / Registrar nueva familia

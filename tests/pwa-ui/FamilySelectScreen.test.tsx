@@ -135,6 +135,24 @@ describe('inline registration launch (probe round 6)', () => {
     });
   });
 
+  it('disables Register-a-new-family if the search box is cleared after results come back', async () => {
+    vi.mocked(api.get).mockResolvedValue({ results: [{ id: 'other1', name: 'Someone Else', num_people: 1, last_visit_date: null }] });
+    const user = userEvent.setup();
+    const { onRegisterNew } = renderScreen();
+
+    await user.click(screen.getByRole('button', { name: /Add another family/ }));
+    const input = screen.getByPlaceholderText(/Family name/);
+    await user.type(input, 'Partial Match');
+    await user.click(screen.getByRole('button', { name: /Search \/ Buscar/ }));
+    await screen.findByText('Someone Else'); // results present, none of them right
+
+    await user.clear(input);
+    const registerBtn = screen.getByRole('button', { name: /Register a new family/ });
+    expect(registerBtn).toBeDisabled();
+    await user.click(registerBtn);
+    expect(onRegisterNew).not.toHaveBeenCalled();
+  });
+
   it('rehydrates extra families and selection after the round-trip', () => {
     render(
       <FamilySelectScreen
