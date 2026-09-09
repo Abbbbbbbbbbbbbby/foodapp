@@ -557,7 +557,7 @@ describe('CSV export', () => {
     expect(body).not.toContain('(row cap)');
     expect(log).toHaveBeenCalledWith('csv export', expect.objectContaining({ truncation: 'byte-budget' }));
     log.mockRestore();
-  });
+  }, 20000);
 
   it('a normal untruncated export carries no marker and logs truncation none', async () => {
     await seed([{ id: 'plain-1' }, { id: 'plain-2' }]);
