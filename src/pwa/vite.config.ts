@@ -43,14 +43,18 @@ function stripSafari10Guard(): Plugin {
 // bundle: the primary pass's downleveled class still had a spread-argument
 // constructor (`super(..._args)`), which plugin-transform-spread alone
 // cannot compile without also transforming the class itself.
+//
+// This ALSO covers the polyfills-legacy bundle now — it was assumed to be
+// pre-compiled ES5 (SystemJS + core-js) and excluded here, but that's false:
+// a real iPad 2 on iOS 9.3.5 hit "SyntaxError: Unexpected token '>'" on an
+// un-transformed arrow function on the very first line of that bundle,
+// breaking the app before anything else could load. Re-running Babel on
+// already-minified code hasn't shown any sign of corrupting it in testing.
 function forceEs5LegacyChunks(): Plugin {
   return {
     name: 'force-es5-legacy-chunks',
     renderChunk(code, chunk) {
-      // Only transform app entry chunks — NOT the polyfills bundle.
-      // The polyfills bundle (SystemJS + core-js) is pre-compiled ES5;
-      // re-running Babel on minified code can corrupt it.
-      if (!chunk.fileName.includes('-legacy-') || chunk.fileName.includes('polyfills-legacy')) return null;
+      if (!chunk.fileName.includes('-legacy-')) return null;
       const result = babel.transformSync(code, {
         configFile: false,
         babelrc: false,

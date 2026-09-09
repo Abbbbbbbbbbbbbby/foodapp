@@ -15,7 +15,7 @@
     "migrate:remote": "wrangler d1 migrations apply foodapp --remote",
     "migrate:bubble": "node scripts/migrate-bubble.js",
     "pwa:dev": "vite --config src/pwa/vite.config.ts",
-    "pwa:build": "vite build --config src/pwa/vite.config.ts && node scripts/inject-precache.mjs",
+    "pwa:build": "vite build --config src/pwa/vite.config.ts && node scripts/fix-legacy-polyfills.mjs && node scripts/inject-precache.mjs",
     "generate-types": "wrangler types",
     "test:ui": "vitest run --config vitest.ui.config.ts",
     "e2e:server": "npm run build && wrangler d1 migrations apply foodapp --local && wrangler dev --local-upstream 127.0.0.1 --port 8787 --var ENVIRONMENT:test --var JWT_SECRET:e2e-local-secret --var TWILIO_ACCOUNT_SID:x --var TWILIO_AUTH_TOKEN:x --var TWILIO_PHONE_NUMBER:0000000000",
