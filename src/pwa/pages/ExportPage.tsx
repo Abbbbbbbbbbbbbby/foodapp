@@ -25,7 +25,7 @@ const FIELDS: FieldDef[] = [
   { key: 'first_visit_date',       label: 'First Visit Date',       group: 'family' },
   { key: 'visit_date',             label: 'Visit Date',             group: 'visit'  },
   { key: 'bag_received',           label: 'Bag Received',           group: 'visit'  },
-  { key: 'volunteer_name',         label: 'Volunteer',              group: 'visit'  },
+  { key: 'volunteer_name',         label: 'User',                   group: 'visit'  },
   { key: 'picked_up_by_phone',     label: 'Picked Up By (Phone)',   group: 'visit'  },
 ];
 

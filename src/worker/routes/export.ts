@@ -53,7 +53,7 @@ const CSV_HEADERS: Record<string, string> = {
   first_visit_date:       'First Visit Date',
   visit_date:             'Visit Date',
   bag_received:           'Bag Received',
-  volunteer_name:         'Volunteer',
+  volunteer_name:         'User',
   picked_up_by_phone:     'Picked Up By (Phone)',
 };
 
