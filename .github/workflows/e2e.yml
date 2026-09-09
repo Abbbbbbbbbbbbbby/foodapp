@@ -28,7 +28,11 @@ jobs:
       # the whole install. Drop the source first so apt never touches it.
       - name: Install Playwright browsers
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
+          # Find by content, not a guessed filename — Ubuntu 24.04 runners
+          # can use either the legacy one-line format or DEB822 .sources
+          # files, and the previous attempt's guessed path didn't match.
+          sudo grep -rl 'dl.google.com/linux/chrome' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null \
+            | xargs -r sudo rm -f
           npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
