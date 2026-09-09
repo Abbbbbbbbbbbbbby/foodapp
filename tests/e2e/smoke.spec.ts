@@ -62,8 +62,7 @@ test('register, check in a new family, and record a bag', async ({ page }) => {
   await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
   await page.getByRole('button', { name: /English/ }).first().click();             // 4 language
   await page.getByRole('button', { name: /^2$/ }).first().click();                 // 5 household
-  await page.getByRole('button', { name: /^0$/ }).first().click();                 // 6 children <18
-  await page.getByRole('button', { name: /^0$/ }).first().click();                 // 7 children <5
+  await page.getByRole('button', { name: /^0$/ }).first().click();                 // 6 children <18 -> auto-skips 7 (children <5 forced to 0)
   await page.getByRole('button', { name: /Prefer not to say|Prefiero no/i }).first().click(); // 8 income
   await page.getByRole('button', { name: /^No$/ }).first().click();                // 9 SNAP
   await page.getByRole('button', { name: /^No$/ }).first().click();                // 10 insurance
