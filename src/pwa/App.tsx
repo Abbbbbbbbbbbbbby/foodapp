@@ -10,6 +10,7 @@ import AdminAccountsPage from './pages/AdminAccountsPage';
 import RecordsPage from './pages/RecordsPage';
 import ImportPage from './pages/ImportPage';
 import DuplicatesPage from './pages/DuplicatesPage';
+import ExportPage from './pages/ExportPage';
 
 function ProtectedLayout() {
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -55,6 +56,10 @@ export default function App() {
           <Route
             path="/admin/duplicates"
             element={<AdminRoute><DuplicatesPage /></AdminRoute>}
+          />
+          <Route
+            path="/admin/export"
+            element={<StaffRoute><ExportPage /></StaffRoute>}
           />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

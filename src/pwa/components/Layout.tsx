@@ -18,6 +18,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Manage Accounts',    path: '/admin/accounts',    roles: ['admin'] },
   { label: 'Import from Bubble', path: '/admin/import',      roles: ['admin'] },
   { label: 'Review Duplicates',  path: '/admin/duplicates',  roles: ['admin'] },
+  { label: 'Export Data',        path: '/admin/export',      roles: ['admin', 'staff'] },
 ];
 
 export default function Layout() {
