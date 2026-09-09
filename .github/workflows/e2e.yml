@@ -20,18 +20,16 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      # Retried: the underlying apt-get (from --with-deps) hits Google's
-      # Chrome package mirror, which intermittently serves a stale/mismatched
-      # index ("Hash Sum mismatch") — a transient upstream issue, not
-      # anything in this repo. Usually clears within one or two retries.
+      # The runner image pre-registers a google-chrome-stable apt source we
+      # never use (Playwright installs its own bundled Chromium/WebKit, not
+      # system Chrome) — but --with-deps still runs `apt-get update` across
+      # every configured source, and that mirror has been serving a
+      # consistently stale/mismatched index ("Hash Sum mismatch"), failing
+      # the whole install. Drop the source first so apt never touches it.
       - name: Install Playwright browsers
         run: |
-          for i in 1 2 3; do
-            npx playwright install --with-deps chromium webkit && exit 0
-            echo "Install attempt $i failed, retrying in 15s..."
-            sleep 15
-          done
-          exit 1
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
+          npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
