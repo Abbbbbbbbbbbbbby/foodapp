@@ -1,20 +1,15 @@
-import { env, fetchMock } from 'cloudflare:test';
-import { describe, it, expect, beforeAll, afterEach, beforeEach } from 'vitest';
+import { env } from 'cloudflare:test';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateOtpCode, createOtp, verifyOtp, sendOtpSms } from '../../src/worker/otp';
 import type { Env } from '../../src/worker/schema';
-
-beforeAll(() => {
-  fetchMock.activate();
-  fetchMock.disableNetConnect();
-});
-
-afterEach(() => {
-  fetchMock.assertNoPendingInterceptors();
-});
 
 beforeEach(async () => {
   const db = (env as unknown as Env).DB;
   await db.prepare('DELETE FROM otp_codes').run();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('generateOtpCode', () => {
@@ -86,9 +81,7 @@ describe('verifyOtp', () => {
     const db = (env as unknown as Env).DB;
     const oldCode = await createOtp(db, '4805551234');
     const newCode = await createOtp(db, '4805551234');
-    // old code must no longer work
     expect(await verifyOtp(db, '4805551234', oldCode)).toBe(false);
-    // new code works
     expect(await verifyOtp(db, '4805551234', newCode)).toBe(true);
   });
 });
@@ -101,30 +94,30 @@ describe('sendOtpSms', () => {
     const toPhone = '4805551234';
     const code = '123456';
 
-    fetchMock
-      .get(`https://api.twilio.com`)
-      .intercept({
-        method: 'POST',
-        path: `/2010-04-01/Accounts/${accountSid}/Messages.json`,
-      })
-      .reply(201, JSON.stringify({ sid: 'SM123' }), {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ sid: 'SM123' }), {
+        status: 201,
         headers: { 'Content-Type': 'application/json' },
-      });
+      })
+    );
+    vi.stubGlobal('fetch', mockFetch);
 
     await sendOtpSms(accountSid, authToken, fromNumber, toPhone, code);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [calledUrl, calledOptions] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(calledUrl).toContain(`/2010-04-01/Accounts/${accountSid}/Messages.json`);
+    expect(calledOptions.method).toBe('POST');
   });
 
   it('throws on non-ok Twilio response', async () => {
     const accountSid = 'ACtest123';
     const authToken = 'authtoken456';
 
-    fetchMock
-      .get(`https://api.twilio.com`)
-      .intercept({
-        method: 'POST',
-        path: `/2010-04-01/Accounts/${accountSid}/Messages.json`,
-      })
-      .reply(401, 'Unauthorized');
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response('Unauthorized', { status: 401 })
+    );
+    vi.stubGlobal('fetch', mockFetch);
 
     await expect(
       sendOtpSms(accountSid, authToken, '0000000000', '4805551234', '123456')
