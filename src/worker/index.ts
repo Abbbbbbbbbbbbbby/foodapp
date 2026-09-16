@@ -8,6 +8,7 @@ import { handleRecordRoutes } from './routes/records';
 import { handleDuplicateRoutes } from './routes/duplicates';
 import { handleClientEventRoutes, purgeOldClientEvents } from './routes/clientEvents';
 import { rescanAllDuplicates } from './duplicates';
+import { handleExportRoute } from './routes/export';
 
 // Browser origins allowed to call this API. Auth is a Bearer header (no cookies),
 // so this is abuse damping, not CSRF defense: a hostile page can fire no-cors POSTs
@@ -82,6 +83,12 @@ export default {
 
       const questionResponse = await handleQuestionRoutes(request, env, url.pathname);
       if (questionResponse) return cors(questionResponse, request);
+
+      // Checked before handleAdminRoutes: that handler gates its ENTIRE
+      // '/api/admin/' prefix to the admin role, which would 403 a staff
+      // caller before ever reaching this route's own admin-or-staff check.
+      const exportResponse = await handleExportRoute(request, env, url.pathname);
+      if (exportResponse) return cors(exportResponse, request);
 
       const adminResponse = await handleAdminRoutes(request, env, url.pathname);
       if (adminResponse) return cors(adminResponse, request);
