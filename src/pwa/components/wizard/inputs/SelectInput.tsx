@@ -36,7 +36,7 @@ export default function SelectInput({ questionEn, questionEs, onChange, onBack, 
             <button key={opt.value} className="btn-option" onClick={() => onChange(opt.value)}>
               <span>{primary}</span>
               {showSecondary && (
-                <span style={{ fontSize: 14, color: 'var(--text-muted)' }}>{secondary}</span>
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{secondary}</span>
               )}
             </button>
           );

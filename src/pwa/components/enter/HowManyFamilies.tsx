@@ -45,11 +45,11 @@ export default function HowManyFamilies({ onSelect, onBack }: HowManyFamiliesPro
       <p className="question-es">¿Para cuántas familias está recogiendo hoy?</p>
       <div className="tap-grid">
         {[1, 2, 3].map(n => (
-          <button key={n} className="btn-tap" style={{ fontSize: 32, padding: '24px 0' }} onClick={() => onSelect(n)}>
+          <button key={n} className="btn-tap" onClick={() => onSelect(n)}>
             {n}
           </button>
         ))}
-        <button className="btn-tap" style={{ fontSize: 32, padding: '24px 0' }} onClick={() => setAskExact(true)}>
+        <button className="btn-tap" onClick={() => setAskExact(true)}>
           4+
         </button>
       </div>

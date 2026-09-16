@@ -277,10 +277,16 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 .log-actions > * + * { margin-top: 16px; }
 .progress-label { font-size: 13px; color: var(--text-muted); }
 
-.how-many { display: flex; flex-direction: column; }
-.how-many > * + * { margin-top: 32px; }
-.proxy-question { display: flex; flex-direction: column; }
+/* Same padding/spacing as .wizard-step — these are questions in the same
+   flow and must match its inset and rhythm, not sit flush against the edge. */
+.how-many { display: flex; flex-direction: column; padding: 20px 16px; }
+.how-many > * + * { margin-top: 24px; }
+.proxy-question { display: flex; flex-direction: column; padding: 20px 16px; }
 .proxy-question > * + * { margin-top: 24px; }
+/* The embedded progress header already supplies its own 16px horizontal
+   inset (see .wizard-header) — without this override it would double up
+   with .proxy-question's own padding above. */
+.proxy-question > .wizard-header { padding: 12px 0 0; }
 .opt-detail { font-size: 14px; color: var(--text-muted); }
 
 .enter-page { display: flex; flex-direction: column; }

@@ -47,15 +47,16 @@ export function TextsStep({ language, onComplete, onBack }: TextsStepProps) {
 
   const isSpanish = language?.toLowerCase().startsWith('es');
 
-  function yesLabel() { return isSpanish ? <><span>Sí</span><span style={{ fontSize: 14, color: 'var(--text-muted)' }}>Yes</span></> : <><span>Yes</span><span style={{ fontSize: 14, color: 'var(--text-muted)' }}>Sí</span></>; }
+  function yesLabel() { return isSpanish ? <><span>Sí</span><span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Yes</span></> : <><span>Yes</span><span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Sí</span></>; }
   function noLabel() { return <span>No</span>; }
   function dkLabel() { return isSpanish
-    ? <><span>No sé / Prefiero no responder</span><span style={{ fontSize: 14, color: 'var(--text-muted)' }}>{"Don't know / Prefer not to say"}</span></>
-    : <><span>{"Don't know / Prefer not to say"}</span><span style={{ fontSize: 14, color: 'var(--text-muted)' }}>No sé / Prefiero no responder</span></>; }
+    ? <><span>No sé / Prefiero no responder</span><span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{"Don't know / Prefer not to say"}</span></>
+    : <><span>{"Don't know / Prefer not to say"}</span><span style={{ fontSize: 13, color: 'var(--text-muted)' }}>No sé / Prefiero no responder</span></>; }
 
   if (subStep === 0) {
     return (
       <div className="wizard-step">
+        <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
         <p className="question-en">Do you currently receive weekly text messages from us?</p>
         <p className="question-es">¿Actualmente recibe mensajes de texto semanales de nuestra parte?</p>
         <div className="option-list">
@@ -69,13 +70,13 @@ export function TextsStep({ language, onComplete, onBack }: TextsStepProps) {
             {dkLabel()}
           </button>
         </div>
-        <div className="step-actions"><button className="btn-ghost" onClick={onBack}>Back / Atrás</button></div>
       </div>
     );
   }
 
   return (
     <div className="wizard-step">
+      <button className="btn-ghost" onClick={() => setSubStep(0)}>Back / Atrás</button>
       <p className="question-en">
         Would you like to receive weekly text updates about food distribution events?
       </p>
@@ -89,9 +90,6 @@ export function TextsStep({ language, onComplete, onBack }: TextsStepProps) {
         <button className="btn-option" onClick={() => onComplete(receivesTexts, false)}>
           {noLabel()}
         </button>
-      </div>
-      <div className="step-actions">
-        <button className="btn-ghost" onClick={() => setSubStep(0)}>Back / Atrás</button>
       </div>
     </div>
   );
