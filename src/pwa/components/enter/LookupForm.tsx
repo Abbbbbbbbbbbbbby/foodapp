@@ -12,6 +12,7 @@ export default function LookupForm({ onSearch }: LookupFormProps) {
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<DirectoryFamily[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
 
   const canSearch = name.trim().length > 0 || phone.trim().length > 0;
 
@@ -76,7 +77,11 @@ export default function LookupForm({ onSearch }: LookupFormProps) {
             onChange={e => setName(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Escape') { setSuggestions([]); }
-              if (e.key === 'Enter' && suggestions.length > 0) { setSuggestions([]); }
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                setSuggestions([]);
+                phoneRef.current?.focus();
+              }
             }}
             autoComplete="off"
             autoFocus
@@ -120,6 +125,7 @@ export default function LookupForm({ onSearch }: LookupFormProps) {
       <label>
         Phone / Teléfono
         <input
+          ref={phoneRef}
           type="tel"
           inputMode="numeric"
           value={phone}
