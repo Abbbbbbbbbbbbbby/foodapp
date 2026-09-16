@@ -55,6 +55,13 @@ const inputStyle: React.CSSProperties = {
   fontSize: 14,
 };
 
+// Every checkbox/radio label below needs an explicit flexDirection: 'row' —
+// global.css's bare `label` rule defaults to column (correct for the
+// Text-above-input pattern elsewhere), which would otherwise stack the
+// control above its own text instead of beside it. See docs/design.md
+// "Form Elements" for the full writeup.
+const checkRowStyle: React.CSSProperties = { display: 'flex', flexDirection: 'row', alignItems: 'center' };
+
 const DEFAULT_FIELDS = new Set(['name', 'visit_date', 'bag_received', 'num_people']);
 
 export default function ExportPage() {
@@ -166,7 +173,7 @@ export default function ExportPage() {
 
         {/* Family fields */}
         <div style={{ background: 'var(--surface-2)', borderRadius: 'var(--radius)', padding: '14px 16px', marginBottom: 10 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+          <label style={{ ...checkRowStyle, gap: 8, marginBottom: 10, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
             <input
               type="checkbox"
               checked={allFamilyOn}
@@ -176,7 +183,7 @@ export default function ExportPage() {
           </label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '6px 12px' }}>
             {familyFields.map(f => (
-              <label key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 14, cursor: 'pointer' }}>
+              <label key={f.key} style={{ ...checkRowStyle, gap: 7, fontSize: 14, cursor: 'pointer' }}>
                 <input type="checkbox" checked={selected.has(f.key)} onChange={() => toggle(f.key)} />
                 {f.label}
               </label>
@@ -186,7 +193,7 @@ export default function ExportPage() {
 
         {/* Visit fields */}
         <div style={{ background: 'var(--surface-2)', borderRadius: 'var(--radius)', padding: '14px 16px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+          <label style={{ ...checkRowStyle, gap: 8, marginBottom: 10, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
             <input
               type="checkbox"
               checked={allVisitOn}
@@ -196,7 +203,7 @@ export default function ExportPage() {
           </label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '6px 12px' }}>
             {visitFields.map(f => (
-              <label key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 14, cursor: 'pointer' }}>
+              <label key={f.key} style={{ ...checkRowStyle, gap: 7, fontSize: 14, cursor: 'pointer' }}>
                 <input type="checkbox" checked={selected.has(f.key)} onChange={() => toggle(f.key)} />
                 {f.label}
               </label>
@@ -214,7 +221,7 @@ export default function ExportPage() {
             { value: 'field',      label: 'By another field' },
             { value: 'multi',      label: 'By multiple fields' },
           ] as { value: FilterMode; label: string }[]).map(opt => (
-            <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer' }}>
+            <label key={opt.value} style={{ ...checkRowStyle, gap: 8, fontSize: 14, cursor: 'pointer' }}>
               <input
                 type="radio"
                 name="filterMode"

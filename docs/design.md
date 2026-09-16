@@ -66,6 +66,28 @@ No custom typefaces — the app targets Safari 9 on iPad 2 (no WOFF2 guaranteed)
 
 `.btn-tap` — compact square tap target for numeric grids. Active state: gold background, black text.
 
+### Form Elements
+
+**Base rule (`global.css`):** `input, select, textarea { width: 100%; min-height: var(--touch); padding: 12px; ... }` — full-width, touch-friendly fields. Correct default for every text-like control (text, date, number, select). **Do not** let a checkbox or radio fall through to this rule — see below.
+
+**Checkboxes / radios (`global.css`):**
+
+```css
+input[type="checkbox"], input[type="radio"] {
+  width: 20px; height: 20px; min-height: 0; padding: 0;
+  flex-shrink: 0; cursor: pointer;
+}
+```
+
+This rule has higher specificity than the base `input` rule above, so it always wins — no per-component override is ever needed for sizing. **Why this exists:** Safari/WebKit paints a checkbox or radio at its native small size regardless of CSS `width`, but still *allocates flex-layout space* per the CSS box. Without this rule, an unsized checkbox/radio inside a flex row silently stretches to fill the row (inheriting `width: 100%` from the base rule) and pushes its own label text outside the row — invisible in Chromium devtools, broken in real Safari. This shipped to production twice (the duplicate-merge "Keep" radio, then the entire Export Data page and the account-delete checkbox) before being caught, purely because it only shows up in WebKit. **Always check new/changed checkbox or radio layouts in WebKit specifically** (`npm run test:e2e` runs both `chromium` and `webkit` projects) — Chromium alone will not catch this.
+
+**Labels wrapping a checkbox/radio beside inline text:** the bare `label { flex-direction: column }` rule (`global.css`) is the correct default for the dominant "Text above input" question pattern (`<label>Visit date<input type="date"></label>`). It is **wrong** for a horizontal "`[ ] Option text`" row, and CSS cascade means it silently wins for `flex-direction` on any label that doesn't declare that property itself — even one with a more-specific class selector, since specificity is compared per-property, not per-rule. Every label wrapping a checkbox/radio beside text must explicitly set `flex-direction: row` (and `align-items: center`):
+
+- Class-based labels: add `flex-direction: row; align-items: center;` directly to the label's own class rule (see `.records-checkbox-label`, `.admin-confirm-checkbox-label` in `global.css`).
+- Inline-styled components: add `flexDirection: 'row'` to the label's inline `style` object (see `SummaryScreen.tsx`, `ExportPage.tsx`).
+
+Never rely on the bare `label` default for this case, even if it "looks fine" in a quick check — verify in WebKit.
+
 ### Spacing / layout
 
 - Cards and sections: flex column with `> * + * { margin-top: Npx }` instead of `gap` (Safari 9 flex gap support is inconsistent).

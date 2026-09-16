@@ -76,25 +76,7 @@ function FamilyCard({
     >
       {showRadio && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, minWidth: 0 }}>
-          <input
-            type="radio"
-            readOnly
-            checked={selected}
-            style={{
-              cursor: 'pointer',
-              flexShrink: 0,
-              // Global `input { width: 100%; min-height: var(--touch); padding: 12px }`
-              // (global.css) targets every <input>, radios included. WebKit keeps the
-              // native small circle's paint but still allocates layout space per that
-              // CSS box, so without this override the radio swallows the whole flex
-              // row and squeezes the label to zero width — see .records-checkbox-label
-              // input[type="checkbox"] for the same override on the other checkbox.
-              width: 20,
-              height: 20,
-              minHeight: 0,
-              padding: 0,
-            }}
-          />
+          <input type="radio" readOnly checked={selected} />
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', minWidth: 0 }}>
             Keep
           </span>
