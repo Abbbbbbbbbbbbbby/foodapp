@@ -74,6 +74,10 @@ export default function LookupForm({ onSearch }: LookupFormProps) {
             type="text"
             value={name}
             onChange={e => setName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') { setSuggestions([]); }
+              if (e.key === 'Enter' && suggestions.length > 0) { setSuggestions([]); }
+            }}
             autoComplete="off"
             autoFocus
           />
