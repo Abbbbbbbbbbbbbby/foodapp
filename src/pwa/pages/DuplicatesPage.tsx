@@ -75,10 +75,10 @@ function FamilyCard({
       onClick={onSelect}
     >
       {showRadio && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <input type="radio" readOnly checked={selected} style={{ cursor: 'pointer' }} />
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>
-            {selected ? 'Keep this record' : 'Keep this record'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, minWidth: 0 }}>
+          <input type="radio" readOnly checked={selected} style={{ cursor: 'pointer', flexShrink: 0 }} />
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', minWidth: 0 }}>
+            Keep
           </span>
         </div>
       )}
