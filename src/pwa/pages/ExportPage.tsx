@@ -64,6 +64,26 @@ const checkRowStyle: React.CSSProperties = { display: 'flex', flexDirection: 'ro
 
 const DEFAULT_FIELDS = new Set(['name', 'visit_date', 'bag_received', 'num_people']);
 
+// Visually hidden — keeps the native input in the tab order and click area
+// while the circle below provides the visual indicator.
+const srOnly: React.CSSProperties = {
+  position: 'absolute', width: 1, height: 1, padding: 0,
+  margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', border: 0,
+};
+
+function CircleDot({ checked }: { checked: boolean }) {
+  return (
+    <span style={{
+      width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+      border: `2px solid ${checked ? 'var(--accent)' : 'var(--border)'}`,
+      background: checked ? 'var(--accent)' : 'transparent',
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      {checked && <span style={{ color: 'var(--text)', fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+    </span>
+  );
+}
+
 export default function ExportPage() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set(DEFAULT_FIELDS));
   const [filterMode, setFilterMode] = useState<FilterMode>('visit_date');
@@ -174,17 +194,15 @@ export default function ExportPage() {
         {/* Family fields */}
         <div style={{ background: 'var(--surface-2)', borderRadius: 'var(--radius)', padding: '14px 16px', marginBottom: 10 }}>
           <label style={{ ...checkRowStyle, gap: 8, marginBottom: 10, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={allFamilyOn}
-              onChange={e => toggleGroup('family', e.target.checked)}
-            />
-            Family fields
+            <input type="checkbox" style={srOnly} checked={allFamilyOn} onChange={e => toggleGroup('family', e.target.checked)} />
+            <CircleDot checked={allFamilyOn} />
+            All family fields
           </label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '6px 12px' }}>
             {familyFields.map(f => (
               <label key={f.key} style={{ ...checkRowStyle, gap: 7, fontSize: 14, cursor: 'pointer' }}>
-                <input type="checkbox" checked={selected.has(f.key)} onChange={() => toggle(f.key)} />
+                <input type="checkbox" style={srOnly} checked={selected.has(f.key)} onChange={() => toggle(f.key)} />
+                <CircleDot checked={selected.has(f.key)} />
                 {f.label}
               </label>
             ))}
@@ -194,17 +212,15 @@ export default function ExportPage() {
         {/* Visit fields */}
         <div style={{ background: 'var(--surface-2)', borderRadius: 'var(--radius)', padding: '14px 16px' }}>
           <label style={{ ...checkRowStyle, gap: 8, marginBottom: 10, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={allVisitOn}
-              onChange={e => toggleGroup('visit', e.target.checked)}
-            />
-            Visit fields
+            <input type="checkbox" style={srOnly} checked={allVisitOn} onChange={e => toggleGroup('visit', e.target.checked)} />
+            <CircleDot checked={allVisitOn} />
+            All visit fields
           </label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '6px 12px' }}>
             {visitFields.map(f => (
               <label key={f.key} style={{ ...checkRowStyle, gap: 7, fontSize: 14, cursor: 'pointer' }}>
-                <input type="checkbox" checked={selected.has(f.key)} onChange={() => toggle(f.key)} />
+                <input type="checkbox" style={srOnly} checked={selected.has(f.key)} onChange={() => toggle(f.key)} />
+                <CircleDot checked={selected.has(f.key)} />
                 {f.label}
               </label>
             ))}
@@ -222,13 +238,8 @@ export default function ExportPage() {
             { value: 'multi',      label: 'By multiple fields' },
           ] as { value: FilterMode; label: string }[]).map(opt => (
             <label key={opt.value} style={{ ...checkRowStyle, gap: 8, fontSize: 14, cursor: 'pointer' }}>
-              <input
-                type="radio"
-                name="filterMode"
-                value={opt.value}
-                checked={filterMode === opt.value}
-                onChange={() => setFilterMode(opt.value)}
-              />
+              <input type="radio" style={srOnly} name="filterMode" value={opt.value} checked={filterMode === opt.value} onChange={() => setFilterMode(opt.value)} />
+              <CircleDot checked={filterMode === opt.value} />
               {opt.label}
             </label>
           ))}
