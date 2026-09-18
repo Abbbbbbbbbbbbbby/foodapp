@@ -27,6 +27,11 @@ export default function HomePage() {
             View Records / Ver registros
           </button>
         )}
+        {(user.role === 'staff' || user.role === 'admin') && (
+          <button className="btn-secondary btn-large" onClick={() => navigate('/admin/export')}>
+            Export Data
+          </button>
+        )}
         {user.role === 'admin' && (
           <button className="btn-secondary btn-large" onClick={() => navigate('/admin/accounts')}>
             Manage Accounts
