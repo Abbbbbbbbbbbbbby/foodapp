@@ -34,6 +34,9 @@ const FILTERABLE = new Set([
   'num_people', 'num_children_under_18', 'num_children_under_5', 'num_with_diabetes',
 ]);
 
+// Visit-table fields that can be used as filters (require the visits JOIN).
+const FILTERABLE_VISIT = new Set(['bag_received']);
+
 // SQLite integer booleans rendered as Yes/No in the CSV
 const BOOL_FIELDS = new Set(['bag_received', 'receives_texts']);
 
@@ -114,6 +117,14 @@ export async function handleExportRoute(
   const params: (string | null)[] = [];
   const whereClauses: string[] = [];
 
+  // Pre-check: does the filter reference a visit field? Must happen before
+  // the JOIN is written so needsVisit is correct when the SQL is assembled.
+  if (filterMode === 'field') {
+    if (FILTERABLE_VISIT.has(url.searchParams.get('filterField') ?? '')) needsVisit = true;
+  } else if (filterMode === 'multi') {
+    if (url.searchParams.getAll('filterField').some(ff => FILTERABLE_VISIT.has(ff))) needsVisit = true;
+  }
+
   let sql = `SELECT ${selectParts.join(', ')} FROM families f`;
   if (needsVisit) {
     sql += ' JOIN visits v ON v.family_id = f.id LEFT JOIN users u ON u.id = v.volunteer_id';
@@ -128,6 +139,9 @@ export async function handleExportRoute(
     if (FILTERABLE.has(ff)) {
       whereClauses.push(`f.${ff} = ?`);
       params.push(fv);
+    } else if (FILTERABLE_VISIT.has(ff)) {
+      whereClauses.push(`v.${ff} = ?`);
+      params.push(fv);
     }
   } else if (filterMode === 'multi') {
     const ffs = url.searchParams.getAll('filterField');
@@ -135,6 +149,9 @@ export async function handleExportRoute(
     for (let i = 0; i < Math.min(ffs.length, fvs.length); i++) {
       if (FILTERABLE.has(ffs[i])) {
         whereClauses.push(`f.${ffs[i]} = ?`);
+        params.push(fvs[i]);
+      } else if (FILTERABLE_VISIT.has(ffs[i])) {
+        whereClauses.push(`v.${ffs[i]} = ?`);
         params.push(fvs[i]);
       }
     }

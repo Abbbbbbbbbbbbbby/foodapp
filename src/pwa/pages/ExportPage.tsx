@@ -41,6 +41,7 @@ const FILTERABLE_FIELDS = [
   { key: 'health_insurance',      label: 'Health Insurance' },
   { key: 'hispanic',              label: 'Hispanic/Latino' },
   { key: 'ethnicity',             label: 'Ethnicity' },
+  { key: 'bag_received',          label: 'Bag Received' },
 ];
 
 // Fixed option sets for enum fields. zip_code has no fixed set and stays as free text.
@@ -83,6 +84,10 @@ const FIELD_OPTIONS: Record<string, { value: string; label: string }[]> = {
     { value: 'Multiracial',                                   label: 'Multiracial' },
     { value: 'Other',                                         label: 'Other' },
     { value: 'Prefer not to say',                             label: 'Prefer not to say' },
+  ],
+  bag_received: [
+    { value: '1', label: 'Yes' },
+    { value: '0', label: 'No' },
   ],
 };
 
