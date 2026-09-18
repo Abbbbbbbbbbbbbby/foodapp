@@ -104,11 +104,58 @@ describe('POST /api/visits', () => {
     const res = await workerExports.default.fetch('http://example.com/api/visits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: authHeader },
-      body: JSON.stringify({ family_id: testFamilyId, visit_date: '2026-01-01' }),
+      body: JSON.stringify({ family_id: testFamilyId, visit_date: '2026-04-01' }),
     });
     expect(res.status).toBe(201);
     const data = await res.json<{ id: string }>();
     expect(typeof data.id).toBe('string');
+  });
+
+  it('returns 409 when the same family is checked in a second time on the same day', async () => {
+    const db = env as unknown as Env;
+    const dupFamId = crypto.randomUUID().replace(/-/g, '');
+    await db.DB.prepare(
+      `INSERT INTO families (id, name, created_at, updated_at) VALUES (?, 'Dup Day Fam', datetime('now'), datetime('now'))`
+    ).bind(dupFamId).run();
+    const first = await workerExports.default.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ family_id: dupFamId, visit_date: '2026-05-01', idempotency_key: `dup-day-first-${dupFamId}` }),
+    });
+    expect(first.status).toBe(201);
+    const second = await workerExports.default.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ family_id: dupFamId, visit_date: '2026-05-01', idempotency_key: `dup-day-second-${dupFamId}` }),
+    });
+    expect(second.status).toBe(409);
+    const body = await second.json() as { error: string };
+    expect(body.error).toMatch(/already been checked in today/);
+  });
+
+  it('idempotency replay is not blocked by same-day guard', async () => {
+    const db = env as unknown as Env;
+    const replayFamId = crypto.randomUUID().replace(/-/g, '');
+    await db.DB.prepare(
+      `INSERT INTO families (id, name, created_at, updated_at) VALUES (?, 'Replay Fam', datetime('now'), datetime('now'))`
+    ).bind(replayFamId).run();
+    const key = `replay-same-day-${replayFamId}`;
+    const payload = { family_id: replayFamId, visit_date: '2026-06-01', idempotency_key: key };
+    const r1 = await workerExports.default.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify(payload),
+    });
+    expect(r1.status).toBe(201);
+    const r2 = await workerExports.default.fetch('http://example.com/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify(payload),
+    });
+    expect(r2.status).toBe(200); // replay, not 409
+    const d1 = await r1.json<{ id: string }>();
+    const d2 = await r2.json<{ id: string }>();
+    expect(d1.id).toBe(d2.id);
   });
 });
 

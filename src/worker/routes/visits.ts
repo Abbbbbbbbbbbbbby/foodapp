@@ -51,6 +51,30 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     }
     familyId = alias.target_id;
   }
+  const idempotencyKey = typeof body.idempotency_key === 'string' ? body.idempotency_key : undefined;
+
+  // Resolve idempotency replays BEFORE the same-day guard so offline sync
+  // doesn't get blocked by the visit it already committed on a prior attempt.
+  if (idempotencyKey) {
+    const replay = await env.DB.prepare(
+      `SELECT id FROM visits WHERE idempotency_key = ?`
+    ).bind(idempotencyKey).first<{ id: string }>();
+    if (replay) return Response.json({ id: replay.id }, { status: 200 });
+    const aliasReplay = await env.DB.prepare(
+      `SELECT mk.target_id AS id FROM merged_keys mk JOIN visits v ON v.id = mk.target_id
+       WHERE mk.idempotency_key = ? AND mk.kind = 'visit'`
+    ).bind(idempotencyKey).first<{ id: string }>();
+    if (aliasReplay) return Response.json({ id: aliasReplay.id }, { status: 200 });
+  }
+
+  // Guard: one visit per family per day.
+  const sameDay = await env.DB.prepare(
+    `SELECT 1 FROM visits WHERE family_id = ? AND visit_date = ?`
+  ).bind(familyId, body.visit_date).first();
+  if (sameDay) {
+    return Response.json({ error: 'This family has already been checked in today.' }, { status: 409 });
+  }
+
   const data: NewVisit = {
     family_id: familyId,
     visit_date: body.visit_date,
@@ -60,7 +84,6 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     picked_up_by_phone: normalizePhone(body.picked_up_by_phone) ?? null,
     volunteer_id: ctx.userId,
   };
-  const idempotencyKey = typeof body.idempotency_key === 'string' ? body.idempotency_key : undefined;
   const { id, created } = await insertVisit(env.DB, data, idempotencyKey);
   // 201 for a genuinely new record, 200 for any replay (live key or alias)
   const status = created ? 201 : 200;
