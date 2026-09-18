@@ -33,6 +33,7 @@ const FILTERABLE_FIELDS = [
   { key: 'language',              label: 'Language' },
   { key: 'zip_code',              label: 'ZIP Code' },
   { key: 'num_people',            label: 'Household Size' },
+  { key: 'num_children_under_18', label: 'Children Under 18' },
   { key: 'num_children_under_5',  label: 'Children Under 5' },
   { key: 'num_with_diabetes',     label: 'Members With Diabetes' },
   { key: 'ami_bracket',           label: 'Income Level' },

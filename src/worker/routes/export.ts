@@ -31,7 +31,7 @@ const VISIT_COLS: Record<string, string> = {
 const FILTERABLE = new Set([
   'zip_code', 'language', 'ami_bracket', 'snap_benefits',
   'health_insurance', 'hispanic', 'ethnicity',
-  'num_people', 'num_children_under_5', 'num_with_diabetes',
+  'num_people', 'num_children_under_18', 'num_children_under_5', 'num_with_diabetes',
 ]);
 
 // SQLite integer booleans rendered as Yes/No in the CSV
