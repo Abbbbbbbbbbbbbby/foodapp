@@ -42,9 +42,6 @@ interface TextsStepProps {
 // Exported for direct unit testing (walking 10 heterogeneous wizard steps in
 // a DOM test is brittle; the sub-step logic here is what needs pinning).
 export function TextsStep({ language, onComplete, onBack }: TextsStepProps) {
-  const [subStep, setSubStep] = useState(0);
-  const [receivesTexts, setReceivesTexts] = useState<boolean | null>(null);
-
   const isSpanish = language?.toLowerCase().startsWith('es');
 
   function yesLabel() { return isSpanish ? <><span>Sí</span><span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Yes</span></> : <><span>Yes</span><span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Sí</span></>; }
@@ -53,42 +50,20 @@ export function TextsStep({ language, onComplete, onBack }: TextsStepProps) {
     ? <><span>No sé / Prefiero no responder</span><span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{"Don't know / Prefer not to say"}</span></>
     : <><span>{"Don't know / Prefer not to say"}</span><span style={{ fontSize: 13, color: 'var(--text-muted)' }}>No sé / Prefiero no responder</span></>; }
 
-  if (subStep === 0) {
-    return (
-      <div className="wizard-step">
-        <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
-        <p className="question-en">Do you currently receive weekly text messages from us?</p>
-        <p className="question-es">¿Actualmente recibe mensajes de texto semanales de nuestra parte?</p>
-        <div className="option-list">
-          <button className="btn-option" onClick={() => onComplete(true, null)}>
-            {yesLabel()}
-          </button>
-          <button className="btn-option" onClick={() => { setReceivesTexts(false); setSubStep(1); }}>
-            {noLabel()}
-          </button>
-          <button className="btn-option" onClick={() => { setReceivesTexts(null); setSubStep(1); }}>
-            {dkLabel()}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="wizard-step">
-      <button className="btn-ghost" onClick={() => setSubStep(0)}>Back / Atrás</button>
-      <p className="question-en">
-        Would you like to receive weekly text updates about food distribution events?
-      </p>
-      <p className="question-es">
-        ¿Le gustaría recibir actualizaciones semanales por mensaje de texto sobre eventos de distribución de alimentos?
-      </p>
+      <button className="btn-ghost" onClick={onBack}>Back / Atrás</button>
+      <p className="question-en">Do you currently receive weekly text messages from us?</p>
+      <p className="question-es">¿Actualmente recibe mensajes de texto semanales de nuestra parte?</p>
       <div className="option-list">
-        <button className="btn-option" onClick={() => onComplete(receivesTexts, true)}>
+        <button className="btn-option" onClick={() => onComplete(true, null)}>
           {yesLabel()}
         </button>
-        <button className="btn-option" onClick={() => onComplete(receivesTexts, false)}>
+        <button className="btn-option" onClick={() => onComplete(false, null)}>
           {noLabel()}
+        </button>
+        <button className="btn-option" onClick={() => onComplete(null, null)}>
+          {dkLabel()}
         </button>
       </div>
     </div>

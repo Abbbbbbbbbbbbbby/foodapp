@@ -46,25 +46,32 @@ describe('Wizard', () => {
     expect(screen.getByDisplayValue('Prefilled Person')).toBeInTheDocument();
   });
 
-  it('TextsStep: No leads to the updates question; answering Yes completes with (false, true)', async () => {
+  it('TextsStep: No completes immediately with (false, null)', async () => {
     const onComplete = vi.fn();
     const user = userEvent.setup();
     render(<TextsStep language="en" onComplete={onComplete} onBack={() => {}} />);
 
     expect(screen.getByText(/Do you currently receive weekly text messages/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /^No$/ }));
-    expect(await screen.findByText(/Would you like to receive weekly text updates/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Yes/ }));
-    expect(onComplete).toHaveBeenCalledWith(false, true);
+    expect(onComplete).toHaveBeenCalledWith(false, null);
+    expect(screen.queryByText(/Would you like to receive weekly text updates/)).not.toBeInTheDocument();
   });
 
-  it('TextsStep: answering Yes to already-receiving completes immediately with (true, null)', async () => {
+  it('TextsStep: Yes completes immediately with (true, null)', async () => {
     const onComplete = vi.fn();
     const user = userEvent.setup();
     render(<TextsStep language="en" onComplete={onComplete} onBack={() => {}} />);
     await user.click(screen.getByRole('button', { name: /Yes/ }));
     expect(onComplete).toHaveBeenCalledWith(true, null);
     expect(screen.queryByText(/Would you like to receive weekly text updates/)).not.toBeInTheDocument();
+  });
+
+  it("TextsStep: Don't know completes immediately with (null, null)", async () => {
+    const onComplete = vi.fn();
+    const user = userEvent.setup();
+    render(<TextsStep language="en" onComplete={onComplete} onBack={() => {}} />);
+    await user.click(screen.getByRole('button', { name: /Don't know/ }));
+    expect(onComplete).toHaveBeenCalledWith(null, null);
   });
 
   it('initialStep seeds the wizard past step 1 (draft resume)', () => {
