@@ -116,6 +116,12 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
   }
 
   async function finish(finalData: Partial<WizardFormData>) {
+    // Defensive guard: old iOS Safari can fire clicks on disabled buttons.
+    // If name is missing at this point, send the user back to step 0.
+    if (!finalData.name?.trim()) {
+      setStep(0);
+      return;
+    }
     setSubmitting(true);
     try {
       await onComplete(finalData as WizardFormData, proxyData);

@@ -35,7 +35,7 @@ export default function TextInput({
       <div className="step-actions">
         <button
           className="btn-primary"
-          onClick={onNext}
+          onClick={() => { if (!required || value.trim()) onNext(); }}
           disabled={required ? !value.trim() : false}
         >
           Next / Siguiente
