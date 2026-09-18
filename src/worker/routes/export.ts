@@ -26,10 +26,12 @@ const VISIT_COLS: Record<string, string> = {
   picked_up_by_phone: 'v.picked_up_by_phone',
 };
 
-// Columns that the filter UI can use (enum-like family fields only — no free-text attack surface)
+// Columns that the filter UI can use — allowlisted to prevent SQL injection.
+// Numeric fields (num_*) use the same `= ?` binding; SQLite coerces the string.
 const FILTERABLE = new Set([
   'zip_code', 'language', 'ami_bracket', 'snap_benefits',
   'health_insurance', 'hispanic', 'ethnicity',
+  'num_people', 'num_children_under_5', 'num_with_diabetes',
 ]);
 
 // SQLite integer booleans rendered as Yes/No in the CSV

@@ -30,14 +30,60 @@ const FIELDS: FieldDef[] = [
 ];
 
 const FILTERABLE_FIELDS = [
-  { key: 'language',        label: 'Language' },
-  { key: 'zip_code',        label: 'ZIP Code' },
-  { key: 'ami_bracket',     label: 'Income Level' },
-  { key: 'snap_benefits',   label: 'SNAP Benefits' },
-  { key: 'health_insurance', label: 'Health Insurance' },
-  { key: 'hispanic',        label: 'Hispanic/Latino' },
-  { key: 'ethnicity',       label: 'Ethnicity' },
+  { key: 'language',              label: 'Language' },
+  { key: 'zip_code',              label: 'ZIP Code' },
+  { key: 'num_people',            label: 'Household Size' },
+  { key: 'num_children_under_5',  label: 'Children Under 5' },
+  { key: 'num_with_diabetes',     label: 'Members With Diabetes' },
+  { key: 'ami_bracket',           label: 'Income Level' },
+  { key: 'snap_benefits',         label: 'SNAP Benefits' },
+  { key: 'health_insurance',      label: 'Health Insurance' },
+  { key: 'hispanic',              label: 'Hispanic/Latino' },
+  { key: 'ethnicity',             label: 'Ethnicity' },
 ];
+
+// Fixed option sets for enum fields. zip_code has no fixed set and stays as free text.
+const FIELD_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  language: [
+    { value: 'en',       label: 'English' },
+    { value: 'es',       label: 'Spanish' },
+    { value: 'other',    label: 'Other' },
+    { value: 'declined', label: 'N/A' },
+  ],
+  ami_bracket: [
+    { value: '<30%',    label: 'Less than 30%' },
+    { value: '30-50%',  label: '30–50%' },
+    { value: '50-80%',  label: '50–80%' },
+    { value: '80-120%', label: '80–120%' },
+    { value: '>120%',   label: 'More than 120%' },
+    { value: 'declined', label: 'N/A' },
+  ],
+  snap_benefits: [
+    { value: 'yes',      label: 'Yes' },
+    { value: 'no',       label: 'No' },
+    { value: 'declined', label: 'N/A' },
+  ],
+  health_insurance: [
+    { value: 'yes',      label: 'Yes' },
+    { value: 'no',       label: 'No' },
+    { value: 'declined', label: 'N/A' },
+  ],
+  hispanic: [
+    { value: 'yes',      label: 'Yes' },
+    { value: 'no',       label: 'No' },
+    { value: 'declined', label: 'N/A' },
+  ],
+  ethnicity: [
+    { value: 'American Indian or Alaska Native',              label: 'American Indian or Alaska Native' },
+    { value: 'Asian',                                         label: 'Asian' },
+    { value: 'Black or African American',                     label: 'Black or African American' },
+    { value: 'Native Hawaiian or Other Pacific Islander',     label: 'Native Hawaiian or Other Pacific Islander' },
+    { value: 'White',                                         label: 'White' },
+    { value: 'Multiracial',                                   label: 'Multiracial' },
+    { value: 'Other',                                         label: 'Other' },
+    { value: 'Prefer not to say',                             label: 'Prefer not to say' },
+  ],
+};
 
 type FilterMode = 'visit_date' | 'field' | 'multi';
 
@@ -265,19 +311,29 @@ export default function ExportPage() {
           <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 14 }}>
               <span style={{ color: 'var(--text-muted)' }}>Field</span>
-              <select value={filterField} onChange={e => setFilterField(e.target.value)} style={inputStyle}>
+              <select value={filterField} onChange={e => { setFilterField(e.target.value); setFilterValue(''); }} style={inputStyle}>
                 {FILTERABLE_FIELDS.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
               </select>
             </label>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 14 }}>
               <span style={{ color: 'var(--text-muted)' }}>Value</span>
-              <input
-                type="text"
-                value={filterValue}
-                onChange={e => setFilterValue(e.target.value)}
-                placeholder="e.g. English"
-                style={{ ...inputStyle, width: 160 }}
-              />
+              {FIELD_OPTIONS[filterField] ? (
+                <select value={filterValue} onChange={e => setFilterValue(e.target.value)} style={inputStyle}>
+                  <option value="">Select…</option>
+                  {FIELD_OPTIONS[filterField].map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={filterValue}
+                  onChange={e => setFilterValue(e.target.value)}
+                  placeholder={filterField === 'zip_code' ? 'e.g. 68102' : 'number'}
+                  style={{ ...inputStyle, width: 120 }}
+                />
+              )}
             </label>
           </div>
         )}
@@ -290,7 +346,7 @@ export default function ExportPage() {
                   {i === 0 && <span style={{ color: 'var(--text-muted)' }}>Field</span>}
                   <select
                     value={mf.field}
-                    onChange={e => updateMultiFilter(i, { field: e.target.value })}
+                    onChange={e => updateMultiFilter(i, { field: e.target.value, value: '' })}
                     style={inputStyle}
                   >
                     {FILTERABLE_FIELDS.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
@@ -298,13 +354,27 @@ export default function ExportPage() {
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 14 }}>
                   {i === 0 && <span style={{ color: 'var(--text-muted)' }}>Value</span>}
-                  <input
-                    type="text"
-                    value={mf.value}
-                    onChange={e => updateMultiFilter(i, { value: e.target.value })}
-                    placeholder="value"
-                    style={{ ...inputStyle, width: 160 }}
-                  />
+                  {FIELD_OPTIONS[mf.field] ? (
+                    <select
+                      value={mf.value}
+                      onChange={e => updateMultiFilter(i, { value: e.target.value })}
+                      style={inputStyle}
+                    >
+                      <option value="">Select…</option>
+                      {FIELD_OPTIONS[mf.field].map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={mf.value}
+                      onChange={e => updateMultiFilter(i, { value: e.target.value })}
+                      placeholder={mf.field === 'zip_code' ? 'e.g. 68102' : 'number'}
+                      style={{ ...inputStyle, width: 120 }}
+                    />
+                  )}
                 </label>
                 {multiFilters.length > 1 && (
                   <button
