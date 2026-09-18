@@ -32,6 +32,11 @@ export default function HomePage() {
             Export Data
           </button>
         )}
+        {(user.role === 'staff' || user.role === 'admin') && (
+          <button className="btn-secondary btn-large" onClick={() => navigate('/admin/summary')}>
+            Data Summary
+          </button>
+        )}
         {user.role === 'admin' && (
           <button className="btn-secondary btn-large" onClick={() => navigate('/admin/accounts')}>
             Manage Accounts

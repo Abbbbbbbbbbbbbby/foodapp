@@ -9,6 +9,7 @@ import { handleDuplicateRoutes } from './routes/duplicates';
 import { handleClientEventRoutes, purgeOldClientEvents } from './routes/clientEvents';
 import { rescanAllDuplicates } from './duplicates';
 import { handleExportRoute } from './routes/export';
+import { handleSummaryRoute } from './routes/summary';
 
 // Browser origins allowed to call this API. Auth is a Bearer header (no cookies),
 // so this is abuse damping, not CSRF defense: a hostile page can fire no-cors POSTs
@@ -89,6 +90,9 @@ export default {
       // caller before ever reaching this route's own admin-or-staff check.
       const exportResponse = await handleExportRoute(request, env, url.pathname);
       if (exportResponse) return cors(exportResponse, request);
+
+      const summaryResponse = await handleSummaryRoute(request, env, url.pathname);
+      if (summaryResponse) return cors(summaryResponse, request);
 
       const adminResponse = await handleAdminRoutes(request, env, url.pathname);
       if (adminResponse) return cors(adminResponse, request);

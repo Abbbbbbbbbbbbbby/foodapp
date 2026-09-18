@@ -1130,3 +1130,11 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   flex-wrap: wrap;
   margin-bottom: 20px;
 }
+
+/* Data Summary page — two-column chart grid (no CSS Grid: flex-wrap for Safari 9) */
+.summary-chart-grid { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; }
+.summary-chart-card { width: 100%; margin-bottom: 16px; }
+@media (min-width: 680px) {
+  .summary-chart-card { width: calc(50% - 8px); margin-right: 16px; }
+  .summary-chart-card:nth-child(even) { margin-right: 0; }
+}
