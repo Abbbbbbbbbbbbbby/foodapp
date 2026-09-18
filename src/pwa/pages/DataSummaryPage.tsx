@@ -65,11 +65,19 @@ function displayValue(field: string, value: string): string {
 
 // ── Date range helpers ────────────────────────────────────────────────────────
 
-type Preset = 'all' | 'month' | '3months' | 'year' | 'custom';
+type Preset = 'all' | 'lastmonth' | 'month' | '3months' | 'year' | 'custom';
 
 function presetDates(preset: Preset): { start: string; end: string } {
   const today = new Date();
   const end = today.toISOString().slice(0, 10);
+  if (preset === 'lastmonth') {
+    // First and last day of the most recently completed calendar month
+    const y = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+    const m = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+    const first = new Date(y, m, 1).toISOString().slice(0, 10);
+    const last  = new Date(y, m + 1, 0).toISOString().slice(0, 10);
+    return { start: first, end: last };
+  }
   if (preset === 'month') {
     const d = new Date(today); d.setMonth(d.getMonth() - 1);
     return { start: d.toISOString().slice(0, 10), end };
@@ -83,6 +91,13 @@ function presetDates(preset: Preset): { start: string; end: string } {
     return { start: d.toISOString().slice(0, 10), end };
   }
   return { start: '', end: '' };
+}
+
+// Name of the most recently completed calendar month (e.g. "August 2026")
+function lastMonthLabel(): string {
+  const today = new Date();
+  const d = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  return d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 }
 
 // ── BarChart component ────────────────────────────────────────────────────────
@@ -351,11 +366,12 @@ export default function DataSummaryPage() {
       <div style={{ ...card, marginBottom: 16 }}>
         <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Period</p>
         <div>
-          {presetBtn('all',      'All time')}
-          {presetBtn('month',    'Past month')}
-          {presetBtn('3months',  'Past 3 months')}
-          {presetBtn('year',     'Past year')}
-          {presetBtn('custom',   'Custom')}
+          {presetBtn('all',       'All time')}
+          {presetBtn('lastmonth', lastMonthLabel())}
+          {presetBtn('month',     'Past month')}
+          {presetBtn('3months',   'Past 3 months')}
+          {presetBtn('year',      'Past year')}
+          {presetBtn('custom',    'Custom')}
         </div>
         {preset === 'custom' && (
           <div style={{ display: 'flex', marginTop: 10 }}>
