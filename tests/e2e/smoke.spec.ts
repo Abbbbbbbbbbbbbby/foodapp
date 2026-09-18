@@ -66,8 +66,7 @@ test('register, check in a new family, and record a bag', async ({ page }) => {
   await page.getByRole('button', { name: /Prefer not to say|Prefiero no/i }).first().click(); // 8 income
   await page.getByRole('button', { name: /^No$/ }).first().click();                // 9 SNAP
   await page.getByRole('button', { name: /^No$/ }).first().click();                // 10 insurance
-  await page.getByRole('button', { name: /^No$/ }).first().click();                // 11a texts
-  await page.getByRole('button', { name: /^No$/ }).first().click();                // 11b updates
+  await page.getByRole('button', { name: /^No$/ }).first().click();                // 11 texts (single question)
 
   // ── Summary: bag question → picklist → save ──
   await expect(page.getByText(/Summary \/ Resumen/)).toBeVisible();

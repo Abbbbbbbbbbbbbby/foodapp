@@ -75,7 +75,6 @@ test('offline check-in queues family, visit, and bag; reconnect syncs them to th
   await page.getByRole('button', { name: /^No$/ }).first().click();
   await page.getByRole('button', { name: /^No$/ }).first().click();
   await page.getByRole('button', { name: /^No$/ }).first().click();
-  await page.getByRole('button', { name: /^No$/ }).first().click();
 
   // ── Summary: mark the bag while STILL offline ──
   await expect(page.getByText(/Summary \/ Resumen/)).toBeVisible();
@@ -150,7 +149,6 @@ test('a RETURNING household checked in offline resolves to its existing record �
   await page.getByRole('button', { name: /^2$/ }).first().click();
   await page.getByRole('button', { name: /^0$/ }).first().click(); // children <18 -> auto-skips children <5 (forced to 0)
   await page.getByRole('button', { name: /Prefer not to say|Prefiero no/i }).first().click();
-  await page.getByRole('button', { name: /^No$/ }).first().click();
   await page.getByRole('button', { name: /^No$/ }).first().click();
   await page.getByRole('button', { name: /^No$/ }).first().click();
   await page.getByRole('button', { name: /^No$/ }).first().click();
