@@ -86,6 +86,7 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     const recoveries: { i: number; f: SummaryFamily }[] = [];
     let alreadySynced = 0;
     let recordGone = 0;
+    let alreadyHasBag = 0;
     const newlySaved: number[] = [];
     let newlyPending = 0;
     results.forEach((r, k) => {
@@ -103,6 +104,11 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
       } else if (lower.includes('not found')) {
         // The visit was removed server-side — a retry is permanently futile.
         recordGone++;
+        newlySaved.push(chosenOrdered[k].i);
+      } else if (lower.includes('already received')) {
+        // Family already has a bag on another visit — policy enforced server-side.
+        // Remove from the list silently rather than surfacing as a retry error.
+        alreadyHasBag++;
         newlySaved.push(chosenOrdered[k].i);
       } else {
         failed.push(`${chosenOrdered[k].f.name}: ${msg}`);
@@ -132,6 +138,11 @@ export default function SummaryScreen({ families, onNext }: SummaryScreenProps) 
     if (recordGone > 0) {
       problems.push(
         `${recordGone} visit record(s) no longer exist on the server — tell a supervisor before re-entering anything.`
+      );
+    }
+    if (alreadyHasBag > 0) {
+      problems.push(
+        `${alreadyHasBag} family already had a bag recorded from a previous visit — no second bag was logged.`
       );
     }
     if (failed.length > 0) problems.push(`Failed: ${failed.join('; ')} — those families remain listed, check connection and retry.`);

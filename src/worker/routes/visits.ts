@@ -78,6 +78,18 @@ async function handleMarkBag(request: Request, env: Env, visitId: string): Promi
   if (typeof body.bag_received !== 'boolean') {
     return Response.json({ error: 'bag_received must be a boolean' }, { status: 400 });
   }
+  // Each family may receive at most one bag across all visits. Check before
+  // writing — only blocks marking TRUE; un-marking is always allowed.
+  if (body.bag_received) {
+    const priorBag = await env.DB.prepare(
+      `SELECT 1 FROM visits v2
+       JOIN visits v ON v.family_id = v2.family_id
+       WHERE v.id = ? AND v2.bag_received = 1 AND v2.id != ?`
+    ).bind(visitId, visitId).first();
+    if (priorBag) {
+      return Response.json({ error: 'This family has already received a bag.' }, { status: 409 });
+    }
+  }
   const bagReceived = body.bag_received ? 1 : 0;
   const changeId = crypto.randomUUID().replace(/-/g, '');
   const results = await env.DB.batch([
