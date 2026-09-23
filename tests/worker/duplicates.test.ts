@@ -65,6 +65,22 @@ describe('mergeFamilies', () => {
     expect(alias!.target_id).toBe('fam-keep');
   });
 
+  it('also writes an audit entry under the DISCARDED id — its history must not vanish on merge', async () => {
+    await insertFamily('fam-keep', 'Garcia Family', '4805551111');
+    await insertFamily('fam-drop', 'Garcia Familia', '4805551111');
+    await insertFlag('flag-1', 'fam-keep', 'fam-drop');
+
+    await mergeFamilies(env.DB, 'fam-keep', 'fam-drop', USER_ID, 'flag-1');
+
+    const audit = await env.DB.prepare(
+      `SELECT changes FROM record_changes WHERE table_name = 'families' AND record_id = 'fam-drop'`
+    ).first<{ changes: string }>();
+    expect(audit).not.toBeNull();
+    const parsed = JSON.parse(audit!.changes);
+    expect(parsed.merged_into.id).toBe('fam-keep');
+    expect(parsed.merged_into.name).toBe('Garcia Family');
+  });
+
   it('chained merges leave every old family id pointing at the final survivor', async () => {
     await insertFamily('fam-a', 'Chain A', '4805552221');
     await insertFamily('fam-b', 'Chain B', '4805552221');

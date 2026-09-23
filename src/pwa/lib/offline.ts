@@ -25,6 +25,10 @@ export interface PendingItem {
   createdAt: number;
   bag?: boolean;          // a bag was given for this submission's visit — applied after sync
   queuedByUserId?: string; // who entered it — a different login must not flush it under their identity
+  // Display-only: a 'visit' item's payload carries only family_id (the server
+  // doesn't need a name), so without this the dead-letter banner can only show
+  // a raw id — useless to a supervisor. Never sent to the server.
+  familyName?: string;
 }
 
 export interface DeadLetterEntry {
@@ -140,7 +144,7 @@ export async function deleteFromStore(storeName: string, key: IDBValidKey): Prom
 // the same key can be sent on both the foreground POST and any later retries.
 // Falls back to the queue item's own UUID when no key is supplied.
 export async function queueItem(
-  item: Pick<PendingItem, 'type' | 'payload'>,
+  item: Pick<PendingItem, 'type' | 'payload' | 'familyName'>,
   idempotencyKey?: string,
   queuedByUserId?: string
 ): Promise<string> {
@@ -393,7 +397,7 @@ export async function removeItem(id: string): Promise<void> {
 async function addDeadLetter(item: PendingItem, errorStatus: number, errorMessage: string): Promise<void> {
   let label = item.type === 'family'
     ? ((item.payload as { data?: { name?: string } })?.data?.name ?? 'Unknown family')
-    : `Visit for family ${(item.payload as { family_id?: string })?.family_id ?? '?'}`;
+    : `Visit for ${item.familyName ?? `family ${(item.payload as { family_id?: string })?.family_id ?? '?'}`}`;
   const entry: DeadLetterEntry = {
     id: item.id,
     timestamp: Date.now(),

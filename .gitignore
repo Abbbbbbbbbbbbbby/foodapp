@@ -43,4 +43,7 @@ coverage/
 test-results/
 playwright-report/
 
+# local D1 backups (real family/visit data — never commit)
+backups/
+
 

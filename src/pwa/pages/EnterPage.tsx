@@ -457,7 +457,7 @@ export default function EnterPage() {
       }
       // Network error — queue with the same idempotency key and continue
       try {
-        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date, picked_up_by_phone: pickedUpBy } }, visitIdemKey, auth.user.id);
+        queueId = await queueItem({ type: 'visit', payload: { family_id: familyId, visit_date: visitPayload.visit_date, picked_up_by_phone: pickedUpBy }, familyName: family?.name }, visitIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -602,7 +602,7 @@ export default function EnterPage() {
       } else {
         // Network — queue only the visit (family already has an id)
         try {
-          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload }, visitIdemKey, auth.user.id);
+          visitQueueId = await queueItem({ type: 'visit', payload: visitPayload, familyName: data.name }, visitIdemKey, auth.user.id);
         } catch {
           visitError = 'Visit not saved offline. Check storage permissions.';
         }

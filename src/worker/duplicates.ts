@@ -196,6 +196,16 @@ export async function mergeFamilies(
     flag_id: flagId,
     collateral_flags_removed: (collateral.results ?? []).map(r => r.id),
   });
+  // A matching entry under the DISCARDED id too — otherwise a merge erases
+  // that record's history entirely: nothing in record_changes ever mentions
+  // it again, so anyone chasing a stale reference to it (an offline dead
+  // letter, an old export) hits a dead end with no explanation.
+  const discardAuditId = crypto.randomUUID().replace(/-/g, '');
+  const discardAuditChanges = JSON.stringify({
+    _action: 'merged into another family (this record discarded)',
+    merged_into: { id: keepId, name: keep.name, phone: keep.phone },
+    flag_id: flagId,
+  });
 
   await db.batch([
     // Fill any null fields on keep from discard
@@ -268,5 +278,8 @@ export async function mergeFamilies(
     db.prepare(
       `INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, 'families', ?, ?, ?)`
     ).bind(auditId, keepId, reviewerId, auditChanges),
+    db.prepare(
+      `INSERT INTO record_changes (id, table_name, record_id, changed_by, changes) VALUES (?, 'families', ?, ?, ?)`
+    ).bind(discardAuditId, discardId, reviewerId, discardAuditChanges),
   ]);
 }

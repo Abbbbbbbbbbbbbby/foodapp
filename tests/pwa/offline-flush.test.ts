@@ -62,6 +62,29 @@ describe('flushQueue — dead-letter contract (durable IDB)', () => {
     expect(dls[0].label).toBe('Test Family');
   });
 
+  it('4xx on a visit item: dead-letter label shows the family NAME, not just the id', async () => {
+    await queueItem(
+      { type: 'visit', payload: { family_id: 'fam-1', visit_date: '2026-09-19', picked_up_by_phone: null }, familyName: 'Weisel' },
+      'visit-key-1'
+    );
+    const result = await flushQueue(async () => { throw new FakeApiError(409, 'This family has already been checked in today.'); });
+
+    expect(result.deadLettered).toBe(1);
+    const dls = await getDeadLetters();
+    expect(dls[0].label).toBe('Visit for Weisel');
+  });
+
+  it('4xx on a visit item with no familyName: falls back to the family id', async () => {
+    await queueItem(
+      { type: 'visit', payload: { family_id: 'fam-2', visit_date: '2026-09-19', picked_up_by_phone: null } },
+      'visit-key-2'
+    );
+    const result = await flushQueue(async () => { throw new FakeApiError(409, 'This family has already been checked in today.'); });
+
+    const dls = await getDeadLetters();
+    expect(dls[0].label).toBe('Visit for family fam-2');
+  });
+
   it('5xx: keeps the item in pending, no dead letter', async () => {
     await queueItem({ type: 'family', payload: FAMILY_PAYLOAD });
     const result = await flushQueue(async () => { throw new FakeApiError(500, 'boom'); });
