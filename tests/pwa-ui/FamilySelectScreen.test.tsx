@@ -19,13 +19,14 @@ const result = (id: string, name: string): FamilySearchResult => ({
   id, name, phone: null, num_people: 2, last_visit_date: null,
 } as unknown as FamilySearchResult);
 
-function renderScreen(onConfirm = vi.fn(), onRegisterNew = vi.fn()) {
+function renderScreen(onConfirm = vi.fn(), onRegisterNew = vi.fn(), searchedName = 'Garcia') {
   render(
     <FamilySelectScreen
       own={result('own1', 'Own Family')}
       proxy={[]}
       pickupName="Pickup Person"
       pickupPhone="4805550001"
+      searchedName={searchedName}
       onConfirm={onConfirm}
       onRegisterNew={onRegisterNew}
       onBack={() => {}}
@@ -160,6 +161,7 @@ describe('inline registration launch (probe round 6)', () => {
         proxy={[]}
         pickupName="Pickup Person"
         pickupPhone="4805550001"
+        searchedName="Pickup Person"
         initialExtra={[result('reg9', 'Freshly Registered')]}
         initialSelected={['own1', 'reg9']}
         notice="Test notice text"
@@ -171,5 +173,40 @@ describe('inline registration launch (probe round 6)', () => {
     expect(screen.getByText('Freshly Registered')).toBeInTheDocument();
     expect(screen.getByText('2 selected / seleccionadas')).toBeInTheDocument();
     expect(screen.getByText('Test notice text')).toBeInTheDocument();
+  });
+});
+
+// A phone search that lands on the WRONG family (phone number collision):
+// the typed name never gets a chance to register as new. See issue thread
+// "Name Selection & Phone Numbers".
+describe('phone-collision escape hatch: registering the ACTUALLY-typed name', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('offers to register the originally-searched name, not any family shown here', async () => {
+    const user = userEvent.setup();
+    const { onRegisterNew } = renderScreen(vi.fn(), vi.fn(), 'Garcia');
+
+    const btn = screen.getByRole('button', { name: /Register "Garcia" as new/ });
+    await user.click(btn);
+
+    expect(onRegisterNew).toHaveBeenCalledWith('Garcia', { extra: [], selectedIds: [] });
+  });
+
+  it('still offers an escape hatch (generic wording) when no name was typed — a pure phone lookup', () => {
+    renderScreen(vi.fn(), vi.fn(), '');
+    expect(screen.getByRole('button', { name: /Register as new/ })).toBeInTheDocument();
+    // Must not collide with the sub-panel's differently-behaving button of
+    // near-identical wording.
+    expect(screen.queryByText(/Register a new family/)).not.toBeInTheDocument();
+  });
+
+  it('preserves whatever is already selected when escaping to register-new', async () => {
+    const user = userEvent.setup();
+    const { onRegisterNew } = renderScreen(vi.fn(), vi.fn(), 'Garcia');
+
+    await user.click(screen.getByText('Own Family')); // select the (wrong) match first
+    await user.click(screen.getByRole('button', { name: /Register "Garcia" as new/ }));
+
+    expect(onRegisterNew).toHaveBeenCalledWith('Garcia', { extra: [], selectedIds: ['own1'] });
   });
 });

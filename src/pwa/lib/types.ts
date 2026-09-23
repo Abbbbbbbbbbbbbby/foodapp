@@ -60,8 +60,13 @@ import type { SummaryFamily } from '../components/enter/SummaryScreen';
 export type EnterView =
   | { type: 'lookup' }
   | { type: 'results'; results: FamilySearchResult[]; searchName: string; searchPhone: string | null; offline?: boolean }
-  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
-  | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; extra: FamilySearchResult[]; selectedIds: string[] } }
+  // searchedName: the raw name typed at lookup, distinct from pickupName —
+  // pickupName can be OVERWRITTEN by an existing family's name when a phone
+  // search matches one (see EnterPage.handleSearch), so it's unusable as the
+  // "register this as new" prefill when that match is the wrong family.
+  // Optional: a draft persisted by a pre-fix client won't have it.
+  | { type: 'family-select'; own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; searchedName?: string; extra?: FamilySearchResult[]; selectedIds?: string[]; notice?: string }
+  | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; searchedName?: string; extra: FamilySearchResult[]; selectedIds: string[] } }
   | { type: 'log-visit'; families: FamilySearchResult[]; current: number; pickupPhone: string | null }
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
   | { type: 'consent'; familyCount: number; searchName: string; searchPhone: string | null }

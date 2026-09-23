@@ -314,3 +314,48 @@ describe('multi-family registration: "person here today" prefill', () => {
     expect(secondPrompt.textContent).toContain('Garcia');
   });
 });
+
+describe('phone collision: a new family\'s phone matches an UNRELATED existing family', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('offers to register the TYPED name, not the wrong family the phone matched', async () => {
+    // The phone belongs to an unrelated existing family — the pickup lookup
+    // finds them, not the "Ramirez" the volunteer actually typed.
+    vi.mocked(api.get).mockImplementation(async (path: string) => {
+      if (path.includes('/pickup')) {
+        return { own: { id: 'smith1', name: 'Smith', phone: '4805559999', num_people: 2, last_visit_date: null }, proxy: [] };
+      }
+      throw new Error('unexpected GET ' + path);
+    });
+    const { apiWithToken } = await import('../../src/pwa/lib/api');
+    const pinnedClient = apiWithToken('tok');
+    vi.mocked(pinnedClient.post).mockImplementation(async (path: string) => (path === '/api/families' ? { id: 'ram1' } : { id: 'visit-1' }));
+    const user = userEvent.setup();
+    render(<EnterPage />);
+    const inputs = screen.getAllByRole('textbox');
+    await user.type(inputs[0], 'Ramirez');
+    await user.type(inputs[1], '4805559999');
+    await user.click(screen.getByRole('button', { name: /Search \/ Buscar/ }));
+
+    // Landed on the WRONG family's pickup screen.
+    await screen.findByText('Smith');
+    // The escape hatch names the ACTUALLY-typed name, not "Smith".
+    const escapeBtn = screen.getByRole('button', { name: /Register "Ramirez" as new/ });
+    await user.click(escapeBtn);
+
+    // Registering — the mocked wizard completes instantly with that name.
+    await user.click(await screen.findByRole('button', { name: 'MOCK_COMPLETE_WIZARD' }));
+
+    // Back on family-select: the NEW family is there, pre-selected — the
+    // wrong "Smith" match is still visible but NOT selected, so confirming
+    // proceeds with only the family actually being registered.
+    await screen.findByText('Ramirez');
+    expect(screen.getByText('1 selected / seleccionadas')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Confirm \/ Confirmar \(1\)/ }));
+    await user.click(await screen.findByRole('button', { name: /No change \/ Sin cambios/ }));
+
+    const visitPosts = vi.mocked(pinnedClient.post).mock.calls.filter(c => c[0] === '/api/visits');
+    expect(visitPosts).toHaveLength(1);
+    expect((visitPosts[0][1] as { family_id: string }).family_id).toBe('ram1');
+  });
+});

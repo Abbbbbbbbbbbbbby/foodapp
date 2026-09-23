@@ -8,6 +8,11 @@ interface FamilySelectScreenProps {
   proxy: FamilySearchResult[];
   pickupName: string;
   pickupPhone: string | null;
+  // The name as TYPED at lookup — not pickupName, which a phone match can
+  // overwrite with an unrelated existing family's name. This is what a
+  // phone-collision escape hatch must register, not whatever's shown above.
+  // Optional: a draft persisted by a pre-fix client won't have it.
+  searchedName?: string;
   // Rehydration after an inline registration round-trip
   initialExtra?: FamilySearchResult[];
   initialSelected?: string[];
@@ -19,7 +24,7 @@ interface FamilySelectScreenProps {
   onBack: () => void;
 }
 
-export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone, initialExtra, initialSelected, notice, onConfirm, onRegisterNew, onBack }: FamilySelectScreenProps) {
+export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone, searchedName = '', initialExtra, initialSelected, notice, onConfirm, onRegisterNew, onBack }: FamilySelectScreenProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set(initialSelected ?? []));
   // Families added at the window that weren't already proxy-linked
   const [extra, setExtra] = useState<FamilySearchResult[]>(initialExtra ?? []);
@@ -132,6 +137,18 @@ export default function FamilySelectScreen({ own, proxy, pickupName, pickupPhone
       {!adding && (
         <button className="btn-secondary" style={{ marginTop: 4, marginBottom: 8 }} onClick={() => setAdding(true)}>
           + Add another family / Agregar otra familia
+        </button>
+      )}
+
+      {!adding && (
+        <button
+          className="btn-ghost"
+          style={{ marginBottom: 8 }}
+          onClick={() => onRegisterNew(searchedName, { extra, selectedIds: [...selected] })}
+        >
+          {searchedName.trim()
+            ? <>Not the right family? Register &quot;{searchedName}&quot; as new{' / '}¿No es la familia correcta? Registrar &quot;{searchedName}&quot; como nueva</>
+            : <>Not the right family? Register as new{' / '}¿No es la familia correcta? Registrar como nueva</>}
         </button>
       )}
 

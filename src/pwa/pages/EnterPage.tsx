@@ -265,7 +265,7 @@ export default function EnterPage() {
           `/api/families/pickup?phone=${encodeURIComponent(phone)}`
         );
         if (pickup.own || pickup.proxy.length > 0) {
-          setView({ type: 'family-select', own: pickup.own, proxy: pickup.proxy, pickupName: pickup.own?.name ?? name, pickupPhone: phone });
+          setView({ type: 'family-select', own: pickup.own, proxy: pickup.proxy, pickupName: pickup.own?.name ?? name, pickupPhone: phone, searchedName: name });
           return;
         }
       }
@@ -301,6 +301,7 @@ export default function EnterPage() {
                 proxy: pickup.proxy.map(directoryToSearchResult),
                 pickupName: pickup.own?.name ?? name,
                 pickupPhone: phone,
+                searchedName: name,
                 notice: 'No connection — from the last synced family list. / Sin conexión — de la última lista sincronizada.',
               });
               return;
@@ -340,11 +341,11 @@ export default function EnterPage() {
         const pickup = await api.get<{ own: FamilySearchResult | null; proxy: FamilySearchResult[] }>(
           `/api/families/pickup?phone=${encodeURIComponent(result.phone)}`
         );
-        setView({ type: 'family-select', own: pickup.own ?? result, proxy: pickup.proxy, pickupName: (pickup.own ?? result).name, pickupPhone: result.phone });
+        setView({ type: 'family-select', own: pickup.own ?? result, proxy: pickup.proxy, pickupName: (pickup.own ?? result).name, pickupPhone: result.phone, searchedName: result.name });
         return;
       } catch { /* fall through to single-family select */ }
     }
-    setView({ type: 'family-select', own: result, proxy: [], pickupName: result.name, pickupPhone: result.phone });
+    setView({ type: 'family-select', own: result, proxy: [], pickupName: result.name, pickupPhone: result.phone, searchedName: result.name });
   }
 
   async function handleInlineRegisterComplete(data: WizardFormData, proxyData: ProxyData | null) {
@@ -383,6 +384,7 @@ export default function EnterPage() {
       setView({
         type: 'family-select', own: returnTo.own, proxy: returnTo.proxy,
         pickupName: returnTo.pickupName, pickupPhone: returnTo.pickupPhone,
+        searchedName: returnTo.searchedName,
         extra: [...returnTo.extra, newFam],
         selectedIds: [...returnTo.selectedIds, result.id],
       });
@@ -403,6 +405,7 @@ export default function EnterPage() {
       setView({
         type: 'family-select', own: returnTo.own, proxy: returnTo.proxy,
         pickupName: returnTo.pickupName, pickupPhone: returnTo.pickupPhone,
+        searchedName: returnTo.searchedName,
         extra: returnTo.extra, selectedIds: returnTo.selectedIds,
         notice: `${data.name} was saved offline — their visit for today will upload with sync. Do not select them for this pickup. / Se guardó sin conexión; su visita de hoy se subirá al sincronizar.`,
       });
@@ -741,6 +744,7 @@ export default function EnterPage() {
           proxy={view.proxy}
           pickupName={view.pickupName}
           pickupPhone={view.pickupPhone}
+          searchedName={view.searchedName}
           initialExtra={view.extra}
           initialSelected={view.selectedIds}
           notice={view.notice}
@@ -752,6 +756,7 @@ export default function EnterPage() {
               returnTo: {
                 own: view.own, proxy: view.proxy,
                 pickupName: view.pickupName, pickupPhone: view.pickupPhone,
+                searchedName: view.searchedName,
                 extra: keep.extra, selectedIds: keep.selectedIds,
               },
             });
@@ -780,6 +785,7 @@ export default function EnterPage() {
             setView({
               type: 'family-select', own: returnTo.own, proxy: returnTo.proxy,
               pickupName: returnTo.pickupName, pickupPhone: returnTo.pickupPhone,
+              searchedName: returnTo.searchedName,
               extra: returnTo.extra, selectedIds: returnTo.selectedIds,
             });
           }}
