@@ -11,12 +11,16 @@ type Role = 'admin' | 'staff' | 'volunteer';
 const STAFF_VISIT_FIELDS = new Set(['visit_date', 'bag_received']);
 // Fields admin may additionally update on a visit
 const ADMIN_VISIT_FIELDS = new Set([...STAFF_VISIT_FIELDS, 'volunteer_id', 'picked_up_by_phone']);
-// Fields staff may update on a family
-const STAFF_FAMILY_FIELDS = new Set(['num_people']);
+// Fields a volunteer may update on a family — the check-in quick-edit set
+// (LogVisitScreen's inline "Edit"): the fields most likely to need an
+// on-the-spot correction. Staff gets at least this much too (must be a
+// superset — a lower-trust role must never exceed a higher one).
+const VOLUNTEER_FAMILY_FIELDS = new Set(['name', 'phone', 'num_people']);
+const STAFF_FAMILY_FIELDS = VOLUNTEER_FAMILY_FIELDS;
 // Fields admin may additionally update on a family
 const ADMIN_FAMILY_FIELDS = new Set([
   ...STAFF_FAMILY_FIELDS,
-  'name', 'phone', 'address', 'zip_code', 'date_of_birth', 'language', 'ethnicity',
+  'address', 'zip_code', 'date_of_birth', 'language', 'ethnicity',
   'hispanic', 'ami_bracket', 'num_children_under_18', 'num_children_under_5',
   'num_with_diabetes', 'health_insurance', 'snap_benefits',
   'receives_texts', 'want_text_updates', 'id_confirmed', 'first_visit_date',
@@ -25,7 +29,7 @@ const ADMIN_FAMILY_FIELDS = new Set([
 function allowedFamilyFields(role: Role): Set<string> {
   if (role === 'admin') return ADMIN_FAMILY_FIELDS;
   if (role === 'staff') return STAFF_FAMILY_FIELDS;
-  return new Set();
+  return VOLUNTEER_FAMILY_FIELDS;
 }
 function allowedVisitFields(role: Role): Set<string> {
   if (role === 'admin') return ADMIN_VISIT_FIELDS;
@@ -44,7 +48,16 @@ export async function handleRecordRoutes(
 
   const ctx = await getAuthContext(request, env);
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  if (ctx.role === 'volunteer') return Response.json({ error: 'Forbidden' }, { status: 403 });
+  // Volunteers may reach exactly one route here: the single-family quick-edit
+  // PATCH (the check-in "Edit" button). Browsing, visits, delete, and audit
+  // history all stay staff/admin only — allowedFamilyFields() enforces which
+  // fields that PATCH accepts from a volunteer.
+  const isVolunteerFamilyPatch = ctx.role === 'volunteer'
+    && request.method === 'PATCH'
+    && /^\/api\/records\/families\/[^/]+$/.test(pathname);
+  if (ctx.role === 'volunteer' && !isVolunteerFamilyPatch) {
+    return Response.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   if (pathname === '/api/records/visits' && request.method === 'GET') {
     return handleListVisits(request, env);

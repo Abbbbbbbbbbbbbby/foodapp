@@ -488,6 +488,18 @@ export default function EnterPage() {
     }
   }
 
+  // A check-in-time edit (LogVisitScreen's inline "Edit") landed on the
+  // server — reflect it in this family's slot so the pickup-attribution
+  // check in handleLogVisit and the done-summary use the corrected values,
+  // not the stale ones the search first returned.
+  function handleFamilyUpdated(id: string, patch: { name: string; phone: string | null; num_people: number | null }) {
+    if (view.type !== 'log-visit') return;
+    setView({
+      ...view,
+      families: view.families.map(f => f.id === id ? { ...f, ...patch } : f),
+    });
+  }
+
   function handleHowMany(count: number) {
     if (view.type !== 'how-many') return;
     setView({ type: 'consent', familyCount: count, searchName: view.searchName, searchPhone: view.searchPhone });
@@ -773,6 +785,7 @@ export default function EnterPage() {
           total={view.families.length}
           current={view.current}
           onLogVisit={handleLogVisit}
+          onFamilyUpdated={handleFamilyUpdated}
         />
       )}
       {view.type === 'how-many' && (

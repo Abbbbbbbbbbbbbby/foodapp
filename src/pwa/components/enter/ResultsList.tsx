@@ -1,4 +1,5 @@
 import type { FamilySearchResult } from '../../lib/types';
+import { formatPhoneAsTyped } from '../../lib/phone';
 
 interface ResultsListProps {
   results: FamilySearchResult[];
@@ -18,7 +19,7 @@ export default function ResultsList({ results, onSelect, onRegisterNew, onBack }
         <button key={r.id} className="result-card" onClick={() => onSelect(r)}>
           <span className="result-name">{r.name}</span>
           <span className="result-meta">
-            {r.phone ? `···${r.phone.slice(-4)}` : 'No phone'}
+            {r.phone ? formatPhoneAsTyped(r.phone) : 'No phone'}
             {' · '}
             {r.num_people ?? '?'} people
             {r.last_visit_date

@@ -196,14 +196,26 @@ describe('PATCH /api/records/families/:id', () => {
     expect(res.status).toBe(200);
   });
 
-  it('staff cannot update name', async () => {
+  it('staff can update name and phone (quick-fix fields, same as volunteer)', async () => {
     await seedUser('s1', 'Staff', '4801110002', 'staff');
     await seedFamily('f1', 'Smith');
     const token = await makeToken('s1', '4801110002', 'staff');
     const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
       method: 'PATCH',
       headers: headers(token),
-      body: JSON.stringify({ name: 'Hacker' }),
+      body: JSON.stringify({ name: 'Hacker', phone: '4805559999' }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('staff cannot update admin-only demographic fields', async () => {
+    await seedUser('s1', 'Staff', '4801110002', 'staff');
+    await seedFamily('f1', 'Smith');
+    const token = await makeToken('s1', '4801110002', 'staff');
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
+      method: 'PATCH',
+      headers: headers(token),
+      body: JSON.stringify({ hispanic: 'yes' }),
     });
     expect(res.status).toBe(400);
   });
@@ -218,6 +230,68 @@ describe('PATCH /api/records/families/:id', () => {
       body: JSON.stringify({ name: 'Johnson', num_children_under_18: 2 }),
     });
     expect(res.status).toBe(200);
+  });
+
+  it('volunteer can update name, phone, and num_people — the check-in quick-edit', async () => {
+    await seedUser('v1', 'Vol', '4801110001', 'volunteer');
+    await seedFamily('f1', 'Smith');
+    const token = await makeToken('v1', '4801110001', 'volunteer');
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
+      method: 'PATCH',
+      headers: headers(token),
+      body: JSON.stringify({ name: 'Smyth', phone: '4805559999', num_people: 4 }),
+    });
+    expect(res.status).toBe(200);
+    const family = await env.DB.prepare(`SELECT name, phone, num_people FROM families WHERE id = 'f1'`)
+      .first<{ name: string; phone: string; num_people: number }>();
+    expect(family).toEqual({ name: 'Smyth', phone: '4805559999', num_people: 4 });
+  });
+
+  it('volunteer cannot update admin-only demographic fields', async () => {
+    await seedUser('v1', 'Vol', '4801110001', 'volunteer');
+    await seedFamily('f1', 'Smith');
+    const token = await makeToken('v1', '4801110001', 'volunteer');
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
+      method: 'PATCH',
+      headers: headers(token),
+      body: JSON.stringify({ hispanic: 'yes' }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── Volunteer access stays scoped to the single-family quick-edit ───────────
+
+describe('volunteer role: everything except PATCH /api/records/families/:id stays forbidden', () => {
+  it('cannot list families', async () => {
+    await seedUser('v1', 'Vol', '4801110001', 'volunteer');
+    const token = await makeToken('v1', '4801110001', 'volunteer');
+    const res = await workerExports.default.fetch('https://example.com/api/records/families', { headers: headers(token) });
+    expect(res.status).toBe(403);
+  });
+
+  it('cannot PATCH a visit', async () => {
+    await seedUser('v1', 'Vol', '4801110001', 'volunteer');
+    await seedFamily('f1', 'Smith');
+    await seedVisit('vi1', 'f1', '2026-07-01', 'v1');
+    const token = await makeToken('v1', '4801110001', 'volunteer');
+    const res = await workerExports.default.fetch('https://example.com/api/records/visits/vi1', {
+      method: 'PATCH',
+      headers: headers(token),
+      body: JSON.stringify({ bag_received: true }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('cannot delete a family', async () => {
+    await seedUser('v1', 'Vol', '4801110001', 'volunteer');
+    await seedFamily('f1', 'Smith');
+    const token = await makeToken('v1', '4801110001', 'volunteer');
+    const res = await workerExports.default.fetch('https://example.com/api/records/families/f1', {
+      method: 'DELETE',
+      headers: headers(token),
+    });
+    expect(res.status).toBe(403);
   });
 });
 
