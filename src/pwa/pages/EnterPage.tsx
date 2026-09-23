@@ -75,6 +75,11 @@ export default function EnterPage() {
   const restoredWizardRef = useRef<{ initialData: Partial<WizardFormData>; initialStep: number } | null>(null);
   // In-flight submission idempotency keys — see mintOrReuseKey below.
   const submissionKeysRef = useRef<{ familyIdemKey?: string; visitIdemKey?: string }>({});
+  // The name/phone originally searched, carried across the WHOLE multi-family
+  // registration loop so "The person here today" stays auto-populated for
+  // family 2, 3, ... — not just the first (a blank prefill there forced
+  // manual re-typing of a name the volunteer already entered once).
+  const pickupPersonRef = useRef<{ name: string; phone: string | null }>({ name: '', phone: null });
   const viewRef = useRef(view);
   useEffect(() => { viewRef.current = view; }, [view]);
 
@@ -507,6 +512,7 @@ export default function EnterPage() {
 
   function handleConsentContinue() {
     if (view.type !== 'consent') return;
+    pickupPersonRef.current = { name: view.searchName, phone: view.searchPhone };
     setView({
       type: 'proxy-question',
       familyIndex: 0,
@@ -638,8 +644,8 @@ export default function EnterPage() {
         type: 'proxy-question',
         familyIndex: familyIndex + 1,
         total,
-        prefillName: '',
-        prefillPhone: null,
+        prefillName: pickupPersonRef.current.name,
+        prefillPhone: pickupPersonRef.current.phone,
       });
     } else {
       const families = pendingFamilies.current;

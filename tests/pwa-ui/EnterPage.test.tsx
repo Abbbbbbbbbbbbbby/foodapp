@@ -39,6 +39,26 @@ vi.mock('../../src/pwa/lib/offline', () => ({
   DB_VERSION: 4,
 }));
 
+// A minimal stand-in for the real 11-step Wizard: exposes just enough to
+// drive EnterPage's OWN orchestration logic (the thing under test here)
+// without exercising the real wizard's step-by-step UI.
+vi.mock('../../src/pwa/components/wizard/Wizard', () => ({
+  default: (props: {
+    initialData: { name?: string; phone?: string | null };
+    proxyData: unknown;
+    onComplete: (data: { name: string; phone: string | null; num_people: number }, proxyData: unknown) => void;
+  }) => (
+    <button
+      onClick={() => props.onComplete(
+        { name: props.initialData.name ?? '', phone: props.initialData.phone ?? null, num_people: 3 },
+        props.proxyData
+      )}
+    >
+      MOCK_COMPLETE_WIZARD
+    </button>
+  ),
+}));
+
 import EnterPage from '../../src/pwa/pages/EnterPage';
 import { api, ApiError } from '../../src/pwa/lib/api';
 import { searchDirectory } from '../../src/pwa/lib/offline';
@@ -254,5 +274,43 @@ describe('EnterPage — draft resume prompt', () => {
     render(<EnterPage />);
     await screen.findByRole('button', { name: /Search \/ Buscar/i });
     expect(screen.queryByRole('button', { name: /^Resume/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('multi-family registration: "person here today" prefill', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('carries the ORIGINAL searched name/phone to every family in the loop, not just the first', async () => {
+    vi.mocked(api.get).mockImplementation(async (path: string) => {
+      if (path.includes('/pickup')) return { own: null, proxy: [] };
+      if (path.includes('/search')) return { results: [] };
+      throw new Error('unexpected GET ' + path);
+    });
+    const { apiWithToken } = await import('../../src/pwa/lib/api');
+    const pinnedClient = apiWithToken('tok');
+    vi.mocked(pinnedClient.post).mockImplementation(async (path: string) =>
+      path === '/api/families' ? { id: 'fam-1' } : { id: 'visit-1' }
+    );
+    const user = userEvent.setup();
+    render(<EnterPage />);
+    const inputs = screen.getAllByRole('textbox');
+    await user.type(inputs[0], 'Garcia');
+    await user.type(inputs[1], '4805551234');
+    await user.click(screen.getByRole('button', { name: /Search \/ Buscar/ }));
+
+    // No match -> register 2 new families for this one pickup person.
+    await user.click(await screen.findByRole('button', { name: '2' }));
+    await user.click(screen.getByRole('button', { name: /Continue \/ Continuar/ }));
+
+    // Family 1's proxy question is correctly prefilled today.
+    const firstPrompt = await screen.findByRole('button', { name: /The person here today/ });
+    expect(firstPrompt.textContent).toContain('Garcia');
+    await user.click(firstPrompt);
+    await user.click(await screen.findByRole('button', { name: 'MOCK_COMPLETE_WIZARD' }));
+
+    // Family 2's proxy question — the bug being fixed: this must ALSO show
+    // "Garcia", not fall back to a blank prefill that forces manual typing.
+    const secondPrompt = await screen.findByRole('button', { name: /The person here today/ });
+    expect(secondPrompt.textContent).toContain('Garcia');
   });
 });
