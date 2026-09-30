@@ -16,8 +16,6 @@ type Filter = CatFilter | NumFilter;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const NUMERIC_FIELDS = new Set(['num_people', 'num_children_under_18', 'num_children_under_5', 'num_with_diabetes']);
-
 const FILTER_FIELDS: { key: string; label: string; type: 'cat' | 'num' }[] = [
   { key: 'language',             label: 'Language',             type: 'cat' },
   { key: 'zip_code',             label: 'ZIP Code',             type: 'cat' },
@@ -34,20 +32,38 @@ const FILTER_FIELDS: { key: string; label: string; type: 'cat' | 'num' }[] = [
   { key: 'num_with_diabetes',    label: 'Members w/ Diabetes',  type: 'num' },
 ];
 
-const CHART_DEFS: { key: string; label: string; numeric?: boolean; note?: string }[] = [
-  { key: 'language',              label: 'Language' },
-  { key: 'zip_code',              label: 'ZIP Code', note: 'Top 20' },
-  { key: 'ami_bracket',           label: 'Income Level' },
-  { key: 'snap_benefits',         label: 'SNAP Benefits' },
-  { key: 'health_insurance',      label: 'Health Insurance' },
-  { key: 'hispanic',              label: 'Hispanic / Latino' },
-  { key: 'ethnicity',             label: 'Ethnicity', note: 'Top 20' },
-  { key: 'receives_texts',        label: 'Receives Texts' },
-  { key: 'bag_received',          label: 'Bag Received' },
-  { key: 'num_people',            label: 'Household Size',       numeric: true },
-  { key: 'num_children_under_18', label: 'Children Under 18',    numeric: true },
-  { key: 'num_children_under_5',  label: 'Children Under 5',     numeric: true },
-  { key: 'num_with_diabetes',     label: 'Members w/ Diabetes',  numeric: true },
+type ChartDef = { key: string; label: string; numeric?: boolean; note?: string };
+type ChartSection = { label: string; color: string; charts: ChartDef[] };
+
+const CHART_SECTIONS: ChartSection[] = [
+  {
+    label: 'Household', color: '#8B2A38',
+    charts: [
+      { key: 'num_people',            label: 'Household Size',      numeric: true },
+      { key: 'num_children_under_18', label: 'Children Under 18',   numeric: true },
+      { key: 'num_children_under_5',  label: 'Children Under 5',    numeric: true },
+      { key: 'num_with_diabetes',     label: 'Members w/ Diabetes', numeric: true },
+    ],
+  },
+  {
+    label: 'Demographics', color: '#003594',
+    charts: [
+      { key: 'language',   label: 'Language' },
+      { key: 'zip_code',   label: 'ZIP Code',    note: 'Top 10 + others' },
+      { key: 'ami_bracket', label: 'Income Level' },
+      { key: 'hispanic',   label: 'Hispanic / Latino' },
+      { key: 'ethnicity',  label: 'Ethnicity',   note: 'Top 20' },
+    ],
+  },
+  {
+    label: 'Benefits & Services', color: '#E8962A',
+    charts: [
+      { key: 'snap_benefits',    label: 'SNAP Benefits' },
+      { key: 'health_insurance', label: 'Health Insurance' },
+      { key: 'bag_received',     label: 'Bag Received' },
+      { key: 'receives_texts',   label: 'Receives Texts' },
+    ],
+  },
 ];
 
 // Human-readable labels for coded values
@@ -100,94 +116,292 @@ function lastMonthLabel(): string {
   return d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 }
 
-// ── BarChart component ────────────────────────────────────────────────────────
+// ── Shared tooltip ────────────────────────────────────────────────────────────
 
-function BarChart({ data, baseTotal, field, numeric }: {
+const SLICE_COLORS = [
+  '#003594', '#F7A800', '#44588A', '#E8962A', '#1E6B8A',
+  '#C4860A', '#5B7FAF', '#D4A840', '#2E5FA3', '#8B6914',
+];
+
+type Slice = { path: string; color: string; label: string; count: number; pct: number };
+type TipState = { label: string; count: number; pct: number; x: number; y: number } | null;
+
+function Tip({ tip }: { tip: TipState }) {
+  if (!tip) return null;
+  return (
+    <div style={{
+      position: 'fixed',
+      left: tip.x + 14,
+      top: tip.y - 56,
+      background: '#1E3266',
+      color: '#fff',
+      padding: '7px 11px',
+      borderRadius: 7,
+      fontSize: 12,
+      lineHeight: 1.55,
+      pointerEvents: 'none',
+      zIndex: 1000,
+      maxWidth: 230,
+      boxShadow: '0 3px 10px rgba(0,0,0,.3)',
+    }}>
+      <div style={{ fontWeight: 600 }}>{tip.label}</div>
+      <div style={{ opacity: 0.85 }}>{tip.count.toLocaleString()} · {tip.pct}% of total</div>
+    </div>
+  );
+}
+
+// ── PieChart component ────────────────────────────────────────────────────────
+
+function computeSlices(buckets: Bucket[], baseTotal: number, field: string, numeric?: boolean): Slice[] {
+  if (baseTotal === 0 || buckets.length === 0) return [];
+  const sorted = numeric
+    ? [...buckets].sort((a, b) => Number(a.value) - Number(b.value))
+    : buckets;
+  const answered = sorted.reduce((s, b) => s + b.count, 0);
+  const unanswered = Math.max(0, baseTotal - answered);
+
+  // Merge explicit "declined" responses with unanswered (NULL) into one slice
+  let noResponseCount = unanswered;
+  const mainBuckets = sorted.filter(b => {
+    if (b.value === 'declined') { noResponseCount += b.count; return false; }
+    return true;
+  });
+
+  const items: { label: string; count: number; color: string }[] = [
+    ...mainBuckets.map((b, i) => ({
+      label: displayValue(field, b.value),
+      count: b.count,
+      color: SLICE_COLORS[i % SLICE_COLORS.length],
+    })),
+    ...(noResponseCount > 0 ? [{ label: 'No response', count: noResponseCount, color: '#E8E6E2' }] : []),
+  ];
+
+  const total = items.reduce((s, b) => s + b.count, 0);
+  const cx = 80, cy = 80, r = 72;
+  let angle = -Math.PI / 2;
+
+  return items
+    .filter(b => b.count > 0)
+    .map(b => {
+      const fraction = b.count / total;
+      const sweep = fraction * 2 * Math.PI;
+      const startAngle = angle;
+      angle += sweep;
+
+      let path: string;
+      if (fraction >= 0.9999) {
+        path = `M ${cx + r} ${cy} A ${r} ${r} 0 1 1 ${cx - r} ${cy} A ${r} ${r} 0 1 1 ${cx + r} ${cy}`;
+      } else {
+        const x1 = (cx + r * Math.cos(startAngle)).toFixed(2);
+        const y1 = (cy + r * Math.sin(startAngle)).toFixed(2);
+        const x2 = (cx + r * Math.cos(angle)).toFixed(2);
+        const y2 = (cy + r * Math.sin(angle)).toFixed(2);
+        const la = sweep > Math.PI ? 1 : 0;
+        path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${la} 1 ${x2} ${y2} Z`;
+      }
+
+      return { path, color: b.color, label: b.label, count: b.count, pct: Math.round(fraction * 100) };
+    });
+}
+
+function PieChart({ data, baseTotal, field, numeric }: {
   data: Bucket[];
   baseTotal: number;
   field: string;
   numeric?: boolean;
 }) {
-  const sorted = numeric
-    ? [...data].sort((a, b) => Number(a.value) - Number(b.value))
-    : data;
-  const max = Math.max(...sorted.map(b => b.count), 1);
-  const answered = sorted.reduce((sum, b) => sum + b.count, 0);
-  const notAnswered = Math.max(0, baseTotal - answered);
-
-  const row: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    marginBottom: 6,
-  };
-  const labelStyle: React.CSSProperties = {
-    width: 120,
-    flexShrink: 0,
-    fontSize: 13,
-    color: 'var(--text)',
-    paddingRight: 8,
-    textAlign: 'right',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  };
-  const trackStyle: React.CSSProperties = {
-    flex: 1,
-    height: 20,
-    background: 'var(--surface-2)',
-    borderRadius: 4,
-    overflow: 'hidden',
-  };
-  const countStyle: React.CSSProperties = {
-    width: 90,
-    flexShrink: 0,
-    paddingLeft: 8,
-    fontSize: 12,
-    color: 'var(--text-muted)',
-    whiteSpace: 'nowrap',
-  };
-
-  if (sorted.length === 0) {
+  const [tip, setTip] = useState<TipState>(null);
+  const slices = computeSlices(data, baseTotal, field, numeric);
+  if (slices.length === 0) {
     return <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No data</p>;
   }
 
   return (
-    <div>
-      {sorted.map(b => (
-        <div key={b.value} style={row}>
-          <span style={labelStyle} title={displayValue(field, b.value)}>
-            {displayValue(field, b.value)}
-          </span>
-          <div style={trackStyle}>
-            <div style={{
-              width: `${(b.count / max) * 100}%`,
-              height: '100%',
-              background: 'var(--accent)',
-            }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+      <svg
+        viewBox="0 0 160 160"
+        style={{ width: 145, flexShrink: 0 }}
+        aria-hidden="true"
+        onMouseLeave={() => setTip(null)}
+      >
+        {slices.map((s, i) => (
+          <path
+            key={i}
+            d={s.path}
+            style={{ fill: s.color, stroke: 'var(--surface)', strokeWidth: 1.5, cursor: 'pointer' }}
+            onMouseMove={e => setTip({ label: s.label, count: s.count, pct: s.pct, x: e.clientX, y: e.clientY })}
+          />
+        ))}
+      </svg>
+      <Tip tip={tip} />
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {slices.map((s, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              {s.label}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+              {s.count.toLocaleString()}&thinsp;·&thinsp;{s.pct}%
+            </span>
           </div>
-          <span style={countStyle}>
-            {b.count.toLocaleString()}
-            {baseTotal > 0 ? ` (${Math.round((b.count / baseTotal) * 100)}%)` : ''}
-          </span>
-        </div>
-      ))}
-      {notAnswered > 0 && (
-        <div style={{ ...row, marginTop: 4, opacity: 0.55 }}>
-          <span style={{ ...labelStyle, fontSize: 12, color: 'var(--text-muted)' }}>Not answered</span>
-          <div style={{ ...trackStyle, height: 14 }}>
-            <div style={{
-              width: `${(notAnswered / max) * 100}%`,
-              height: '100%',
-              background: 'var(--border)',
-            }} />
-          </div>
-          <span style={{ ...countStyle, color: 'var(--text-muted)' }}>
-            {notAnswered.toLocaleString()}
-          </span>
-        </div>
-      )}
+        ))}
+      </div>
     </div>
   );
+}
+
+// ── Binary pill chart (strict yes/no fields) ─────────────────────────────────
+
+function BinaryPillChart({ data, baseTotal, field }: { data: Bucket[]; baseTotal: number; field: string }) {
+  const [tip, setTip] = useState<TipState>(null);
+  const b0 = data[0], b1 = data[1];
+  if (!b0 || !b1) return <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No data</p>;
+  const total = b0.count + b1.count;
+  if (total === 0) return <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No data</p>;
+  const pct0 = Math.round((b0.count / total) * 100);
+  const pct1 = 100 - pct0;
+  const tp0 = baseTotal > 0 ? Math.round((b0.count / baseTotal) * 100) : pct0;
+  const tp1 = baseTotal > 0 ? Math.round((b1.count / baseTotal) * 100) : pct1;
+  return (
+    <div>
+      <div
+        style={{ display: 'flex', height: 36, borderRadius: 8, overflow: 'hidden', marginBottom: 12 }}
+        onMouseLeave={() => setTip(null)}
+      >
+        {pct0 > 0 && (
+          <div
+            style={{ width: `${pct0}%`, background: SLICE_COLORS[0], display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            onMouseMove={e => setTip({ label: displayValue(field, b0.value), count: b0.count, pct: tp0, x: e.clientX, y: e.clientY })}
+          >
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{pct0}%</span>
+          </div>
+        )}
+        {pct1 > 0 && (
+          <div
+            style={{ width: `${pct1}%`, background: SLICE_COLORS[1], display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            onMouseMove={e => setTip({ label: displayValue(field, b1.value), count: b1.count, pct: tp1, x: e.clientX, y: e.clientY })}
+          >
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{pct1}%</span>
+          </div>
+        )}
+      </div>
+      <Tip tip={tip} />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px' }}>
+        {[b0, b1].map((b, i) => (
+          <div key={b.value} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ width: 10, height: 10, borderRadius: '50%', background: SLICE_COLORS[i], flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {displayValue(field, b.value)}: <strong style={{ color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{b.count.toLocaleString()}</strong>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Column chart (ordinal numeric fields) ─────────────────────────────────────
+
+function ColumnChart({ data, baseTotal, field }: { data: Bucket[]; baseTotal: number; field: string }) {
+  const [tip, setTip] = useState<TipState>(null);
+  if (data.length === 0) return <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No data</p>;
+  const sorted = [...data].sort((a, b) => Number(a.value) - Number(b.value));
+  const max = Math.max(...sorted.map(b => b.count), 1);
+  const BAR_H = 80;
+  return (
+    <div style={{ display: 'flex', gap: 14 }} onMouseLeave={() => setTip(null)}>
+      {/* bars + axis labels, bottom-aligned */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: BAR_H }}>
+          {sorted.map((b, i) => {
+            const h = Math.max(4, Math.round((b.count / max) * BAR_H));
+            const pct = baseTotal > 0 ? Math.round((b.count / baseTotal) * 100) : 0;
+            return (
+              <div
+                key={b.value}
+                style={{ flex: 1, height: h, background: SLICE_COLORS[i % SLICE_COLORS.length], borderRadius: '3px 3px 0 0', cursor: 'pointer', minWidth: 0 }}
+                onMouseMove={e => setTip({ label: displayValue(field, b.value), count: b.count, pct, x: e.clientX, y: e.clientY })}
+              />
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+          {sorted.map(b => (
+            <div key={b.value} style={{ flex: 1, fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', minWidth: 0 }}>
+              {b.value}
+            </div>
+          ))}
+        </div>
+      </div>
+      {/* legend, centered */}
+      <div style={{ flexShrink: 0, width: 110, display: 'flex', flexDirection: 'column', gap: 4, alignSelf: 'center' }}>
+        {sorted.map((b, i) => (
+          <div key={b.value} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: SLICE_COLORS[i % SLICE_COLORS.length], flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              {displayValue(field, b.value)}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+              {b.count.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
+      <Tip tip={tip} />
+    </div>
+  );
+}
+
+// ── Horizontal bar chart (many-value fields: ZIP, ethnicity) ──────────────────
+
+function HBarChart({ data, baseTotal, field }: { data: Bucket[]; baseTotal: number; field: string }) {
+  const [tip, setTip] = useState<TipState>(null);
+  if (data.length === 0) return <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No data</p>;
+  const max = Math.max(...data.map(b => b.count), 1);
+  return (
+    <div onMouseLeave={() => setTip(null)}>
+      {data.map((b, i) => {
+        const pct = baseTotal > 0 ? Math.round((b.count / baseTotal) * 100) : 0;
+        return (
+          <div
+            key={b.value}
+            style={{ display: 'flex', alignItems: 'center', marginBottom: 6, cursor: 'pointer' }}
+            onMouseMove={e => setTip({ label: displayValue(field, b.value), count: b.count, pct, x: e.clientX, y: e.clientY })}
+          >
+            <span style={{ width: 80, flexShrink: 0, fontSize: 12, color: 'var(--text)', textAlign: 'right', paddingRight: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {displayValue(field, b.value)}
+            </span>
+            <div style={{ flex: 1, height: 18, background: 'var(--surface-2)', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ width: `${(b.count / max) * 100}%`, height: '100%', background: SLICE_COLORS[i % SLICE_COLORS.length], borderRadius: 4 }} />
+            </div>
+            <span style={{ width: 72, flexShrink: 0, paddingLeft: 8, fontSize: 12, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+              {b.count.toLocaleString()} ({pct}%)
+            </span>
+          </div>
+        );
+      })}
+      <Tip tip={tip} />
+    </div>
+  );
+}
+
+// ── Chart type routing ────────────────────────────────────────────────────────
+
+const BINARY_CHART_FIELDS = new Set(['bag_received', 'receives_texts']);
+const COLUMN_CHART_FIELDS = new Set(['num_people', 'num_children_under_18', 'num_children_under_5', 'num_with_diabetes']);
+const HBAR_CHART_FIELDS   = new Set(['zip_code', 'ethnicity']);
+
+function ChartRenderer({ data, baseTotal, field, numeric }: {
+  data: Bucket[];
+  baseTotal: number;
+  field: string;
+  numeric?: boolean;
+}) {
+  if (BINARY_CHART_FIELDS.has(field)) return <BinaryPillChart data={data} baseTotal={baseTotal} field={field} />;
+  if (COLUMN_CHART_FIELDS.has(field)) return <ColumnChart data={data} baseTotal={baseTotal} field={field} />;
+  if (HBAR_CHART_FIELDS.has(field))   return <HBarChart data={data} baseTotal={baseTotal} field={field} />;
+  return <PieChart data={data} baseTotal={baseTotal} field={field} numeric={numeric} />;
 }
 
 // ── Totals banner ─────────────────────────────────────────────────────────────
@@ -578,7 +792,7 @@ export default function DataSummaryPage() {
                       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{def.note}</span>
                     )}
                   </div>
-                  <BarChart
+                  <ChartRenderer
                     data={data}
                     baseTotal={summary.totals.families}
                     field={def.key}

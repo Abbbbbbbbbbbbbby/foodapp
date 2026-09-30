@@ -44,6 +44,35 @@ async function distFamily(
   return results ?? [];
 }
 
+// Like distFamily but appends an 'Others' bucket for counts beyond the limit.
+// col is always a hardcoded string from the call site — not user input.
+async function distFamilyWithOthers(
+  db: D1Database,
+  col: string,
+  limit: number,
+  start: string | null,
+  end: string | null,
+): Promise<Bucket[]> {
+  const top = await distFamily(db, col, limit, start, end);
+  if (top.length < limit) return top; // fewer results than the limit → no Others
+
+  const topSum = top.reduce((s, b) => s + b.count, 0);
+  let totalRow: { n: number } | null;
+  if (start && end) {
+    totalRow = await db.prepare(
+      `SELECT COUNT(DISTINCT f.id) AS n FROM families f JOIN visits v ON v.family_id = f.id
+       WHERE v.visit_date >= ? AND v.visit_date <= ? AND f.${col} IS NOT NULL`
+    ).bind(start, end).first<{ n: number }>();
+  } else {
+    totalRow = await db.prepare(
+      `SELECT COUNT(*) AS n FROM families WHERE ${col} IS NOT NULL`
+    ).first<{ n: number }>();
+  }
+  const others = (totalRow?.n ?? 0) - topSum;
+  if (others > 0) top.push({ value: 'Others', count: others });
+  return top;
+}
+
 // Per-visit bag distribution when date-filtered; per-family (max) for all time.
 async function distBag(db: D1Database, start: string | null, end: string | null): Promise<Bucket[]> {
   let sql: string;
@@ -159,17 +188,18 @@ export async function handleSummaryRoute(
       : env.DB.prepare(`SELECT SUM(CASE WHEN COALESCE(f.num_people,0) > 5 THEN 2 ELSE 1 END) AS n FROM visits v JOIN families f ON f.id = v.family_id WHERE v.bag_received = 1`).first<{ n: number }>(),
   ]);
 
-  const COLS = ['zip_code', 'language', 'ami_bracket', 'snap_benefits', 'health_insurance',
+  const COLS = ['language', 'ami_bracket', 'snap_benefits', 'health_insurance',
     'hispanic', 'ethnicity', 'receives_texts', 'num_people', 'num_children_under_18',
     'num_children_under_5', 'num_with_diabetes'] as const;
-  const LIMITS = [20, 15, 10, 5, 5, 5, 20, 5, 15, 15, 10, 10];
+  const LIMITS = [15, 10, 5, 5, 5, 20, 5, 15, 15, 10, 10];
 
-  const [bagDist, ...colDists] = await Promise.all([
+  const [bagDist, zipDist, ...colDists] = await Promise.all([
     distBag(env.DB, start, end),
+    distFamilyWithOthers(env.DB, 'zip_code', 10, start, end),
     ...COLS.map((c, i) => distFamily(env.DB, c, LIMITS[i], start, end)),
   ]);
 
-  const fields: Record<string, Bucket[]> = { bag_received: bagDist as Bucket[] };
+  const fields: Record<string, Bucket[]> = { bag_received: bagDist as Bucket[], zip_code: zipDist };
   COLS.forEach((c, i) => { fields[c] = colDists[i] as Bucket[]; });
 
   return Response.json({
