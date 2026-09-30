@@ -29,7 +29,7 @@ const FILTER_FIELDS: { key: string; label: string; type: 'cat' | 'num' }[] = [
   { key: 'num_people',           label: 'Household Size',       type: 'num' },
   { key: 'num_children_under_18',label: 'Children Under 18',   type: 'num' },
   { key: 'num_children_under_5', label: 'Children Under 5',    type: 'num' },
-  { key: 'num_with_diabetes',    label: 'Members w/ Diabetes',  type: 'num' },
+  { key: 'num_with_diabetes',    label: 'Members with Diabetes',  type: 'num' },
 ];
 
 type ChartDef = { key: string; label: string; numeric?: boolean; note?: string };
@@ -42,7 +42,7 @@ const CHART_SECTIONS: ChartSection[] = [
       { key: 'num_people',            label: 'Household Size',      numeric: true },
       { key: 'num_children_under_18', label: 'Children Under 18',   numeric: true },
       { key: 'num_children_under_5',  label: 'Children Under 5',    numeric: true },
-      { key: 'num_with_diabetes',     label: 'Members w/ Diabetes', numeric: true },
+      { key: 'num_with_diabetes',     label: 'Members with Diabetes', numeric: true },
     ],
   },
   {
@@ -336,7 +336,7 @@ function ColumnChart({ data, baseTotal, field }: { data: Bucket[]; baseTotal: nu
         </div>
       </div>
       {/* legend, centered */}
-      <div style={{ flexShrink: 0, width: 110, display: 'flex', flexDirection: 'column', gap: 4, alignSelf: 'center' }}>
+      <div style={{ flexShrink: 0, width: 110, display: 'flex', flexDirection: 'column', gap: 4, alignSelf: 'flex-end' }}>
         {sorted.map((b, i) => (
           <div key={b.value} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
             <div style={{ width: 10, height: 10, borderRadius: 2, background: SLICE_COLORS[i % SLICE_COLORS.length], flexShrink: 0 }} />
