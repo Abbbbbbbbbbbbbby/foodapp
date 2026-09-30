@@ -780,29 +780,42 @@ export default function DataSummaryPage() {
         <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Loading…</p>
       )}
       {summary && (
-        <div className="summary-chart-grid">
-          {CHART_DEFS.map(def => {
-            const data = summary.fields[def.key] ?? [];
-            return (
-              <div key={def.key} className="summary-chart-card">
-                <div style={card}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
-                    <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{def.label}</p>
-                    {def.note && (
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{def.note}</span>
-                    )}
-                  </div>
-                  <ChartRenderer
-                    data={data}
-                    baseTotal={summary.totals.families}
-                    field={def.key}
-                    numeric={def.numeric}
-                  />
-                </div>
+        <>
+          {CHART_SECTIONS.map(section => (
+            <div key={section.label} className="summary-chart-section">
+              <div className="summary-chart-section-head">
+                <div style={{ width: 10, height: 10, borderRadius: 2, background: section.color, flexShrink: 0 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--text-muted)' }}>
+                  {section.label}
+                </span>
               </div>
-            );
-          })}
-        </div>
+              <div className="summary-chart-grid">
+                {section.charts.map(def => {
+                  const data = summary.fields[def.key] ?? [];
+                  const isBar = BINARY_CHART_FIELDS.has(def.key) || HBAR_CHART_FIELDS.has(def.key) || COLUMN_CHART_FIELDS.has(def.key);
+                  return (
+                    <div key={def.key} className="summary-chart-card">
+                      <div style={{ ...card, borderTop: `4px solid ${section.color}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: isBar ? 20 : 14 }}>
+                          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{def.label}</p>
+                          {def.note && (
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{def.note}</span>
+                          )}
+                        </div>
+                        <ChartRenderer
+                          data={data}
+                          baseTotal={summary.totals.families}
+                          field={def.key}
+                          numeric={def.numeric}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </>
       )}
     </div>
   );
