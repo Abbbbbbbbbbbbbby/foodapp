@@ -37,7 +37,7 @@ type ChartSection = { label: string; color: string; charts: ChartDef[] };
 
 const CHART_SECTIONS: ChartSection[] = [
   {
-    label: 'Household', color: '#8B2A38',
+    label: 'Household', color: '#234090',
     charts: [
       { key: 'num_people',            label: 'Household Size',      numeric: true },
       { key: 'num_children_under_18', label: 'Children Under 18',   numeric: true },
@@ -46,7 +46,7 @@ const CHART_SECTIONS: ChartSection[] = [
     ],
   },
   {
-    label: 'Demographics', color: '#003594',
+    label: 'Demographics', color: '#8a2e1e',
     charts: [
       { key: 'language',   label: 'Language' },
       { key: 'zip_code',   label: 'ZIP Code',    note: 'Top 10 + others' },
@@ -56,7 +56,7 @@ const CHART_SECTIONS: ChartSection[] = [
     ],
   },
   {
-    label: 'Benefits & Services', color: '#E8962A',
+    label: 'Benefits & Services', color: '#cc8f00',
     charts: [
       { key: 'snap_benefits',    label: 'SNAP Benefits' },
       { key: 'health_insurance', label: 'Health Insurance' },
@@ -119,8 +119,9 @@ function lastMonthLabel(): string {
 // ── Shared tooltip ────────────────────────────────────────────────────────────
 
 const SLICE_COLORS = [
-  '#003594', '#F7A800', '#44588A', '#E8962A', '#8A1E42',
-  '#C4860A', '#5B7FAF', '#D4A840', '#2E5FA3', '#8B6914',
+  '#234090', '#8a2e1e', '#e0a800', '#172a5e', '#bc3f29',
+  '#ffa600', '#1a4acb', '#351f03', '#3d6ae6', '#593403',
+  '#5779d6', '#8f6400', '#78a1de',
 ];
 
 type Slice = { path: string; color: string; label: string; count: number; pct: number };
