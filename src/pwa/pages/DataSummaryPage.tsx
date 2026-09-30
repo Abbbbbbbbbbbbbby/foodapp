@@ -119,9 +119,9 @@ function lastMonthLabel(): string {
 // ── Shared tooltip ────────────────────────────────────────────────────────────
 
 const SLICE_COLORS = [
-  '#234090', '#8a2e1e', '#e0a800', '#172a5e', '#bc3f29',
-  '#ffa600', '#1a4acb', '#351f03', '#3d6ae6', '#593403',
-  '#5779d6', '#8f6400', '#78a1de',
+  '#234090', '#8a2e1e', '#c27e00', '#172a5e', '#bc3f29',
+  '#ffa600', '#1a4acb', '#855400', '#3d6ae6', '#c27b00',
+  '#5779d6', '#855600', '#78a1de',
 ];
 
 type Slice = { path: string; color: string; label: string; count: number; pct: number };
@@ -174,7 +174,7 @@ function computeSlices(buckets: Bucket[], baseTotal: number, field: string, nume
       count: b.count,
       color: SLICE_COLORS[i % SLICE_COLORS.length],
     })),
-    ...(noResponseCount > 0 ? [{ label: 'No response', count: noResponseCount, color: '#E8E6E2' }] : []),
+    ...(noResponseCount > 0 ? [{ label: 'No response', count: noResponseCount, color: '#EDE8DF' }] : []),
   ];
 
   const total = items.reduce((s, b) => s + b.count, 0);
