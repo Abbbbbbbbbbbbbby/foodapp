@@ -121,7 +121,7 @@ function lastMonthLabel(): string {
 const SLICE_COLORS = [
   '#234090', '#8a2e1e', '#c27b00', '#172a5e', '#bc3f29',
   '#ffa200', '#1a4acb', '#855400', '#3d6ae6', '#472d00',
-  '#5779d6', '#ffd17a', '#78a1de',
+  '#a9c3ea', '#ffd17a', '#78a1de',
 ];
 
 type Slice = { path: string; color: string; label: string; count: number; pct: number };
