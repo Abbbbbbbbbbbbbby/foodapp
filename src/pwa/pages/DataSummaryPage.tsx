@@ -119,9 +119,9 @@ function lastMonthLabel(): string {
 // ── Shared tooltip ────────────────────────────────────────────────────────────
 
 const SLICE_COLORS = [
-  '#234090', '#8a2e1e', '#c27b00', '#172a5e', '#bc3f29',
-  '#ffa200', '#1a4acb', '#855400', '#3d6ae6', '#472d00',
-  '#a9c3ea', '#ffd17a', '#78a1de',
+  '#234090', '#ffa200', '#8a2e1e', '#c5422b', '#172a5e',
+  '#c27b00', '#855400', '#b03b26', '#78a1de', '#a9c3ea',
+  '#3d6ae6', '#1a4acb', '#ffd17a',
 ];
 
 type Slice = { path: string; color: string; label: string; count: number; pct: number };
