@@ -791,28 +791,30 @@ export default function DataSummaryPage() {
                 </span>
               </div>
               <div className="summary-chart-grid">
-                {section.charts.map(def => {
-                  const data = summary.fields[def.key] ?? [];
-                  const isBar = BINARY_CHART_FIELDS.has(def.key) || HBAR_CHART_FIELDS.has(def.key) || COLUMN_CHART_FIELDS.has(def.key);
-                  return (
-                    <div key={def.key} className="summary-chart-card">
-                      <div style={{ ...card, borderTop: `4px solid ${section.color}` }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: isBar ? 20 : 14 }}>
-                          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{def.label}</p>
-                          {def.note && (
-                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{def.note}</span>
-                          )}
+                {[0, 1].map(col => (
+                  <div key={col} className="summary-chart-col">
+                    {section.charts.filter((_, i) => i % 2 === col).map(def => {
+                      const data = summary.fields[def.key] ?? [];
+                      const isBar = BINARY_CHART_FIELDS.has(def.key) || HBAR_CHART_FIELDS.has(def.key) || COLUMN_CHART_FIELDS.has(def.key);
+                      return (
+                        <div key={def.key} style={{ ...card, borderTop: `4px solid ${section.color}` }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: isBar ? 20 : 14 }}>
+                            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{def.label}</p>
+                            {def.note && (
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{def.note}</span>
+                            )}
+                          </div>
+                          <ChartRenderer
+                            data={data}
+                            baseTotal={summary.totals.families}
+                            field={def.key}
+                            numeric={def.numeric}
+                          />
                         </div>
-                        <ChartRenderer
-                          data={data}
-                          baseTotal={summary.totals.families}
-                          field={def.key}
-                          numeric={def.numeric}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             </div>
           ))}
