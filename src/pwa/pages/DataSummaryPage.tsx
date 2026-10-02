@@ -29,7 +29,7 @@ const FILTER_FIELDS: { key: string; label: string; type: 'cat' | 'num' }[] = [
   { key: 'num_people',           label: 'Household Size',       type: 'num' },
   { key: 'num_children_under_18',label: 'Children Under 18',   type: 'num' },
   { key: 'num_children_under_5', label: 'Children Under 5',    type: 'num' },
-  { key: 'num_with_diabetes',    label: 'Members with Diabetes',  type: 'num' },
+  { key: 'num_with_diabetes',    label: 'Members w/ Diabetes',  type: 'num' },
 ];
 
 type ChartDef = { key: string; label: string; numeric?: boolean; note?: string };
@@ -37,16 +37,16 @@ type ChartSection = { label: string; color: string; charts: ChartDef[] };
 
 const CHART_SECTIONS: ChartSection[] = [
   {
-    label: 'Household', color: '#234090',
+    label: 'Household', color: '#8B2A38',
     charts: [
       { key: 'num_people',            label: 'Household Size',      numeric: true },
       { key: 'num_children_under_18', label: 'Children Under 18',   numeric: true },
       { key: 'num_children_under_5',  label: 'Children Under 5',    numeric: true },
-      { key: 'num_with_diabetes',     label: 'Members with Diabetes', numeric: true },
+      { key: 'num_with_diabetes',     label: 'Members w/ Diabetes', numeric: true },
     ],
   },
   {
-    label: 'Demographics', color: '#8a2e1e',
+    label: 'Demographics', color: '#003594',
     charts: [
       { key: 'language',   label: 'Language' },
       { key: 'zip_code',   label: 'ZIP Code',    note: 'Top 10 + others' },
@@ -56,7 +56,7 @@ const CHART_SECTIONS: ChartSection[] = [
     ],
   },
   {
-    label: 'Benefits & Services', color: '#cc8f00',
+    label: 'Benefits & Services', color: '#E8962A',
     charts: [
       { key: 'snap_benefits',    label: 'SNAP Benefits' },
       { key: 'health_insurance', label: 'Health Insurance' },
@@ -119,9 +119,8 @@ function lastMonthLabel(): string {
 // ── Shared tooltip ────────────────────────────────────────────────────────────
 
 const SLICE_COLORS = [
-  '#234090', '#ffa200', '#8a2e1e', '#c5422b', '#172a5e',
-  '#c27b00', '#855400', '#b03b26', '#78a1de', '#a9c3ea',
-  '#3d6ae6', '#1a4acb', '#ffd17a',
+  '#003594', '#F7A800', '#44588A', '#E8962A', '#8A1E42',
+  '#C4860A', '#5B7FAF', '#D4A840', '#2E5FA3', '#8B6914',
 ];
 
 type Slice = { path: string; color: string; label: string; count: number; pct: number };
@@ -174,7 +173,7 @@ function computeSlices(buckets: Bucket[], baseTotal: number, field: string, nume
       count: b.count,
       color: SLICE_COLORS[i % SLICE_COLORS.length],
     })),
-    ...(noResponseCount > 0 ? [{ label: 'No response', count: noResponseCount, color: '#EDE8DF' }] : []),
+    ...(noResponseCount > 0 ? [{ label: 'No response', count: noResponseCount, color: '#E8E6E2' }] : []),
   ];
 
   const total = items.reduce((s, b) => s + b.count, 0);
@@ -336,7 +335,7 @@ function ColumnChart({ data, baseTotal, field }: { data: Bucket[]; baseTotal: nu
         </div>
       </div>
       {/* legend, centered */}
-      <div style={{ flexShrink: 0, width: 110, display: 'flex', flexDirection: 'column', gap: 4, alignSelf: 'flex-end' }}>
+      <div style={{ flexShrink: 0, width: 110, display: 'flex', flexDirection: 'column', gap: 4, alignSelf: 'center' }}>
         {sorted.map((b, i) => (
           <div key={b.value} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
             <div style={{ width: 10, height: 10, borderRadius: 2, background: SLICE_COLORS[i % SLICE_COLORS.length], flexShrink: 0 }} />
@@ -791,30 +790,28 @@ export default function DataSummaryPage() {
                 </span>
               </div>
               <div className="summary-chart-grid">
-                {[0, 1].map(col => (
-                  <div key={col} className="summary-chart-col">
-                    {section.charts.filter((_, i) => i % 2 === col).map(def => {
-                      const data = summary.fields[def.key] ?? [];
-                      const isBar = BINARY_CHART_FIELDS.has(def.key) || HBAR_CHART_FIELDS.has(def.key) || COLUMN_CHART_FIELDS.has(def.key);
-                      return (
-                        <div key={def.key} style={{ ...card, borderTop: `4px solid ${section.color}` }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: isBar ? 20 : 14 }}>
-                            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{def.label}</p>
-                            {def.note && (
-                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{def.note}</span>
-                            )}
-                          </div>
-                          <ChartRenderer
-                            data={data}
-                            baseTotal={summary.totals.families}
-                            field={def.key}
-                            numeric={def.numeric}
-                          />
+                {section.charts.map(def => {
+                  const data = summary.fields[def.key] ?? [];
+                  const isBar = BINARY_CHART_FIELDS.has(def.key) || HBAR_CHART_FIELDS.has(def.key) || COLUMN_CHART_FIELDS.has(def.key);
+                  return (
+                    <div key={def.key} className="summary-chart-card">
+                      <div style={{ ...card, borderTop: `4px solid ${section.color}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: isBar ? 20 : 14 }}>
+                          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{def.label}</p>
+                          {def.note && (
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{def.note}</span>
+                          )}
                         </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                        <ChartRenderer
+                          data={data}
+                          baseTotal={summary.totals.families}
+                          field={def.key}
+                          numeric={def.numeric}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ))}

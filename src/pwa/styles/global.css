@@ -1134,8 +1134,8 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 /* Data Summary page — two-column chart grid (no CSS Grid: flex-wrap for Safari 9) */
 .summary-chart-section { margin-bottom: 24px; }
 .summary-chart-section-head { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; gap: 8px; margin-bottom: 10px; }
-.summary-chart-grid { display: flex; align-items: flex-start; gap: 12px; }
-.summary-chart-col { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-@media (max-width: 679px) {
-  .summary-chart-grid { flex-direction: column; }
+.summary-chart-grid { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; -webkit-align-items: flex-start; align-items: flex-start; margin: -6px; }
+.summary-chart-card { width: 100%; padding: 6px; }
+@media (min-width: 680px) {
+  .summary-chart-card { width: 50%; }
 }
