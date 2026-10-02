@@ -22,8 +22,8 @@ describe('Wizard', () => {
   it('starts on step 1 with prefilled name and bilingual question text', () => {
     renderWizard();
     expect(screen.getByText(/Step 1 of 11/)).toBeInTheDocument();
-    expect(screen.getByText(/full name of the person receiving the food/)).toBeInTheDocument();
-    expect(screen.getByText(/nombre completo de la persona que recibe los alimentos/)).toBeInTheDocument();
+    expect(screen.getByText(/name of someone in this family that will receive the food/)).toBeInTheDocument();
+    expect(screen.getByText(/nombre de alguien en esta familia que recibirá los alimentos/)).toBeInTheDocument();
     expect(screen.getByDisplayValue('Prefilled Person')).toBeInTheDocument();
   });
 

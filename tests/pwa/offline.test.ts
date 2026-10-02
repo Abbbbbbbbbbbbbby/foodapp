@@ -77,6 +77,56 @@ describe('syncQueuedItem — family', () => {
       picked_up_by_phone: '6025550199',
     }));
   });
+
+  it('batch registration: attaches EVERY proxy in the list, and attributes the visit to the FIRST one', async () => {
+    const apiFn = vi.fn()
+      .mockResolvedValueOnce({ id: 'fam-batch' })   // POST family
+      .mockResolvedValueOnce({ ok: true })          // POST proxies[0]
+      .mockResolvedValueOnce({ ok: true })          // POST proxies[1]
+      .mockResolvedValueOnce({ id: 'visit-batch' }); // POST visit
+
+    const item = makeItem({
+      type: 'family',
+      idempotencyKey: 'batch-key-001',
+      payload: {
+        data: { name: 'Batch Family', phone: null, first_visit_date: '2026-07-24' },
+        proxyData: null,
+        proxies: [
+          { proxy_name: 'Garcia', proxy_phone: '4805551234' },
+          { proxy_name: 'Neighbor', proxy_phone: '6025559999' },
+        ],
+      },
+    });
+    await syncQueuedItem(item, apiFn);
+
+    expect(apiFn).toHaveBeenCalledTimes(4);
+    expect(apiFn).toHaveBeenNthCalledWith(2, '/api/families/fam-batch/proxies', { proxy_name: 'Garcia', proxy_phone: '4805551234' });
+    expect(apiFn).toHaveBeenNthCalledWith(3, '/api/families/fam-batch/proxies', { proxy_name: 'Neighbor', proxy_phone: '6025559999' });
+    // Today's pickup attribution is the FIRST proxy (who was at the window
+    // today) — the rest are future-visit authorization, not today's pickup.
+    expect(apiFn).toHaveBeenNthCalledWith(4, '/api/visits', expect.objectContaining({
+      picked_up_by_phone: '4805551234',
+    }));
+  });
+
+  it('batch registration: a failed proxy attachment does not block the family/visit from syncing', async () => {
+    const apiFn = vi.fn()
+      .mockResolvedValueOnce({ id: 'fam-resilient' })
+      .mockRejectedValueOnce(new Error('proxy attach failed'))
+      .mockResolvedValueOnce({ id: 'visit-resilient' });
+
+    const item = makeItem({
+      type: 'family',
+      idempotencyKey: 'batch-key-002',
+      payload: {
+        data: { name: 'Resilient Family', phone: null, first_visit_date: '2026-07-24' },
+        proxyData: null,
+        proxies: [{ proxy_name: 'Garcia', proxy_phone: '4805551234' }],
+      },
+    });
+    const result = await syncQueuedItem(item, apiFn);
+    expect(result.visitId).toBe('visit-resilient');
+  });
 });
 
 describe('flushQueue — error classification', () => {

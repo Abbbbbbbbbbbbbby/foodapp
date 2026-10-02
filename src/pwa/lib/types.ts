@@ -69,7 +69,10 @@ export type EnterView =
   | { type: 'inline-register'; prefillName: string; returnTo: { own: FamilySearchResult | null; proxy: FamilySearchResult[]; pickupName: string; pickupPhone: string | null; searchedName?: string; extra: FamilySearchResult[]; selectedIds: string[] } }
   | { type: 'log-visit'; families: FamilySearchResult[]; current: number; pickupPhone: string | null }
   | { type: 'how-many'; searchName: string; searchPhone: string | null }
+  // Asked ONCE for the whole batch, not per family — the proxy is assumed to
+  // be the same for every family being registered in this visit.
+  | { type: 'proxy-intro'; familyCount: number; searchName: string; searchPhone: string | null }
+  | { type: 'proxy-entry'; familyCount: number; searchName: string; searchPhone: string | null }
   | { type: 'consent'; familyCount: number; searchName: string; searchPhone: string | null }
-  | { type: 'proxy-question'; familyIndex: number; total: number; prefillName: string; prefillPhone: string | null }
   | { type: 'wizard'; familyIndex: number; total: number; initialData: Partial<WizardFormData>; proxyData: ProxyData | null }
   | { type: 'done'; families: SummaryFamily[]; error?: string };

@@ -143,12 +143,8 @@ export default function Wizard({ familyIndex, total, initialData, proxyData, onC
 
       {step === 0 && (
         <TextInput
-          questionEn={total === 1
-            ? 'What is the full name of the person receiving the food?'
-            : `What is the full name of the person receiving the food in the ${ordinalEn(familyIndex)} family?`}
-          questionEs={total === 1
-            ? '¿Cuál es el nombre completo de la persona que recibe los alimentos?'
-            : `¿Cuál es el nombre completo de la persona que recibe los alimentos en la ${ordinalEs(familyIndex)} familia?`}
+          questionEn={`What is the name of someone in ${label.familyEn} that will receive the food?`}
+          questionEs={`¿Cuál es el nombre de alguien en ${label.familyEs} que recibirá los alimentos?`}
           value={data.name ?? ''}
           onChange={v => set('name', v)}
           onNext={next}

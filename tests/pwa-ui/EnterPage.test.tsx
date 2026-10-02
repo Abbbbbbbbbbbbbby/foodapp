@@ -50,7 +50,10 @@ vi.mock('../../src/pwa/components/wizard/Wizard', () => ({
   }) => (
     <button
       onClick={() => props.onComplete(
-        { name: props.initialData.name ?? '', phone: props.initialData.phone ?? null, num_people: 3 },
+        // The batch-registration flow starts every family BLANK on purpose
+        // (no more prefill-from-pickup-person) — fall back to a realistic
+        // non-empty name so the mock doesn't send an invalid empty one.
+        { name: props.initialData.name ?? 'Recipient', phone: props.initialData.phone ?? null, num_people: 3 },
         props.proxyData
       )}
     >
@@ -277,41 +280,75 @@ describe('EnterPage — draft resume prompt', () => {
   });
 });
 
-describe('multi-family registration: "person here today" prefill', () => {
+describe('batch registration: proxy decided ONCE for the whole batch, not per family', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('carries the ORIGINAL searched name/phone to every family in the loop, not just the first', async () => {
+  async function searchAndChooseCount(user: ReturnType<typeof userEvent.setup>, count: string) {
     vi.mocked(api.get).mockImplementation(async (path: string) => {
       if (path.includes('/pickup')) return { own: null, proxy: [] };
       if (path.includes('/search')) return { results: [] };
       throw new Error('unexpected GET ' + path);
     });
-    const { apiWithToken } = await import('../../src/pwa/lib/api');
-    const pinnedClient = apiWithToken('tok');
-    vi.mocked(pinnedClient.post).mockImplementation(async (path: string) =>
-      path === '/api/families' ? { id: 'fam-1' } : { id: 'visit-1' }
-    );
-    const user = userEvent.setup();
     render(<EnterPage />);
     const inputs = screen.getAllByRole('textbox');
     await user.type(inputs[0], 'Garcia');
     await user.type(inputs[1], '4805551234');
     await user.click(screen.getByRole('button', { name: /Search \/ Buscar/ }));
+    await user.click(await screen.findByRole('button', { name: count }));
+  }
 
-    // No match -> register 2 new families for this one pickup person.
-    await user.click(await screen.findByRole('button', { name: '2' }));
+  it('"No" — just the person entered at lookup is attached as proxy to EVERY family, and the wizard is never re-asked', async () => {
+    const user = userEvent.setup();
+    await searchAndChooseCount(user, '2');
+
+    // Asked ONCE, with the already-entered person for context.
+    expect(screen.getByText(/You entered: Garcia/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^No/ }));
     await user.click(screen.getByRole('button', { name: /Continue \/ Continuar/ }));
 
-    // Family 1's proxy question is correctly prefilled today.
-    const firstPrompt = await screen.findByRole('button', { name: /The person here today/ });
-    expect(firstPrompt.textContent).toContain('Garcia');
-    await user.click(firstPrompt);
+    const { apiWithToken } = await import('../../src/pwa/lib/api');
+    const pinnedClient = apiWithToken('tok');
+    vi.mocked(pinnedClient.post).mockImplementation(async (path: string) =>
+      path === '/api/families' ? { id: `fam-${vi.mocked(pinnedClient.post).mock.calls.length}` } : { id: 'visit-1' }
+    );
+
+    // Family 1 — no proxy screen in between, straight to the wizard.
+    await user.click(await screen.findByRole('button', { name: 'MOCK_COMPLETE_WIZARD' }));
+    // Family 2 — same, no re-prompt.
     await user.click(await screen.findByRole('button', { name: 'MOCK_COMPLETE_WIZARD' }));
 
-    // Family 2's proxy question — the bug being fixed: this must ALSO show
-    // "Garcia", not fall back to a blank prefill that forces manual typing.
-    const secondPrompt = await screen.findByRole('button', { name: /The person here today/ });
-    expect(secondPrompt.textContent).toContain('Garcia');
+    const proxyPosts = vi.mocked(pinnedClient.post).mock.calls.filter(c => (c[0] as string).includes('/proxies'));
+    expect(proxyPosts).toHaveLength(2); // one per family
+    // Sent as typed/formatted — the server normalizes on write, same as the
+    // existing "someone else" proxy entry already relied on.
+    for (const call of proxyPosts) {
+      expect(call[1]).toEqual({ proxy_name: 'Garcia', proxy_phone: '(480) 555-1234' });
+    }
+  });
+
+  it('"Yes" — collects additional proxies and attaches ALL of them (lookup person + the new ones) to every family', async () => {
+    const user = userEvent.setup();
+    await searchAndChooseCount(user, '2');
+
+    await user.click(screen.getByRole('button', { name: /^Yes/ }));
+    await user.type(screen.getByLabelText(/^Name \/ Nombre/), 'Neighbor One');
+    await user.click(screen.getByRole('button', { name: /\+ Add another person/ }));
+    const nameInputs = screen.getAllByLabelText(/^Name \/ Nombre/);
+    await user.type(nameInputs[1], 'Neighbor Two');
+    await user.click(screen.getByRole('button', { name: /Next \/ Siguiente/ }));
+    await user.click(screen.getByRole('button', { name: /Continue \/ Continuar/ }));
+
+    const { apiWithToken } = await import('../../src/pwa/lib/api');
+    const pinnedClient = apiWithToken('tok');
+    vi.mocked(pinnedClient.post).mockResolvedValue({ id: 'fam-x' });
+
+    await user.click(await screen.findByRole('button', { name: 'MOCK_COMPLETE_WIZARD' })); // family 1
+
+    const proxyPosts = vi.mocked(pinnedClient.post).mock.calls.filter(c => (c[0] as string).includes('/proxies'));
+    expect(proxyPosts).toHaveLength(3); // Garcia + 2 neighbors, all on this one family
+    expect(proxyPosts.map(c => (c[1] as { proxy_name: string }).proxy_name)).toEqual([
+      'Garcia', 'Neighbor One', 'Neighbor Two',
+    ]);
   });
 });
 

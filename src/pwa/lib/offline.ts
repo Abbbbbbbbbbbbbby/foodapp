@@ -510,22 +510,44 @@ export async function syncQueuedItem(item: PendingItem, apiFn: ApiFn): Promise<{
     visitId = visit?.id;
   } else {
     // type === 'family': POST family then POST visit with derived idempotency keys
-    const { data, proxyData } = item.payload as {
+    const { data, proxyData, proxies } = item.payload as {
       data: Record<string, unknown>;
       proxyData: { proxy_phone?: string | null } | null;
+      // The batch-registration flow's whole proxy list (every family in the
+      // batch gets ALL of these) — proxyData above is the older single-proxy
+      // shape, still used by the "Add another family" / inline-register path.
+      proxies?: { proxy_name: string | null; proxy_phone: string | null }[];
     };
     const result = await apiFn('/api/families', {
       ...data,
       proxy: proxyData ?? undefined,
       idempotency_key: key,
     }) as { id: string };
+    // Attach every batch proxy via the existing per-proxy endpoint — mirrors
+    // the online path in EnterPage.handleWizardComplete. Not fatal: a failed
+    // attachment here still lets the family/visit sync.
+    if (proxies) {
+      for (const p of proxies) {
+        try {
+          await apiFn(`/api/families/${result.id}/proxies`, { proxy_name: p.proxy_name, proxy_phone: p.proxy_phone });
+        } catch (err) {
+          console.error('offline flush: failed to attach a batch proxy:', err);
+        }
+      }
+    }
     const d = new Date();
     const todayLocal = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     const visitDate = (data.first_visit_date as string | undefined) ?? todayLocal;
+    // Who picked up TODAY: the first batch proxy if there is one, else the
+    // legacy single proxyData. Normalize both sides before comparing, or a
+    // raw typed phone never matches the family's normalized stored one.
+    const pickupPhoneRaw = proxies && proxies.length > 0 ? proxies[0].proxy_phone : (proxyData?.proxy_phone ?? null);
+    const normPickup = normalizePhone(pickupPhoneRaw);
+    const pickedUpBy = normPickup && normPickup !== normalizePhone(data.phone as string | null) ? normPickup : null;
     const visit = await apiFn('/api/visits', {
       family_id: result.id,
       visit_date: visitDate,
-      picked_up_by_phone: proxyData?.proxy_phone ?? null,
+      picked_up_by_phone: pickedUpBy,
       idempotency_key: `${key}-visit`,
     }) as { id?: string };
     visitId = visit?.id;

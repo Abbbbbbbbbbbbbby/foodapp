@@ -15,7 +15,8 @@ import FamilySelectScreen from '../components/enter/FamilySelectScreen';
 import LogVisitScreen from '../components/enter/LogVisitScreen';
 import HowManyFamilies from '../components/enter/HowManyFamilies';
 import ConsentScreen from '../components/enter/ConsentScreen';
-import ProxyQuestion from '../components/enter/ProxyQuestion';
+import ProxyIntroScreen from '../components/enter/ProxyIntroScreen';
+import ProxyEntryForm from '../components/enter/ProxyEntryForm';
 import Wizard from '../components/wizard/Wizard';
 import SummaryScreen, { type SummaryFamily } from '../components/enter/SummaryScreen';
 
@@ -75,11 +76,11 @@ export default function EnterPage() {
   const restoredWizardRef = useRef<{ initialData: Partial<WizardFormData>; initialStep: number } | null>(null);
   // In-flight submission idempotency keys — see mintOrReuseKey below.
   const submissionKeysRef = useRef<{ familyIdemKey?: string; visitIdemKey?: string }>({});
-  // The name/phone originally searched, carried across the WHOLE multi-family
-  // registration loop so "The person here today" stays auto-populated for
-  // family 2, 3, ... — not just the first (a blank prefill there forced
-  // manual re-typing of a name the volunteer already entered once).
-  const pickupPersonRef = useRef<{ name: string; phone: string | null }>({ name: '', phone: null });
+  // Who may pick up for EVERY family in this registration batch — decided
+  // ONCE via proxy-intro/proxy-entry, not re-asked per family. Always
+  // includes the person entered at lookup; additional entries appended if
+  // "yes, someone else too" was answered.
+  const batchProxiesRef = useRef<{ name: string; phone: string | null }[]>([]);
   const viewRef = useRef(view);
   useEffect(() => { viewRef.current = view; }, [view]);
 
@@ -130,7 +131,9 @@ export default function EnterPage() {
       case 'inline-register': return v.prefillName;
       case 'log-visit': return v.families[v.current]?.name ?? '';
       case 'how-many': return v.searchName;
-      case 'proxy-question': return v.prefillName;
+      case 'proxy-intro': return v.searchName;
+      case 'proxy-entry': return v.searchName;
+      case 'consent': return v.searchName;
       case 'wizard': return v.initialData.name ?? '';
       default: return '';
     }
@@ -239,14 +242,14 @@ export default function EnterPage() {
   // A family registered online THIS session must be findable if the network
   // dies before the next full directory refresh. Fire-and-forget: a cache
   // write failure only degrades offline lookup, never the check-in.
-  function rememberInDirectory(id: string, name: string, phone: string | null | undefined, numPeople: number | null | undefined, proxyPhone?: string | null) {
+  function rememberInDirectory(id: string, name: string, phone: string | null | undefined, numPeople: number | null | undefined, proxyPhones: (string | null | undefined)[]) {
     // The proxy designation must reach the offline index too: a family
     // registered WITH a proxy at 9am must be findable by that proxy's phone
     // during a 9:30 outage, or the neighbor gets the register-new dead end.
-    const normProxy = normalizePhone(proxyPhone);
+    const normProxies = proxyPhones.map(p => normalizePhone(p)).filter((p): p is string => p !== null);
     upsertDirectoryFamilies([{
       id, name, name_normalized: normalizeName(name),
-      phone: normalizePhone(phone) ?? null, proxy_phones: normProxy ? [normProxy] : [],
+      phone: normalizePhone(phone) ?? null, proxy_phones: normProxies,
       num_people: numPeople ?? null, last_visit_date: localDateString(),
     }]).catch(err => {
       console.warn('directory upsert failed — requesting a full re-pull:', err);
@@ -373,7 +376,7 @@ export default function EnterPage() {
     const pinned = apiWithToken(auth.token);
     try {
       const result = await pinned.post<{ id: string }>('/api/families', { ...familyPayload, idempotency_key: familyIdemKey });
-      rememberInDirectory(result.id, data.name, data.phone, data.num_people, proxyData?.proxy_phone);
+      rememberInDirectory(result.id, data.name, data.phone, data.num_people, [proxyData?.proxy_phone]);
       clearSubmissionKey('familyIdemKey');
       // Registered online: join this pickup pre-checked. The visit is logged
       // with the rest of the selection through the normal log-visit loop.
@@ -510,33 +513,57 @@ export default function EnterPage() {
 
   function handleHowMany(count: number) {
     if (view.type !== 'how-many') return;
-    setView({ type: 'consent', familyCount: count, searchName: view.searchName, searchPhone: view.searchPhone });
+    setView({ type: 'proxy-intro', familyCount: count, searchName: view.searchName, searchPhone: view.searchPhone });
+  }
+
+  // The proxy question is asked ONCE for the whole batch here, not per
+  // family — see proxy-entry below for the "yes" branch.
+  function handleProxyIntroAnswer(hasMore: boolean) {
+    if (view.type !== 'proxy-intro') return;
+    if (hasMore) {
+      setView({ type: 'proxy-entry', familyCount: view.familyCount, searchName: view.searchName, searchPhone: view.searchPhone });
+      return;
+    }
+    batchProxiesRef.current = [{ name: view.searchName, phone: view.searchPhone }];
+    setView({ type: 'consent', familyCount: view.familyCount, searchName: view.searchName, searchPhone: view.searchPhone });
+  }
+
+  function handleProxyEntryContinue(extra: { name: string; phone: string | null }[]) {
+    if (view.type !== 'proxy-entry') return;
+    batchProxiesRef.current = [{ name: view.searchName, phone: view.searchPhone }, ...extra];
+    setView({ type: 'consent', familyCount: view.familyCount, searchName: view.searchName, searchPhone: view.searchPhone });
   }
 
   function handleConsentContinue() {
     if (view.type !== 'consent') return;
-    pickupPersonRef.current = { name: view.searchName, phone: view.searchPhone };
-    setView({
-      type: 'proxy-question',
-      familyIndex: 0,
-      total: view.familyCount,
-      prefillName: view.searchName,
-      prefillPhone: view.searchPhone,
-    });
-  }
-
-  function handleProxyAnswer(proxyData: ProxyData | null) {
-    if (view.type !== 'proxy-question') return;
     setView({
       type: 'wizard',
-      familyIndex: view.familyIndex,
-      total: view.total,
-      initialData: { name: view.prefillName, phone: view.prefillPhone },
-      proxyData,
+      familyIndex: 0,
+      total: view.familyCount,
+      initialData: {},
+      proxyData: null,
     });
   }
 
-  async function handleWizardComplete(data: WizardFormData, proxyData: ProxyData | null) {
+  // Attaches EVERY batch proxy to a newly-created family via the existing,
+  // idempotent /api/families/:id/proxies endpoint — reused as-is, no server
+  // changes needed. Non-fatal: a failed attachment doesn't block the
+  // family/visit the pickup actually depends on; it's surfaced as a warning.
+  async function attachBatchProxies(pinned: ReturnType<typeof apiWithToken>, familyId: string): Promise<string | undefined> {
+    const failed: string[] = [];
+    for (const p of batchProxiesRef.current) {
+      try {
+        await pinned.post(`/api/families/${familyId}/proxies`, { proxy_name: p.name || null, proxy_phone: p.phone });
+      } catch {
+        failed.push(p.name || p.phone || 'unknown');
+      }
+    }
+    return failed.length > 0
+      ? `Saved, but couldn't record pickup authorization for: ${failed.join(', ')}.`
+      : undefined;
+  }
+
+  async function handleWizardComplete(data: WizardFormData) {
     if (view.type !== 'wizard') return;
     const { familyIndex, total } = view;
     setError(null);
@@ -545,8 +572,14 @@ export default function EnterPage() {
     const familyPayload = {
       ...data,
       first_visit_date: today,
-      proxy: proxyData ?? undefined,
     };
+    // Who's picking up TODAY — the first person entered (at lookup); any
+    // others are authorization for future visits, not today's attribution.
+    // Normalize both sides: a raw typed phone never equals the family's
+    // already-normalized stored one, which would misattribute a family's
+    // own pickup as a proxy pickup.
+    const normPickupPhone = normalizePhone(batchProxiesRef.current[0]?.phone ?? null);
+    const pickedUpBy = normPickupPhone && normPickupPhone !== normalizePhone(data.phone) ? normPickupPhone : null;
     // Mint (or reuse, if resumed from a draft) both keys before the first
     // attempt so the server can de-dup even if the network drops after it
     // committed but before the reply arrived — AND so a tab crash/reload
@@ -580,16 +613,20 @@ export default function EnterPage() {
         idempotency_key: familyIdemKey,
       });
       familyId = result.id;
-      rememberInDirectory(familyId, data.name, data.phone, data.num_people, proxyData?.proxy_phone);
+      rememberInDirectory(familyId, data.name, data.phone, data.num_people, batchProxiesRef.current.map(p => p.phone));
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);
         return; // server rejected — don't advance
       }
-      // Network error — queue family + visit pair together and advance
+      // Network error — queue family + visit pair together and advance. The
+      // flush attaches every batch proxy once the family itself has synced.
       let familyQueueId: string;
       try {
-        familyQueueId = await queueItem({ type: 'family', payload: { data: familyPayload, proxyData } }, familyIdemKey, auth.user.id);
+        familyQueueId = await queueItem({
+          type: 'family',
+          payload: { data: familyPayload, proxies: batchProxiesRef.current.map(p => ({ proxy_name: p.name || null, proxy_phone: p.phone })) },
+        }, familyIdemKey, auth.user.id);
       } catch {
         setError('Unable to save offline. Check storage permissions and try again.');
         return;
@@ -604,28 +641,32 @@ export default function EnterPage() {
       return;
     }
 
+    // Family is live — attach every batch proxy to it (idempotent; a
+    // failure here is a warning, not a block on the visit below).
+    const proxyError = await attachBatchProxies(pinned, familyId);
+
     // --- POST visit (family already committed to DB with real id) ---
     const visitPayload = {
       family_id: familyId,
       visit_date: today,
-      picked_up_by_phone: proxyData?.proxy_phone ?? null,
+      picked_up_by_phone: pickedUpBy,
     };
     let visitId: string | null = null;
     let visitQueueId: string | null = null;
-    let visitError: string | undefined;
+    let visitError: string | undefined = proxyError;
     try {
       const visitResult = await pinned.post<{ id: string }>('/api/visits', { ...visitPayload, idempotency_key: visitIdemKey });
       visitId = visitResult.id;
     } catch (e) {
       if (e instanceof ApiError) {
         // Family saved — still advance but surface the error
-        visitError = `Family saved, but visit log failed: ${e.message}`;
+        visitError = [visitError, `Family saved, but visit log failed: ${e.message}`].filter(Boolean).join(' ');
       } else {
         // Network — queue only the visit (family already has an id)
         try {
           visitQueueId = await queueItem({ type: 'visit', payload: visitPayload, familyName: data.name }, visitIdemKey, auth.user.id);
         } catch {
-          visitError = 'Visit not saved offline. Check storage permissions.';
+          visitError = [visitError, 'Visit not saved offline. Check storage permissions.'].filter(Boolean).join(' ');
         }
       }
     }
@@ -643,12 +684,14 @@ export default function EnterPage() {
     if (familyIndex + 1 < total) {
       // Surface any visit error before moving to next wizard entry
       if (pendingError) setError(pendingError);
+      // Straight to the next family's wizard — the proxy was already
+      // decided once for the whole batch, not re-asked per family.
       setView({
-        type: 'proxy-question',
+        type: 'wizard',
         familyIndex: familyIndex + 1,
         total,
-        prefillName: pickupPersonRef.current.name,
-        prefillPhone: pickupPersonRef.current.phone,
+        initialData: {},
+        proxyData: null,
       });
     } else {
       const families = pendingFamilies.current;
@@ -806,27 +849,26 @@ export default function EnterPage() {
           onBack={() => setView({ type: 'lookup' })}
         />
       )}
+      {view.type === 'proxy-intro' && (
+        <ProxyIntroScreen
+          searchName={view.searchName}
+          searchPhone={view.searchPhone}
+          onAnswer={handleProxyIntroAnswer}
+          onBack={() => setView({ type: 'how-many', searchName: view.searchName, searchPhone: view.searchPhone })}
+        />
+      )}
+      {view.type === 'proxy-entry' && (
+        <ProxyEntryForm
+          onContinue={handleProxyEntryContinue}
+          onBack={() => setView({ type: 'proxy-intro', familyCount: view.familyCount, searchName: view.searchName, searchPhone: view.searchPhone })}
+        />
+      )}
       {view.type === 'consent' && (
         <ConsentScreen
           onContinue={handleConsentContinue}
           onBack={() => {
             if (view.type === 'consent') {
               setView({ type: 'how-many', searchName: view.searchName, searchPhone: view.searchPhone });
-            }
-          }}
-        />
-      )}
-      {view.type === 'proxy-question' && (
-        <ProxyQuestion
-          familyIndex={view.familyIndex}
-          total={view.total}
-          prefillName={view.prefillName}
-          prefillPhone={view.prefillPhone}
-          onAnswer={handleProxyAnswer}
-          onBack={() => {
-            if (view.type === 'proxy-question') {
-              submissionKeysRef.current = {};
-              setView({ type: 'how-many', searchName: view.prefillName, searchPhone: view.prefillPhone });
             }
           }}
         />
@@ -848,14 +890,15 @@ export default function EnterPage() {
               // cycle 2): the volunteer could go Back, change the name
               // or answers, and re-submit — reusing the old key would
               // make the server replay the ABANDONED data via
-              // idempotency, silently discarding the new entry.
+              // idempotency, silently discarding the new entry. There's
+              // no per-family screen to step back to anymore (the proxy
+              // is decided once for the whole batch) — back restarts the
+              // batch from the top, same as it ultimately did before.
               submissionKeysRef.current = {};
               setView({
-                type: 'proxy-question',
-                familyIndex: view.familyIndex,
-                total: view.total,
-                prefillName: view.initialData.name ?? '',
-                prefillPhone: view.initialData.phone ?? null,
+                type: 'how-many',
+                searchName: batchProxiesRef.current[0]?.name ?? '',
+                searchPhone: batchProxiesRef.current[0]?.phone ?? null,
               });
             }
           }}
