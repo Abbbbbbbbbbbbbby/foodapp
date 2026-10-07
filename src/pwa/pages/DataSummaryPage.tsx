@@ -119,9 +119,10 @@ function lastMonthLabel(): string {
 // ── Shared tooltip ────────────────────────────────────────────────────────────
 
 const SLICE_COLORS = [
-  '#234090', '#ffa200', '#8a2e1e', '#c5422b', '#172a5e',
-  '#c27b00', '#855400', '#b03b26', '#78a1de', '#a9c3ea',
-  '#3d6ae6', '#1a4acb', '#ffd17a',
+  '#234090', '#ffa200', '#8a2e1e',
+  '#3d6ae6', '#855400', '#c5422b',
+  '#172a5e', '#b03b26', '#ffd17a',
+  '#1a4acb', '#78a1de', '#c27b00', '#a9c3ea',
 ];
 
 type Slice = { path: string; color: string; label: string; count: number; pct: number };
@@ -218,10 +219,9 @@ function PieChart({ data, baseTotal, field, numeric }: {
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+    <div className={`pie-wrap${slices.length > 6 ? ' legend-below' : ''}`}>
       <svg
         viewBox="0 0 160 160"
-        style={{ width: 145, flexShrink: 0 }}
         aria-hidden="true"
         onMouseLeave={() => setTip(null)}
       >
@@ -235,7 +235,7 @@ function PieChart({ data, baseTotal, field, numeric }: {
         ))}
       </svg>
       <Tip tip={tip} />
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div className="pie-legend">
         {slices.map((s, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
             <div style={{ width: 10, height: 10, borderRadius: 2, background: s.color, flexShrink: 0 }} />
@@ -310,8 +310,20 @@ function ColumnChart({ data, baseTotal, field }: { data: Bucket[]; baseTotal: nu
   const sorted = [...data].sort((a, b) => Number(a.value) - Number(b.value));
   const max = Math.max(...sorted.map(b => b.count), 1);
   const BAR_H = 80;
+  const half = Math.ceil(sorted.length / 2);
+  const legendRow = (b: Bucket, colorIdx: number) => (
+    <div key={b.value} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+      <div style={{ width: 10, height: 10, borderRadius: 2, background: SLICE_COLORS[colorIdx % SLICE_COLORS.length], flexShrink: 0 }} />
+      <span style={{ fontSize: 12, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+        {displayValue(field, b.value)}
+      </span>
+      <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+        {b.count.toLocaleString()}
+      </span>
+    </div>
+  );
   return (
-    <div style={{ display: 'flex', gap: 14 }} onMouseLeave={() => setTip(null)}>
+    <div className={`col-wrap${sorted.length > 6 ? ' legend-below' : ''}`} onMouseLeave={() => setTip(null)}>
       {/* bars + axis labels, bottom-aligned */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: BAR_H }}>
@@ -335,19 +347,14 @@ function ColumnChart({ data, baseTotal, field }: { data: Bucket[]; baseTotal: nu
           ))}
         </div>
       </div>
-      {/* legend, centered */}
-      <div style={{ flexShrink: 0, width: 110, display: 'flex', flexDirection: 'column', gap: 4, alignSelf: 'flex-end' }}>
-        {sorted.map((b, i) => (
-          <div key={b.value} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-            <div style={{ width: 10, height: 10, borderRadius: 2, background: SLICE_COLORS[i % SLICE_COLORS.length], flexShrink: 0 }} />
-            <span style={{ fontSize: 12, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              {displayValue(field, b.value)}
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-              {b.count.toLocaleString()}
-            </span>
-          </div>
-        ))}
+      {/* legend: two halves side-by-side on mobile and desktop >6 */}
+      <div className="col-legend">
+        <div className="col-legend-half">
+          {sorted.slice(0, half).map((b, i) => legendRow(b, i))}
+        </div>
+        <div className="col-legend-half">
+          {sorted.slice(half).map((b, i) => legendRow(b, half + i))}
+        </div>
       </div>
       <Tip tip={tip} />
     </div>
@@ -589,8 +596,8 @@ export default function DataSummaryPage() {
           {presetBtn('custom',    'Custom')}
         </div>
         {preset === 'custom' && (
-          <div style={{ display: 'flex', marginTop: 10 }}>
-            <div style={{ marginRight: 12 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 10 }}>
+            <div>
               <label style={{ fontSize: 13, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>From</label>
               <input
                 type="date"

@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Home',               path: '/',                  roles: ['admin', 'staff', 'volunteer'] },
   { label: 'Enter Data',         path: '/enter',             roles: ['admin', 'staff', 'volunteer'] },
   { label: 'View Records',       path: '/records',           roles: ['admin', 'staff'] },
+  { label: 'Data Summary',       path: '/admin/summary',     roles: ['admin', 'staff'] },
   { label: 'Manage Accounts',    path: '/admin/accounts',    roles: ['admin'] },
   { label: 'Import from Bubble', path: '/admin/import',      roles: ['admin'] },
   { label: 'Review Duplicates',  path: '/admin/duplicates',  roles: ['admin'] },
