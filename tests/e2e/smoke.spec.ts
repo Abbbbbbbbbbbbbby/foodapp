@@ -51,12 +51,13 @@ test('register, check in a new family, and record a bag', async ({ page }) => {
 
   // How many families → 1
   await howMany1.click();
+  // Proxy intro: no one else routinely picks up for these families
+  await page.getByRole('button', { name: /^No/ }).click();
   await page.getByRole('button', { name: /Continue \/ Continuar/ }).click(); // consent screen
-  // Proxy question → no designated person
-  await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
 
   // ── Wizard: 11 steps ──
-  await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();          // 1 name (prefilled)
+  await page.getByRole('textbox').first().fill(familyName);                       // 1 name (no longer prefilled)
+  await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
   await page.getByRole('button', { name: /Next \/ Siguiente|don't have|No tengo/i }).first().click(); // 2 phone
   await page.getByRole('textbox').first().fill('85001');                           // 3 zip
   await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();

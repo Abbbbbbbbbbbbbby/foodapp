@@ -87,10 +87,11 @@ test('reload at wizard step 6 offers to resume, and Resume restores the entry wi
   await registerNew.or(howMany1).first().waitFor();
   if (await registerNew.isVisible()) await registerNew.click();
   await howMany1.click();
+  await page.getByRole('button', { name: /^No/ }).click(); // proxy intro: no one else picks up
   await page.getByRole('button', { name: /Continue \/ Continuar/ }).click(); // consent screen
-  await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
 
-  await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();          // 1 name (prefilled)
+  await page.getByRole('textbox').first().fill(familyName);                       // 1 name (no longer prefilled)
+  await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
   await page.getByRole('button', { name: /Next \/ Siguiente|don't have|No tengo/i }).first().click(); // 2 phone
   await page.getByRole('textbox').first().fill('85001');                           // 3 zip
   await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
@@ -132,11 +133,11 @@ test('reload at wizard step 6 offers to resume, and Resume restores the entry wi
   // below): the pagehide beacon should have landed during the reload, but
   // give it a moment before deciding it's genuinely absent.
   let visibilityCount = 0;
-  // Observed one flake at 10x500ms=5s under CI-adjacent load — this is
-  // testing an async unload-time delivery mechanism (pagehide → beacon →
-  // worker → D1) with inherent timing variance, so give it real margin
-  // rather than chase a tighter number.
-  for (let i = 0; i < 20 && visibilityCount === 0; i++) {
+  // Observed flakes at both 10x500ms=5s and 20x500ms=10s under CI-adjacent
+  // load — this is testing an async unload-time delivery mechanism
+  // (pagehide → beacon → worker → D1) with inherent timing variance, so
+  // give it real margin rather than chase a tighter number.
+  for (let i = 0; i < 40 && visibilityCount === 0; i++) {
     visibilityCount = (await testEvents(page, deviceId, 'visibility')).length;
     if (visibilityCount === 0) await page.waitForTimeout(500);
   }

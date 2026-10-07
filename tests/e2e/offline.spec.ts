@@ -60,10 +60,11 @@ test('offline check-in queues family, visit, and bag; reconnect syncs them to th
   if (await cachedRegisterNew.isVisible()) await cachedRegisterNew.click();
   else await offlineContinue.click();
   await page.getByRole('button', { name: /^1$/ }).click();
+  await page.getByRole('button', { name: /^No/ }).click(); // proxy intro: no one else picks up
   await page.getByRole('button', { name: /Continue \/ Continuar/ }).click(); // consent screen
-  await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
 
   // ── Wizard (all steps, same journey as the online smoke) ──
+  await page.getByRole('textbox').first().fill(familyName); // name (no longer prefilled)
   await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
   await page.getByRole('button', { name: /Next \/ Siguiente|don't have|No tengo/i }).first().click();
   await page.getByRole('textbox').first().fill('85002');
@@ -139,8 +140,9 @@ test('a RETURNING household checked in offline resolves to its existing record �
   await registerNew.or(howMany1).first().waitFor();
   if (await registerNew.isVisible()) await registerNew.click();
   await howMany1.click();
+  await page.getByRole('button', { name: /^No/ }).click(); // proxy intro: no one else picks up
   await page.getByRole('button', { name: /Continue \/ Continuar/ }).click(); // consent screen
-  await page.getByRole('button', { name: /No designated|Sin persona/i }).click();
+  await page.getByRole('textbox').first().fill(familyName); // name (no longer prefilled)
   await page.getByRole('button', { name: /Next \/ Siguiente/ }).click();
   await page.getByRole('button', { name: /Next \/ Siguiente|don't have|No tengo/i }).first().click();
   await page.getByRole('textbox').first().fill('85003');
@@ -175,9 +177,16 @@ test('a RETURNING household checked in offline resolves to its existing record �
   // Queued: the visit waits for the network.
   await expect(page.getByText(/pending sync/)).toBeVisible();
 
-  // ── Reconnect and verify server-side ──
+  // ── Reconnect — this family already has a visit today (the online
+  //    check-in above), so the queued replay hits the one-visit-per-family-
+  //    per-day rule. It must dead-letter (recoverable, visible to a
+  //    supervisor), not silently succeed as a second visit or silently
+  //    vanish. The pending badge clears either way the item resolves. ──
   await context.setOffline(false);
   await expect(page.getByText(/pending sync/)).not.toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/could not be saved/)).toBeVisible();
+  await page.getByRole('button', { name: /Details/ }).click();
+  await expect(page.getByText(/already been checked in today/)).toBeVisible();
 
   const search = await apiGet(page, `/api/families/search?name=${encodeURIComponent(familyName)}`) as {
     results: { id: string; name: string }[];
@@ -186,5 +195,5 @@ test('a RETURNING household checked in offline resolves to its existing record �
   expect(fams, 'exactly ONE family — the offline visit resolved to the existing record').toHaveLength(1);
 
   const visits = await apiGet(page, `/api/visits?familyId=${fams[0].id}`) as { visits: { visit_date: string }[] };
-  expect(visits.visits, 'the online check-in visit plus the offline queued visit').toHaveLength(2);
+  expect(visits.visits, 'only the ONLINE visit — the same-day duplicate was correctly rejected, not silently created').toHaveLength(1);
 });
