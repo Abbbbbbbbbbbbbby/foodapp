@@ -161,7 +161,7 @@ label > input, label > select, label > textarea { margin-top: 8px; }
   border-bottom: 1px solid var(--border);
 }
 .header-name { font-weight: 600; }
-.main { flex: 1; padding: 24px 16px 64px; max-width: 600px; margin: 0 auto; width: 100%; }
+.main { flex: 1; padding: 24px 16px 64px; max-width: 840px; margin: 0 auto; width: 100%; }
 
 /* ── App nav ──────────────────────────────────────────────────────────────── */
 .app-nav {
@@ -526,8 +526,6 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 /* ── Records Page ──────────────────────────────────────────────────────────── */
 
 .records-page {
-  max-width: 800px;
-  margin: 0 auto;
   padding: 16px;
 }
 
@@ -951,8 +949,6 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 /* ── Import Page ───────────────────────────────────────────────────────────── */
 
 .import-page {
-  max-width: 720px;
-  margin: 0 auto;
   padding: 16px;
 }
 
@@ -1131,4 +1127,34 @@ label > input, label > select, label > textarea { margin-top: 8px; }
 .summary-chart-col { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 @media (max-width: 679px) {
   .summary-chart-grid { flex-direction: column; }
+}
+
+/* ── Pie chart layout ──────────────────────────────────────────────────────── */
+.pie-wrap { display: flex; align-items: center; gap: 14px; }
+.pie-wrap svg { width: 145px; flex-shrink: 0; }
+.pie-legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+/* legend below on desktop when chart has >6 items */
+.pie-wrap.legend-below { flex-direction: column; align-items: stretch; }
+.pie-wrap.legend-below svg { align-self: center; }
+.pie-wrap.legend-below .pie-legend { flex: unset; }
+@media (max-width: 679px) {
+  /* legend always below on mobile */
+  .pie-wrap { flex-direction: column; align-items: stretch; }
+  .pie-wrap svg { align-self: center; width: 130px; }
+  .pie-legend { flex: unset; }
+}
+
+/* ── Column chart layout ───────────────────────────────────────────────────── */
+.col-wrap { display: flex; gap: 14px; align-items: flex-end; }
+.col-legend { flex-shrink: 0; width: 110px; display: flex; flex-direction: column; gap: 0; align-self: flex-end; }
+.col-legend-half { display: flex; flex-direction: column; gap: 4px; }
+/* legend below + 2-col on desktop when chart has >6 items */
+.col-wrap.legend-below { flex-direction: column; align-items: stretch; }
+.col-wrap.legend-below .col-legend { width: 100%; flex-direction: row; gap: 16px; margin-top: 10px; align-self: unset; }
+.col-wrap.legend-below .col-legend-half { flex: 1; }
+@media (max-width: 679px) {
+  /* legend always below + 2-col on mobile */
+  .col-wrap { flex-direction: column; align-items: stretch; }
+  .col-legend { width: 100%; flex-direction: row; gap: 16px; margin-top: 10px; align-self: unset; }
+  .col-legend-half { flex: 1; }
 }
